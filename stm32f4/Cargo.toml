@@ -1,0 +1,21 @@
+[package]
+name = "stm32f4-ecu"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ecu-core = { path = ".." }
+cortex-m = "0.7"
+cortex-m-rt = "0.7"
+panic-halt = "0.2"
+stm32f4xx-hal = { version = "0.21", features = ["stm32f405"] }
+
+[[bin]]
+name = "stm32f4-ecu"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+debug = true  # Keep debug info for flashing

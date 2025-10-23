@@ -1,0 +1,21 @@
+[workspace]
+members = [".", "stm32f4"]
+resolver = "2"
+
+[package]
+name = "ecu-core"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "ecu_core"
+path = "src/lib.rs"
+
+[dependencies]
+# Zero dependencies for core library
+
+[profile.release]
+opt-level = "z"      # Optimize for size
+lto = true           # Link-time optimization
+codegen-units = 1    # Better optimization
+strip = true         # Strip symbols
