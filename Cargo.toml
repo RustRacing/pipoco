@@ -12,7 +12,27 @@ name = "ecu_core"
 path = "src/lib.rs"
 
 [dependencies]
-# Zero dependencies for core library
+# Serialization
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+postcard = { version = "1.0", default-features = false, features = ["use-crc"] }
+
+# Transport
+bbqueue = { version = "0.5", optional = true }
+
+[features]
+default = []
+transport-bbqueue = ["bbqueue"]
+
+# For testing only - enables test helpers
+test-utils = []
+
+[dev-dependencies]
+# Enable test-utils feature when running tests
+# This allows integration tests to use create_test_pair()
+
+[[test]]
+name = "transport_integration"
+required-features = ["transport-bbqueue"]
 
 [profile.release]
 opt-level = "z"      # Optimize for size
