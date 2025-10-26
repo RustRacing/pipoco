@@ -37,6 +37,7 @@ pub mod transport;
 pub mod ignition;
 pub mod rev_limiter;
 pub mod safety;
+pub mod management;
 
 pub use trigger::{TriggerDecoder, TriggerTiming};
 pub use tables::IpwTable;
