@@ -130,7 +130,8 @@ impl EngineSimulator {
                 // Close enough, snap to target
                 self.state.rpm = self.target_rpm;
             } else {
-                let new_rpm = self.state.rpm as i32 + rpm_change.signum() * rpm_change.abs();
+                // Apply change in the direction of target
+                let new_rpm = self.state.rpm as i32 + rpm_delta.signum() * rpm_change.abs();
                 self.state.rpm = new_rpm.clamp(0, self.config.max_rpm as i32) as u16;
             }
         }

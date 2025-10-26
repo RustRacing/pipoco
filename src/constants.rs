@@ -140,3 +140,47 @@ pub mod ignition {
     /// Fixed timing during cranking for reliable starting
     pub const CRANKING_TIMING_BTDC: i16 = 10;
 }
+
+/// Rev limiter (RPM limiting) constants
+pub mod rev_limiter {
+    /// Default maximum RPM (conservative for street use)
+    /// Typical 4-cylinder redline: 6500-7500 RPM
+    pub const DEFAULT_MAX_RPM: u16 = 7000;
+
+    /// RPM below max where soft limiting begins
+    /// Gives 500 RPM window for gradual reduction
+    pub const DEFAULT_SOFT_LIMIT_START_RPM: u16 = 6500;
+
+    /// Hysteresis: RPM must drop this much below limit before re-enabling
+    /// Prevents oscillation at the limiter
+    pub const HYSTERESIS_RPM: u16 = 200;
+
+    /// Minimum safe RPM for engine operation
+    /// Below this is considered a stall
+    pub const MIN_RUNNING_RPM: u16 = 400;
+}
+
+/// Safety features constants
+pub mod safety {
+    /// Cranking RPM threshold
+    /// Above this, engine is considered running (not cranking)
+    pub const CRANKING_RPM_THRESHOLD: u16 = 500;
+
+    /// TPS threshold for wide-open throttle (WOT)
+    /// 90% or higher is considered WOT for flood clear
+    pub const WOT_TPS_THRESHOLD: u8 = 90;
+
+    /// Sync loss timeout (microseconds)
+    /// If no trigger edges for this long, assume sync lost
+    /// Must be longer than slowest expected tooth period
+    pub const SYNC_LOSS_TIMEOUT_US: u32 = 200_000;  // 200ms = ~300 RPM minimum
+
+    /// Sync recovery attempts before shutdown
+    /// Allows recovery from brief ESD-induced glitches
+    pub const SYNC_RECOVERY_ATTEMPTS: u8 = 3;
+
+    /// Time window for sync recovery attempts (microseconds)
+    /// If we lose sync multiple times within this window, shut down
+    /// But if losses are spread out (ESD events), keep trying
+    pub const SYNC_RECOVERY_WINDOW_US: u32 = 5_000_000;  // 5 seconds
+}

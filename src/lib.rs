@@ -35,12 +35,16 @@ pub mod scheduler;
 pub mod constants;
 pub mod transport;
 pub mod ignition;
+pub mod rev_limiter;
+pub mod safety;
 
 pub use trigger::{TriggerDecoder, TriggerTiming};
 pub use tables::IpwTable;
 pub use scheduler::{Scheduler, Channel, Event};
 pub use transport::{Transport, TransportError, TransportStats, Message};
 pub use ignition::{IgnitionTable, IgnitionCorrections, calculate_timing, calculate_dwell};
+pub use rev_limiter::{RevLimiterConfig, RevLimiterState, LimiterStrategy, update_limiter, should_inject, apply_limiter_retard};
+pub use safety::{FloodClearState, SyncLossTracker, update_flood_clear, should_allow_injection};
 
 #[cfg(feature = "transport-bbqueue")]
 pub use transport::BbqTransport;
@@ -127,6 +131,11 @@ pub struct EcuState {
     pub corrections: Corrections,
     pub ignition_corrections: ignition::IgnitionCorrections,
     pub battery_voltage_mv: u16,
+    pub rev_limiter_config: rev_limiter::RevLimiterConfig,
+    pub rev_limiter_state: rev_limiter::RevLimiterState,
+    pub tps_percent: u8,  // Throttle position (0-100%)
+    pub flood_clear_state: safety::FloodClearState,
+    pub sync_loss_tracker: safety::SyncLossTracker,
 }
 
 impl EcuState {
@@ -141,6 +150,11 @@ impl EcuState {
             corrections: Corrections::DEFAULT,
             ignition_corrections: ignition::IgnitionCorrections::DEFAULT,
             battery_voltage_mv: 12500,  // 12.5V nominal
+            rev_limiter_config: rev_limiter::RevLimiterConfig::DEFAULT,
+            rev_limiter_state: rev_limiter::RevLimiterState::new(),
+            tps_percent: 0,  // Throttle closed
+            flood_clear_state: safety::FloodClearState::new(),
+            sync_loss_tracker: safety::SyncLossTracker::new(),
         }
     }
 
@@ -255,6 +269,119 @@ impl EcuState {
 
         ignition::init_conservative_table(&mut table);
         self.ignition_table = table.values;
+    }
+
+    /// Update rev limiter state based on current RPM
+    ///
+    /// Should be called every engine cycle or in main loop.
+    /// Updates internal limiter state which affects fuel and ignition.
+    pub fn update_rev_limiter(&mut self) {
+        rev_limiter::update_limiter(self.rpm, &self.rev_limiter_config, &mut self.rev_limiter_state);
+    }
+
+    /// Check if fuel injection should proceed (considers rev limiter)
+    ///
+    /// # Arguments
+    /// * `cylinder` - Cylinder number (0-3)
+    ///
+    /// # Returns
+    /// `true` if injection should occur, `false` if limiter is cutting fuel
+    pub fn should_inject_fuel(&self, cylinder: u8) -> bool {
+        rev_limiter::should_inject(&self.rev_limiter_state, cylinder)
+    }
+
+    /// Calculate ignition timing with all corrections (including rev limiter)
+    ///
+    /// This is the main method to use - applies ignition corrections AND rev limiter retard.
+    ///
+    /// # Arguments
+    /// * `rpm` - Engine speed in RPM
+    /// * `load` - Engine load in kPa
+    ///
+    /// # Returns
+    /// Final timing in degrees BTDC with all corrections applied
+    pub fn calculate_ignition_timing_with_limiter(&self, rpm: u16, load: u16) -> i16 {
+        // Get base timing with normal corrections
+        let base_timing = self.calculate_ignition_timing(rpm, load);
+
+        // Apply rev limiter retard
+        rev_limiter::apply_limiter_retard(base_timing, &self.rev_limiter_state)
+    }
+
+    /// Update flood clear state based on current conditions
+    ///
+    /// Should be called every engine cycle or main loop iteration.
+    ///
+    /// # Returns
+    /// `true` if flood clear is active (fuel should be cut)
+    pub fn update_flood_clear(&mut self) -> bool {
+        safety::update_flood_clear(self.rpm, self.tps_percent, &mut self.flood_clear_state)
+    }
+
+    /// Record a sync loss event
+    ///
+    /// Call this when trigger sync is lost. The tracker will determine
+    /// if this is an ESD glitch (recoverable) or real failure (shutdown).
+    ///
+    /// # Arguments
+    /// * `current_time_us` - Current timestamp in microseconds
+    ///
+    /// # Returns
+    /// `true` if engine should shut down, `false` if should attempt recovery
+    pub fn record_sync_loss(&mut self, current_time_us: u32) -> bool {
+        self.synced = false;
+        self.sync_loss_tracker.record_sync_loss(current_time_us)
+    }
+
+    /// Record successful sync recovery
+    ///
+    /// Call this when sync is successfully re-established after a loss.
+    pub fn record_sync_recovery(&mut self) {
+        self.synced = true;
+        self.sync_loss_tracker.record_recovery();
+    }
+
+    /// Reset sync loss window after sustained good operation
+    ///
+    /// Call this periodically (e.g., every 10 seconds) when sync is stable.
+    /// This allows the system to recover from old ESD events.
+    pub fn reset_sync_loss_window(&mut self) {
+        self.sync_loss_tracker.reset_window();
+    }
+
+    /// Check if fuel injection should proceed considering ALL safety features
+    ///
+    /// This is the master safety check. Returns `true` only if:
+    /// - Not in flood clear mode
+    /// - Not shut down due to sync loss
+    /// - Rev limiter allows injection
+    /// - Engine is synced
+    ///
+    /// # Arguments
+    /// * `cylinder` - Cylinder number (0-3)
+    ///
+    /// # Returns
+    /// `true` if injection should proceed, `false` otherwise
+    pub fn should_inject_with_all_safety(&self, cylinder: u8) -> bool {
+        // Must be synced
+        if !self.synced {
+            return false;
+        }
+
+        // Check flood clear and shutdown
+        if !safety::should_allow_injection(
+            self.flood_clear_state.active,
+            self.sync_loss_tracker.is_shutdown(),
+        ) {
+            return false;
+        }
+
+        // Check rev limiter
+        if !self.should_inject_fuel(cylinder) {
+            return false;
+        }
+
+        true
     }
 }
 
