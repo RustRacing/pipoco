@@ -17,6 +17,7 @@
 //! - `scheduler`: Event scheduling for injection and ignition
 //! - `hal`: Hardware abstraction traits
 //! - `constants`: System-wide configuration constants
+//! - `transport`: Transport-agnostic inter-component communication
 //!
 //! ## Design Principles
 //!
@@ -32,10 +33,15 @@ pub mod trigger;
 pub mod tables;
 pub mod scheduler;
 pub mod constants;
+pub mod transport;
 
 pub use trigger::{TriggerDecoder, TriggerTiming};
 pub use tables::IpwTable;
 pub use scheduler::{Scheduler, Channel, Event};
+pub use transport::{Transport, TransportError, TransportStats, Message};
+
+#[cfg(feature = "transport-bbqueue")]
+pub use transport::BbqTransport;
 
 use constants::corrections::*;
 use constants::fuel::*;
