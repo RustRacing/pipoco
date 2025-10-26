@@ -38,6 +38,7 @@ pub mod ignition;
 pub mod rev_limiter;
 pub mod safety;
 pub mod management;
+pub mod ve_engine;
 
 pub use trigger::{TriggerDecoder, TriggerTiming};
 pub use tables::IpwTable;

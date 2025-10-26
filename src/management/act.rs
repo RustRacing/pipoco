@@ -38,10 +38,19 @@ impl<T: Transport> Actor<T> {
             .send(&fuel_msg)
             .map_err(|_| ActError::TransportFailed)?;
 
-        // Send ignition table
+        // Send ignition table (convert i16 to u16 with offset)
+        let mut timing_table_u16 = [[0u16; 16]; 16];
+        for i in 0..16 {
+            for j in 0..16 {
+                // Convert i16 timing (can be negative) to u16 with offset
+                // Add 180 to handle negative timing values (retard)
+                timing_table_u16[i][j] = (decisions.ignition.timing_table[i][j] + 180) as u16;
+            }
+        }
+
         let ign_msg = Message::IgnitionTable {
             version: 1,
-            data: decisions.ignition.timing_table,
+            data: timing_table_u16,
             crc32: 0,
         };
 
@@ -80,6 +89,12 @@ mod tests {
         fn try_receive(&mut self) -> Option<Message> {
             None
         }
+        fn poll(&mut self) {
+            // No-op for mock
+        }
+        fn flush(&mut self) -> Result<(), TransportError> {
+            Ok(())
+        }
         fn stats(&self) -> crate::TransportStats {
             crate::TransportStats {
                 tx_count: 0,
@@ -88,7 +103,11 @@ mod tests {
                 rx_errors: 0,
                 tx_buffer_usage: 0,
                 rx_buffer_usage: 0,
+                avg_latency_us: None,
             }
+        }
+        fn is_ready(&self) -> bool {
+            true
         }
     }
 

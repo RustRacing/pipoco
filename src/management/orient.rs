@@ -4,7 +4,7 @@
 //! Combines multiple sensors, detects operating modes, and builds
 //! a coherent picture of engine state.
 
-use super::observe::{Observation, ObservationSet, Quality};
+use super::observe::{ObservationSet, Quality};
 use super::types::{LoadMethod, SensorType};
 
 /// Operating mode classification
