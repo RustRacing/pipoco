@@ -108,3 +108,35 @@ pub mod rpm {
     /// Periods longer than this result in RPM = 0
     pub const MAX_PERIOD_FOR_CALC_US: u32 = 60_000;  // < 1000 RPM
 }
+
+/// Ignition timing and dwell constants
+pub mod ignition {
+    /// Default ignition timing (degrees BTDC)
+    /// Conservative value safe for most engines
+    pub const DEFAULT_TIMING_BTDC: i16 = 15;
+
+    /// Minimum ignition timing (degrees BTDC)
+    /// Negative values = ATDC (after TDC)
+    /// -10° ATDC is very retarded, used for extreme knock or limiting
+    pub const MIN_TIMING_BTDC: i16 = -10;
+
+    /// Maximum ignition timing (degrees BTDC)
+    /// 45° is very advanced, typical max is 35-40° for most engines
+    pub const MAX_TIMING_BTDC: i16 = 45;
+
+    /// Minimum coil dwell time (microseconds)
+    /// Below this, spark energy is insufficient
+    pub const MIN_DWELL_US: u32 = 1500;  // 1.5ms
+
+    /// Maximum coil dwell time (microseconds)
+    /// Above this, coil may overheat
+    pub const MAX_DWELL_US: u32 = 6000;  // 6ms
+
+    /// Default dwell time (microseconds)
+    /// At nominal voltage (13.5V)
+    pub const DEFAULT_DWELL_US: u32 = 3000;  // 3ms
+
+    /// Cranking timing (degrees BTDC)
+    /// Fixed timing during cranking for reliable starting
+    pub const CRANKING_TIMING_BTDC: i16 = 10;
+}

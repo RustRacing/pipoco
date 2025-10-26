@@ -34,11 +34,13 @@ pub mod tables;
 pub mod scheduler;
 pub mod constants;
 pub mod transport;
+pub mod ignition;
 
 pub use trigger::{TriggerDecoder, TriggerTiming};
 pub use tables::IpwTable;
 pub use scheduler::{Scheduler, Channel, Event};
 pub use transport::{Transport, TransportError, TransportStats, Message};
+pub use ignition::{IgnitionTable, IgnitionCorrections, calculate_timing, calculate_dwell};
 
 #[cfg(feature = "transport-bbqueue")]
 pub use transport::BbqTransport;
@@ -121,7 +123,10 @@ pub struct EcuState {
     pub synced: bool,
     pub tooth_count: u8,
     pub ipw_table: [[u16; 16]; 16],
+    pub ignition_table: [[i16; 16]; 16],
     pub corrections: Corrections,
+    pub ignition_corrections: ignition::IgnitionCorrections,
+    pub battery_voltage_mv: u16,
 }
 
 impl EcuState {
@@ -132,7 +137,10 @@ impl EcuState {
             synced: false,
             tooth_count: 0,
             ipw_table: [[DEFAULT_PULSE_WIDTH_US; 16]; 16],
+            ignition_table: [[constants::ignition::DEFAULT_TIMING_BTDC; 16]; 16],
             corrections: Corrections::DEFAULT,
+            ignition_corrections: ignition::IgnitionCorrections::DEFAULT,
+            battery_voltage_mv: 12500,  // 12.5V nominal
         }
     }
 
@@ -177,6 +185,41 @@ impl EcuState {
         pw
     }
 
+    /// Calculate ignition timing with corrections
+    ///
+    /// Performs the complete ignition timing calculation:
+    /// 1. Table lookup for base timing
+    /// 2. Apply temperature and knock corrections
+    /// 3. Clamp to safe limits
+    ///
+    /// # Arguments
+    /// * `rpm` - Engine speed in RPM
+    /// * `load` - Engine load in kPa
+    ///
+    /// # Returns
+    /// Final timing in degrees BTDC (positive = advance, negative = retard)
+    pub fn calculate_ignition_timing(&self, rpm: u16, load: u16) -> i16 {
+        let table = ignition::IgnitionTable {
+            rpm_bins: constants::fuel::RPM_BINS,
+            load_bins: constants::fuel::LOAD_BINS,
+            values: self.ignition_table,
+        };
+
+        // 1. Base lookup
+        let base_timing = table.lookup(rpm, load);
+
+        // 2. Apply corrections and clamp
+        ignition::calculate_timing(base_timing, &self.ignition_corrections)
+    }
+
+    /// Calculate coil dwell time based on battery voltage
+    ///
+    /// # Returns
+    /// Dwell time in microseconds
+    pub fn calculate_dwell(&self) -> u32 {
+        ignition::calculate_dwell(self.battery_voltage_mv)
+    }
+
     /// Initialize IPW table with linear test values
     ///
     /// Creates a simple linear fuel map for initial testing.
@@ -197,6 +240,21 @@ impl EcuState {
                     .saturating_sub(rpm_factor);
             }
         }
+    }
+
+    /// Initialize ignition table with conservative values
+    ///
+    /// Creates a conservative ignition map safe for initial testing.
+    /// Should be replaced with properly tuned values for production.
+    pub fn init_ignition_table(&mut self) {
+        let mut table = ignition::IgnitionTable {
+            rpm_bins: constants::fuel::RPM_BINS,
+            load_bins: constants::fuel::LOAD_BINS,
+            values: self.ignition_table,
+        };
+
+        ignition::init_conservative_table(&mut table);
+        self.ignition_table = table.values;
     }
 }
 
