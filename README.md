@@ -1,157 +1,80 @@
-# Pipoco, the Rust ECU
+# Pipoco — a minimal Rust ECU
 
-Minimal modular ECU implementation in Rust that works on pi pico.
+Pipoco is a small, no_std engine control core written in Rust. It decodes a 60‑2 trigger, schedules injection/ignition events, and exposes runtime/state and tables to TunerStudio for tuning. The core is platform‑agnostic; board‑specific crates wire up pins, ADC, and persistence.
 
-## Features
+Status: prototype, validated with a trigger simulator. Designed to run on real hardware next.
 
-- ✅ 60-2 trigger decoder
-- ✅ IPW table lookup (16x16, no interpolation)
-- ✅ Batch injection (all injectors fire together)
-- ✅ Wasted spark ignition (pairs fire together)
-- ✅ Fixed correction multipliers
-- ✅ no_std embedded Rust
-- ✅ Zero dependencies in core library
-- ✅ Angle-based sequential injection and ignition (per-cylinder)
-- ✅ TunerStudio pages for sensors, enrichment, DFCO, diagnostics, and angles
+## Highlights
 
-## Project Structure
+- 60‑2 trigger decoder with sync/loss handling
+- Batch and sequential fuel injection; wasted‑spark and sequential ignition
+- Angle‑based scheduling (per‑cylinder TDC + BTDC targets); low‑jitter tick deadlines
+- TunerStudio pages for tables and runtime configuration (Sensors, AE, DFCO, Limits, Diagnostics, Angles)
+- no_std core with fixed‑size data and integer math; zero dependencies in core
 
-```
-├── src/               # Core ECU library (no_std, zero deps)
-│   ├── lib.rs
-│   ├── hal.rs        # HAL trait definitions
-│   ├── trigger.rs    # 60-2 decoder
-│   ├── tables.rs     # IPW table lookup
-│   └── scheduler.rs  # Event scheduler
-├── stm32f4/          # STM32F4 application
-│   └── src/
-│       ├── main.rs
-│       └── hal_impl.rs
-└── tests/            # Unit tests
-    └── trigger_test.rs
-```
+## Getting Started
 
-## Building
+- Run tests and lints (host):
+  - `cargo test --all-features`
+  - `cargo clippy --all-targets --all-features -- -D warnings`
 
-### Core Library Tests (on host)
+- Build a target (examples):
+  - RP2040 Pico: `cargo build -p ecu-rp2040-pico --release`
+  - STM32F4: `rustup target add thumbv7em-none-eabihf && cargo build -p stm32f4-ecu --release`
 
-```bash
-cargo test
-```
+See per‑target docs for pins and features: `rp2040-pico/TS-HOWTO.md`, target README files.
 
-### STM32F4 Application
+## TunerStudio Integration
 
-```bash
-cd stm32f4
-cargo build --release
-```
-
-### Flash to Hardware
-
-```bash
-cd stm32f4
-cargo flash --chip STM32F405RGTx --release
-```
-
-Or using probe-rs directly:
-```bash
-cd stm32f4
-cargo run --release
-```
-
-## Hardware Setup
-
-### Required Hardware
-- STM32F405RGTx development board
-- Trigger wheel simulator (Ardu-Stim recommended)
-- LEDs or oscilloscope for testing outputs
-
-### Pin Connections
-
-**Inputs:**
-- PA0: Trigger input (60-2 wheel signal)
-
-**Outputs:**
-- PB0: Injector 1
-- PB1: Injector 2
-- PB2: Ignition coil 1
-- PB3: Ignition coil 2
-
-## Testing
-
-### Unit Tests
-```bash
-cargo test
-```
-
-Tests include:
-- Trigger sync detection
-- RPM calculation
-- Table lookup
-- Correction multiplication
-- Fuel calculation
-
-### Bench Testing
-
-1. Connect Ardu-Stim to PA0
-2. Set Ardu-Stim to 60-2 pattern at 1000 RPM
-3. Connect LEDs to PB0-PB3
-4. Flash firmware
-5. Verify LEDs pulse when trigger signal applied
-6. Increase RPM to 6000, verify stable operation
-
-### First Engine Test
-
-**Preparation:**
-1. Install 60-2 trigger wheel on engine
-2. Connect trigger sensor to PA0
-3. Wire all 4 injectors in parallel to PB0 (batch injection)
-4. Wire coils in pairs: Cyl 1+4 to PB2, Cyl 2+3 to PB3 (wasted spark)
-
-**Procedure:**
-1. Crank engine with fuel disabled
-2. Verify trigger sync via debug output
-3. Enable fuel pump
-4. Start engine with rich IPW table
-5. Adjust table values until engine runs smoothly
-
-## Code Size
-
-Target: <64KB flash, <8KB RAM
-
-Actual (optimized):
-```bash
-cd stm32f4
-cargo size --release
-```
-
-## TunerStudio Pages (selected)
-
-- [Sensors] page (3): TPS/MAP calibration and CLT/IAT curves
-- [AE] page (4), [DFCO] page (5)
-- [Limits] page (6): sensor clamps and emergency triggers
-- [Diag] page (7): fault flags, [DiagLog] page (8): recent events
-- [Angles] page (9):
-  - inj_angle_btdc_x10[16] (deg*10, u16)
-  - tdc_per_cyl_x10[16] (deg*10, u16)
-  - tooth0_angle_x10 (deg*10, u16)
-  - cam_missing_timeout_ms (u16)
+- INI: `ts/IPW-ECU.ini` (signature “IPW‑ECU V0.1”).
+- Pages in use:
+  - [Sensors] (3): TPS/MAP calibration, CLT/IAT curves
+  - [AE] (4): accel enrichment, decay, lockout
+  - [DFCO] (5): thresholds, delays, hysteresis
+  - [Limits] (6): sensor clamps and optional emergency triggers
+  - [Diag] (7): fault flags; [DiagLog] (8): recent events
+  - [Angles] (9): per‑cylinder injection/spark references and cam timeout
 
 ## Scheduling Modes
 
-- Default: angle-based scheduling using live tooth timing with per-cylinder TDC and BTDC offsets. Uses tick-based deadlines for low jitter.
-- Fallback: `sched-simple` feature uses a simple RPM-based half-rev model with optional per-cylinder offsets.
+- Default: angle‑based scheduling using live tooth timing with per‑cylinder angles.
+- Fallback: `sched-simple` feature — simple RPM‑based half‑revolution model.
   - Build: `cargo build --features sched-simple`
-  - Tests: `cargo test --features sched-simple` (includes a small guard test to exercise the simple scheduler path)
+  - Test: `cargo test --features sched-simple`
 
 ## Persistence
 
-- Fuel/Ignition tables persist via the KV interface (RAM or flash-backed).
-- Angle configuration ([Angles] page) persists via the same KV under key `angles` (68 bytes). RAM KV supports it; flash KV support is provided for targets enabling `flash-kv`.
+- Tables and angles persist via a simple key/value interface (RAM or flash‑backed on targets).
+- Keys: `fuel` (512 B), `ign` (512 B), `angles` (68 B). Flash backends include CRC/versioning.
 
+## Safety & Diagnostics
+
+- Sensor range clamps with optional emergency mode
+- Flood‑clear and sync‑loss shutdown utilities
+- Diagnostics flags and recent‑event log available via TS pages
+
+## Project Layout
+
+```
+rust-ipw-ecu/
+├── src/                 # Core ECU library (no_std)
+│   ├── trigger.rs       # 60-2 decoder + angle tracking
+│   ├── scheduler.rs     # Fixed-size event scheduler
+│   ├── ignition.rs      # Timing + dwell
+│   ├── tables.rs        # IPW/ignition table lookup
+│   └── ts/              # TunerStudio proto, server, pages, OUTPC
+├── rp2040-pico/         # Pico target (USB TS, optional flash KV)
+├── stm32f4/             # STM32F4 target
+├── rp2350b/             # RP2350B target (WIP)
+└── ts/                  # TunerStudio INI
+```
+
+## Contributing
+
+- Tests and clippy must pass (`--all-features`).
+- Keep core no_std with fixed‑size data structures. Avoid panics.
+- When touching TunerStudio, keep INI/page sizes in sync (tests verify signature and sizes).
 
 ## License
 
-MIT
-
-## Target: 720 lines of code, 4 weeks, engine running.
+AGPL-3.0-or-later
