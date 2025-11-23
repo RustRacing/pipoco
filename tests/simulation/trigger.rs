@@ -35,7 +35,7 @@ impl TriggerGenerator {
     /// Check if we're at the missing tooth gap
     fn is_gap(&self, tooth: u8) -> bool {
         match self.pattern {
-            TriggerPattern::SixtyMinusTwo => tooth == 0,  // After tooth 58
+            TriggerPattern::SixtyMinusTwo => tooth == 0, // After tooth 58
             TriggerPattern::ThirtySixMinusOne => tooth == 0,
             TriggerPattern::TwentyFourMinusOne => tooth == 0,
         }
@@ -101,8 +101,8 @@ impl TriggerGenerator {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::EngineConfig;
+    use super::*;
 
     #[test]
     fn test_trigger_generator_creation() {
@@ -119,7 +119,7 @@ mod tests {
     #[test]
     fn test_gap_detection() {
         let gen = TriggerGenerator::new(TriggerPattern::SixtyMinusTwo);
-        assert!(gen.is_gap(0));  // After tooth 58 comes gap
+        assert!(gen.is_gap(0)); // After tooth 58 comes gap
         assert!(!gen.is_gap(1));
         assert!(!gen.is_gap(30));
         assert!(!gen.is_gap(58));
@@ -141,13 +141,15 @@ mod tests {
             if let Some(_edge_time) = gen.next_edge(&engine, current_time) {
                 edge_count += 1;
             }
-            current_time += 10;  // Advance by 10us
+            current_time += 10; // Advance by 10us
         }
 
         // At 1000 RPM, one revolution = 60ms
         // 120ms = 2 revolutions = 116 teeth (58 * 2)
-        assert!(edge_count >= 110 && edge_count <= 120,
-                "Expected ~116 edges, got {}", edge_count);
+        assert!(
+            (110..=120).contains(&edge_count),
+            "Expected ~116 edges, got {edge_count}"
+        );
     }
 
     #[test]
@@ -172,12 +174,13 @@ mod tests {
         // Calculate periods between edges
         let mut periods = Vec::new();
         for i in 1..tooth_times.len() {
-            periods.push(tooth_times[i] - tooth_times[i-1]);
+            periods.push(tooth_times[i] - tooth_times[i - 1]);
         }
 
         // Find gaps (should be roughly 2x normal period)
         let avg_period = periods.iter().filter(|&&p| p < 1500).sum::<u32>() / 57;
-        let gaps: Vec<_> = periods.iter()
+        let gaps: Vec<_> = periods
+            .iter()
             .enumerate()
             .filter(|(_, &p)| p > avg_period * 3 / 2)
             .collect();
@@ -187,8 +190,10 @@ mod tests {
 
         // Gap should be roughly 2x normal period
         let gap_period = *gaps[0].1;
-        assert!(gap_period > avg_period * 3 / 2,
-                "Gap period {} should be > 1.5x normal period {}", gap_period, avg_period);
+        assert!(
+            gap_period > avg_period * 3 / 2,
+            "Gap period {gap_period} should be > 1.5x normal period {avg_period}"
+        );
     }
 
     #[test]

@@ -4,8 +4,8 @@
 //! damage if not working correctly. All tests in this file MUST PASS before
 //! any release or hardware deployment.
 
-use ecu_core::{EcuState, scale_u16, IpwTable, TriggerDecoder, Scheduler, Channel};
 use ecu_core::hal::TimeSource;
+use ecu_core::{scale_u16, Channel, EcuState, IpwTable, Scheduler, TriggerDecoder};
 use std::cell::Cell;
 
 // Mock time source
@@ -15,7 +15,9 @@ struct MockTime {
 
 impl MockTime {
     fn new(initial: u32) -> Self {
-        Self { time: Cell::new(initial) }
+        Self {
+            time: Cell::new(initial),
+        }
     }
 
     fn set_time(&self, t: u32) {
@@ -53,9 +55,10 @@ fn test_max_fuel_clamp_enforced() {
     for rpm in [500, 1000, 2000, 4000, 6000, 8000] {
         for load in [20, 50, 100, 150, 170] {
             let pw = state.calculate_fuel(rpm, load);
-            assert_eq!(pw, 20000,
-                "Max fuel clamp failed at {} RPM, {} kPa: got {}us, expected 20000us",
-                rpm, load, pw);
+            assert_eq!(
+                pw, 20000,
+                "Max fuel clamp failed at {rpm} RPM, {load} kPa: got {pw}us, expected 20000us"
+            );
         }
     }
 }
@@ -67,7 +70,7 @@ fn test_min_fuel_clamp_enforced() {
     // Set extremely low base pulse width
     for row in 0..16 {
         for col in 0..16 {
-            state.ipw_table[row][col] = 1;  // Minimum possible value
+            state.ipw_table[row][col] = 1; // Minimum possible value
         }
     }
 
@@ -80,9 +83,10 @@ fn test_min_fuel_clamp_enforced() {
     for rpm in [500, 1000, 2000, 4000, 6000, 8000] {
         for load in [20, 50, 100, 150, 170] {
             let pw = state.calculate_fuel(rpm, load);
-            assert_eq!(pw, 500,
-                "Min fuel clamp failed at {} RPM, {} kPa: got {}us, expected 500us",
-                rpm, load, pw);
+            assert_eq!(
+                pw, 500,
+                "Min fuel clamp failed at {rpm} RPM, {load} kPa: got {pw}us, expected 500us"
+            );
         }
     }
 }
@@ -97,9 +101,9 @@ fn test_runaway_fuel_protection_table_corruption() {
     state.ipw_table[15][15] = u16::MAX;
 
     // Even with corrupted table, should never exceed max
-    let pw1 = state.calculate_fuel(3500, 90);   // Middle of table
-    let pw2 = state.calculate_fuel(500, 20);    // Low corner
-    let pw3 = state.calculate_fuel(8000, 170);  // High corner
+    let pw1 = state.calculate_fuel(3500, 90); // Middle of table
+    let pw2 = state.calculate_fuel(500, 20); // Low corner
+    let pw3 = state.calculate_fuel(8000, 170); // High corner
 
     assert!(pw1 <= 20000, "Fuel exceeded max with corrupted table");
     assert!(pw2 <= 20000, "Fuel exceeded max with corrupted table");
@@ -111,8 +115,8 @@ fn test_vbatt_correction_low_voltage_limit() {
     let mut state = EcuState::new();
 
     // Low voltage should increase pulse width, but not excessively
-    state.ipw_table[8][5] = 10000;  // 10ms base
-    state.corrections.vbatt = 200;  // 2.0x correction (compensate for slow injector)
+    state.ipw_table[8][5] = 10000; // 10ms base
+    state.corrections.vbatt = 200; // 2.0x correction (compensate for slow injector)
 
     let pw = state.calculate_fuel(3000, 100);
 
@@ -129,17 +133,17 @@ fn test_overflow_protection_in_corrections() {
 
     // Verify multiply-then-divide order prevents intermediate overflow
     let result = scale_u16(40000, 150);
-    assert!(result == u16::MAX || result == 60000);  // May saturate depending on impl
+    assert!(result == u16::MAX || result == 60000); // May saturate depending on impl
 }
 
 #[test]
 fn test_combined_corrections_saturation() {
     let mut state = EcuState::new();
-    state.ipw_table[8][5] = 8000;  // 8ms base
+    state.ipw_table[8][5] = 8000; // 8ms base
 
     // Multiple high corrections should saturate gracefully
-    state.corrections.clt = 200;   // 2.0x
-    state.corrections.iat = 150;   // 1.5x
+    state.corrections.clt = 200; // 2.0x
+    state.corrections.iat = 150; // 1.5x
     state.corrections.vbatt = 120; // 1.2x
 
     let pw = state.calculate_fuel(3000, 100);
@@ -174,7 +178,10 @@ fn test_loss_of_sync_detection_timeout() {
     decoder.tooth_edge();
 
     // Must lose sync and set RPM to 0
-    assert!(!decoder.synced(), "Failed to detect sync loss after timeout");
+    assert!(
+        !decoder.synced(),
+        "Failed to detect sync loss after timeout"
+    );
     assert_eq!(decoder.rpm(), 0, "RPM should be 0 after sync loss");
 }
 
@@ -246,7 +253,7 @@ fn test_false_sync_protection() {
     decoder.tooth_edge();
     decoder.time_source().set_time(1000);
     decoder.tooth_edge();
-    decoder.time_source().set_time(3000);  // False gap
+    decoder.time_source().set_time(3000); // False gap
     decoder.tooth_edge();
     decoder.time_source().set_time(4000);
     decoder.tooth_edge();
@@ -256,7 +263,10 @@ fn test_false_sync_protection() {
     // For now, we just verify RPM is reasonable if it does sync
     if decoder.synced() {
         let rpm = decoder.rpm();
-        assert!(rpm >= 500 && rpm <= 8000, "RPM out of reasonable range: {}", rpm);
+        assert!(
+            (500..=8000).contains(&rpm),
+            "RPM out of reasonable range: {rpm}"
+        );
     }
 }
 
@@ -302,19 +312,25 @@ fn test_table_cell_independence_no_bleeding() {
 
     // Verify neighboring cells are not affected
     let neighbors = [
-        (state.calculate_fuel(2500, 100), "Adjacent RPM bin (lower)"),  // [8][4]
+        (state.calculate_fuel(2500, 100), "Adjacent RPM bin (lower)"), // [8][4]
         (state.calculate_fuel(3500, 100), "Adjacent RPM bin (higher)"), // [8][6]
-        (state.calculate_fuel(3000, 90), "Adjacent load bin (lower)"),  // [7][5]
-        (state.calculate_fuel(3000, 110), "Adjacent load bin (higher)"), // [9][5]
+        (state.calculate_fuel(3000, 90), "Adjacent load bin (lower)"), // [7][5]
+        (
+            state.calculate_fuel(3000, 110),
+            "Adjacent load bin (higher)",
+        ), // [9][5]
     ];
 
     for (pw, desc) in neighbors.iter() {
-        assert_eq!(*pw, 1000, "{} was affected by modification", desc);
+        assert_eq!(*pw, 1000, "{desc} was affected by modification");
     }
 
     // The modified cell should return the extreme value
     let pw_modified = state.calculate_fuel(3000, 100);
-    assert_eq!(pw_modified, 15000, "Modified cell should return correct value");
+    assert_eq!(
+        pw_modified, 15000,
+        "Modified cell should return correct value"
+    );
 }
 
 // =============================================================================
@@ -325,10 +341,11 @@ fn test_table_cell_independence_no_bleeding() {
 fn test_scheduler_overflow_graceful() {
     let mut scheduler = Scheduler::new();
 
+    use ecu_core::constants::scheduler::MAX_EVENTS;
     // Fill scheduler to capacity
-    for i in 0..8 {
-        let success = scheduler.schedule(1000 * i, Channel::INJ1, true);
-        assert!(success, "Should accept event {}", i);
+    for i in 0..MAX_EVENTS {
+        let success = scheduler.schedule(1000 * i as u32, Channel::INJ1, true);
+        assert!(success, "Should accept event {i}");
     }
 
     // Try to schedule one more (should fail gracefully, not crash)
@@ -345,20 +362,30 @@ fn test_scheduler_time_wrapping() {
     scheduler.schedule(event_time, Channel::INJ1, true);
 
     // Mock output
-    struct MockOutput { state: Cell<bool> }
+    struct MockOutput {
+        state: Cell<bool>,
+    }
     impl MockOutput {
-        fn new() -> Self { Self { state: Cell::new(false) } }
+        fn new() -> Self {
+            Self {
+                state: Cell::new(false),
+            }
+        }
     }
     impl ecu_core::hal::OutputPin for MockOutput {
-        fn set_high(&mut self) { self.state.set(true); }
-        fn set_low(&mut self) { self.state.set(false); }
+        fn set_high(&mut self) {
+            self.state.set(true);
+        }
+        fn set_low(&mut self) {
+            self.state.set(false);
+        }
     }
 
     let mut output = MockOutput::new();
     let mut outputs: [&mut dyn ecu_core::hal::OutputPin; 1] = [&mut output];
 
     // Check event at time that wraps around u32
-    let now = 100;  // Wrapped past u32::MAX
+    let now = 100; // Wrapped past u32::MAX
     scheduler.check_and_execute(now, &mut outputs[..]);
 
     // Event should have executed despite time wrapping
@@ -375,7 +402,7 @@ fn test_cold_boot_state_initialization() {
 
     // Verify safe initial state
     assert_eq!(state.rpm, 0);
-    assert_eq!(state.synced, false);
+    assert!(!state.synced);
     assert_eq!(state.tooth_count, 0);
     assert_eq!(state.corrections.clt, 100);
     assert_eq!(state.corrections.iat, 100);
@@ -384,8 +411,10 @@ fn test_cold_boot_state_initialization() {
     // Verify table is initialized with safe values
     for row in 0..16 {
         for col in 0..16 {
-            assert_eq!(state.ipw_table[row][col], 1000,
-                "Table cell [{},{}] not initialized to safe default", row, col);
+            assert_eq!(
+                state.ipw_table[row][col], 1000,
+                "Table cell [{row},{col}] not initialized to safe default"
+            );
         }
     }
 }
@@ -439,10 +468,11 @@ fn test_channel_validation() {
     assert!(Channel::IGN2.is_valid());
 
     // Verify channel values are within expected range
-    assert!(Channel::INJ1.as_u8() < 4);
-    assert!(Channel::INJ2.as_u8() < 4);
-    assert!(Channel::IGN1.as_u8() < 4);
-    assert!(Channel::IGN2.as_u8() < 4);
+    use ecu_core::constants::scheduler::MAX_CHANNELS;
+    assert!(Channel::INJ1.as_u8() < MAX_CHANNELS);
+    assert!(Channel::INJ2.as_u8() < MAX_CHANNELS);
+    assert!(Channel::IGN1.as_u8() < MAX_CHANNELS);
+    assert!(Channel::IGN2.as_u8() < MAX_CHANNELS);
 }
 
 // =============================================================================
@@ -480,7 +510,11 @@ fn test_tooth_counter_wraparound() {
         decoder.time_source().set_time(base + 60000);
         decoder.tooth_edge();
 
-        assert_eq!(decoder.tooth(), 1, "Tooth counter failed to wrap at revolution {}", rev);
+        assert_eq!(
+            decoder.tooth(),
+            1,
+            "Tooth counter failed to wrap at revolution {rev}"
+        );
     }
 }
 
@@ -492,7 +526,10 @@ fn test_zero_rpm_safety() {
     let pw = state.calculate_fuel(0, 0);
 
     // Should return safe value (will use first bin)
-    assert!(pw >= 500 && pw <= 20000, "Fuel at 0 RPM out of safe range: {}", pw);
+    assert!(
+        (500..=20000).contains(&pw),
+        "Fuel at 0 RPM out of safe range: {pw}"
+    );
 }
 
 #[test]

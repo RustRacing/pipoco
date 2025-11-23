@@ -3,7 +3,7 @@
 //! This module defines all messages used for communication between ECU components.
 //! Messages are transport-agnostic and serialized using postcard for efficiency.
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 /// Protocol version for forward compatibility
 pub const PROTOCOL_VERSION: u16 = 1;
@@ -219,17 +219,17 @@ impl Message {
     /// BBQueue ignores this as it's FIFO.
     pub fn priority(&self) -> u8 {
         match self {
-            Message::TriggerTiming { .. } => 0,  // Highest - time-critical
-            Message::CmdEngineControl { .. } => 0,  // Highest - safety critical
-            Message::SensorData { .. } => 1,     // High - affects calculations
-            Message::Error { .. } => 2,          // High - safety monitoring
-            Message::IpwTable { .. } => 3,       // Medium - only changes occasionally
+            Message::TriggerTiming { .. } => 0,    // Highest - time-critical
+            Message::CmdEngineControl { .. } => 0, // Highest - safety critical
+            Message::SensorData { .. } => 1,       // High - affects calculations
+            Message::Error { .. } => 2,            // High - safety monitoring
+            Message::IpwTable { .. } => 3,         // Medium - only changes occasionally
             Message::IgnitionTable { .. } => 3,
             Message::EngineConfig { .. } => 4,
             Message::InjectorConfig { .. } => 4,
             Message::CmdCalibrate { .. } => 4,
-            Message::CmdReset { .. } => 1,       // High - system control
-            Message::Heartbeat { .. } => 5,      // Low - can tolerate delays
+            Message::CmdReset { .. } => 1,  // High - system control
+            Message::Heartbeat { .. } => 5, // Low - can tolerate delays
         }
     }
 
@@ -241,8 +241,8 @@ impl Message {
         match self {
             Message::TriggerTiming { .. } => 16,
             Message::SensorData { .. } => 20,
-            Message::IpwTable { .. } => 528,  // Large! (4 + 512 + 4 + overhead)
-            Message::IgnitionTable { .. } => 528,  // Large!
+            Message::IpwTable { .. } => 528, // Large! (4 + 512 + 4 + overhead)
+            Message::IgnitionTable { .. } => 528, // Large!
             Message::EngineConfig { .. } => 12,
             Message::InjectorConfig { .. } => 10,
             Message::Heartbeat { .. } => 12,

@@ -5,10 +5,13 @@ edition = "2021"
 
 [dependencies]
 ecu-core = { path = ".." }
+ecu-target-common = { path = "../ecu-target-common" }
 cortex-m = "0.7"
 cortex-m-rt = "0.7"
 panic-halt = "0.2"
-stm32f4xx-hal = { version = "0.21", features = ["stm32f405"] }
+stm32f4xx-hal = { version = "0.21", features = ["stm32f405", "otg-fs"] }
+usb-device = { version = "0.2", optional = true }
+usbd-serial = { version = "0.1", optional = true }
 
 [[bin]]
 name = "stm32f4-ecu"
@@ -19,3 +22,31 @@ opt-level = "z"
 lto = true
 codegen-units = 1
 debug = true  # Keep debug info for flashing
+
+[features]
+capture-tim = []
+capture-gpio = []
+ts-usb = ["usb-device", "usbd-serial"]
+flash-kv = []
+ts-usb-hw = ["ts-usb"]
+adc-sensors = []
+
+[[bin]]
+name = "stm32f4-ecu-demo"
+path = "src/bin/ecu_demo.rs"
+
+[[bin]]
+name = "v8-seq"
+path = "src/bin/v8_seq.rs"
+
+[[bin]]
+name = "4c-batched"
+path = "src/bin/4c_batched.rs"
+
+[[bin]]
+name = "can-heartbeat"
+path = "src/bin/can_heartbeat.rs"
+
+[[bin]]
+name = "ts-gauges"
+path = "src/bin/ts_gauges.rs"

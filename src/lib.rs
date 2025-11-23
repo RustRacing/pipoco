@@ -28,25 +28,41 @@
 
 #![cfg_attr(not(test), no_std)]
 
-pub mod hal;
-pub mod trigger;
-pub mod tables;
-pub mod scheduler;
+pub mod app;
+pub mod capture;
+pub mod config;
 pub mod constants;
-pub mod transport;
+pub mod dfco;
+pub mod enrichment;
+pub mod hal;
 pub mod ignition;
+pub mod management;
+pub mod persist;
 pub mod rev_limiter;
 pub mod safety;
-pub mod management;
+pub mod scheduler;
+pub mod sensors;
+pub mod tables;
+pub mod telemetry;
+pub mod transport;
+pub mod trigger;
+pub mod ts;
 pub mod ve_engine;
+pub mod diag;
 
-pub use trigger::{TriggerDecoder, TriggerTiming};
+pub use app::EcuApp;
+pub use capture::CaptureBuffer;
+pub use ignition::{calculate_dwell, calculate_timing, IgnitionCorrections, IgnitionTable};
+pub use rev_limiter::{
+    apply_limiter_retard, should_inject, update_limiter, LimiterStrategy, RevLimiterConfig,
+    RevLimiterState,
+};
+pub use safety::{should_allow_injection, update_flood_clear, FloodClearState, SyncLossTracker};
+pub use scheduler::{Channel, Event, Scheduler};
 pub use tables::IpwTable;
-pub use scheduler::{Scheduler, Channel, Event};
-pub use transport::{Transport, TransportError, TransportStats, Message};
-pub use ignition::{IgnitionTable, IgnitionCorrections, calculate_timing, calculate_dwell};
-pub use rev_limiter::{RevLimiterConfig, RevLimiterState, LimiterStrategy, update_limiter, should_inject, apply_limiter_retard};
-pub use safety::{FloodClearState, SyncLossTracker, update_flood_clear, should_allow_injection};
+pub use telemetry::IsrStats;
+pub use transport::{Message, Transport, TransportError, TransportStats};
+pub use trigger::{TriggerDecoder, TriggerTiming};
 
 #[cfg(feature = "transport-bbqueue")]
 pub use transport::BbqTransport;
@@ -135,9 +151,25 @@ pub struct EcuState {
     pub battery_voltage_mv: u16,
     pub rev_limiter_config: rev_limiter::RevLimiterConfig,
     pub rev_limiter_state: rev_limiter::RevLimiterState,
-    pub tps_percent: u8,  // Throttle position (0-100%)
+    pub tps_percent: u8, // Throttle position (0-100%) (clamped)
+    pub map_kpa_x10: u16, // MAP (kPa*10) (clamped)
     pub flood_clear_state: safety::FloodClearState,
     pub sync_loss_tracker: safety::SyncLossTracker,
+    pub sensors_cal: sensors::SensorsCal,
+    pub sensors_limits: sensors::SensorsLimits,
+    pub emergency_trigger_map_oob: bool,
+    pub emergency_trigger_tps_oob: bool,
+    pub emergency_mode: bool,
+    pub diag_map: diag::DiagState,
+    pub diag_tps: diag::DiagState,
+    pub diag_cam: diag::DiagState,
+    pub diag_log: diag::DiagLog<16>,
+    pub ae_config: enrichment::AeConfig,
+    pub dfco_config: dfco::DfcoConfig,
+    pub inj_angle_btdc_x10: [u16; 16],
+    pub tdc_per_cyl_x10: [u16; 16],
+    pub tooth0_angle_x10: u16,
+    pub cam_missing_timeout_ms: u16,
 }
 
 impl EcuState {
@@ -151,12 +183,28 @@ impl EcuState {
             ignition_table: [[constants::ignition::DEFAULT_TIMING_BTDC; 16]; 16],
             corrections: Corrections::DEFAULT,
             ignition_corrections: ignition::IgnitionCorrections::DEFAULT,
-            battery_voltage_mv: 12500,  // 12.5V nominal
+            battery_voltage_mv: 12500, // 12.5V nominal
             rev_limiter_config: rev_limiter::RevLimiterConfig::DEFAULT,
             rev_limiter_state: rev_limiter::RevLimiterState::new(),
-            tps_percent: 0,  // Throttle closed
+            tps_percent: 0, // Throttle closed (clamped)
+            map_kpa_x10: 1000,
             flood_clear_state: safety::FloodClearState::new(),
             sync_loss_tracker: safety::SyncLossTracker::new(),
+            sensors_cal: sensors::SensorsCal::default(),
+            sensors_limits: sensors::SensorsLimits::default(),
+            emergency_trigger_map_oob: false,
+            emergency_trigger_tps_oob: false,
+            emergency_mode: false,
+            diag_map: diag::DiagState::new(),
+            diag_tps: diag::DiagState::new(),
+            diag_cam: diag::DiagState::new(),
+            diag_log: diag::DiagLog::new(),
+            ae_config: enrichment::AeConfig::DEFAULT,
+            dfco_config: dfco::DfcoConfig::DEFAULT,
+            inj_angle_btdc_x10: [0; 16],
+            tdc_per_cyl_x10: [0; 16],
+            tooth0_angle_x10: 0,
+            cam_missing_timeout_ms: 500,
         }
     }
 
@@ -191,12 +239,7 @@ impl EcuState {
         pw = scale_u16(pw, self.corrections.vbatt);
 
         // 3. Clamp to reasonable range
-        if pw < MIN_PULSE_WIDTH_US {
-            pw = MIN_PULSE_WIDTH_US;
-        }
-        if pw > MAX_PULSE_WIDTH_US {
-            pw = MAX_PULSE_WIDTH_US;
-        }
+        pw = pw.clamp(MIN_PULSE_WIDTH_US, MAX_PULSE_WIDTH_US);
 
         pw
     }
@@ -247,13 +290,12 @@ impl EcuState {
         for row in 0..16 {
             for col in 0..16 {
                 let base = DEFAULT_PULSE_WIDTH_US;
-                let load_factor = (row as u16).saturating_mul(50);  // 0-750us
-                let rpm_factor = (col as u16).saturating_mul(10);   // 0-150us
+                let load_factor = (row as u16).saturating_mul(50); // 0-750us
+                let rpm_factor = (col as u16).saturating_mul(10); // 0-150us
 
                 // More fuel at higher load, slightly less at higher RPM
-                self.ipw_table[row][col] = base
-                    .saturating_add(load_factor)
-                    .saturating_sub(rpm_factor);
+                self.ipw_table[row][col] =
+                    base.saturating_add(load_factor).saturating_sub(rpm_factor);
             }
         }
     }
@@ -278,7 +320,11 @@ impl EcuState {
     /// Should be called every engine cycle or in main loop.
     /// Updates internal limiter state which affects fuel and ignition.
     pub fn update_rev_limiter(&mut self) {
-        rev_limiter::update_limiter(self.rpm, &self.rev_limiter_config, &mut self.rev_limiter_state);
+        rev_limiter::update_limiter(
+            self.rpm,
+            &self.rev_limiter_config,
+            &mut self.rev_limiter_state,
+        );
     }
 
     /// Check if fuel injection should proceed (considers rev limiter)
@@ -369,6 +415,10 @@ impl EcuState {
         if !self.synced {
             return false;
         }
+        // Emergency mode blocks fuel
+        if self.emergency_mode {
+            return false;
+        }
 
         // Check flood clear and shutdown
         if !safety::should_allow_injection(
@@ -387,23 +437,113 @@ impl EcuState {
     }
 }
 
+impl Default for EcuState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl EcuState {
+    /// Clamp sensor values, update diag states, and set/clear emergency mode.
+    /// Returns (clamped_map_kpa_x10, clamped_tps_percent).
+    pub fn process_sensor_update(
+        &mut self,
+        now_us: u32,
+        raw_map_kpa_x10: u16,
+        raw_tps_percent: u8,
+    ) -> (u16, u8) {
+        let lim = self.sensors_limits;
+        let map = raw_map_kpa_x10.clamp(lim.map_min_kpa_x10, lim.map_max_kpa_x10);
+        let tps = raw_tps_percent.clamp(lim.tps_min_percent, lim.tps_max_percent);
+
+        // MAP diag
+        let map_oob = raw_map_kpa_x10 < lim.map_min_kpa_x10 || raw_map_kpa_x10 > lim.map_max_kpa_x10;
+        if map_oob {
+            if !self.diag_map.active {
+                self.diag_map.active = true;
+                self.diag_map.start_us = now_us;
+                self.diag_map.in_range_since_us = 0;
+                if self.emergency_trigger_map_oob {
+                    self.emergency_mode = true;
+                }
+            }
+        } else if self.diag_map.active {
+            if self.diag_map.in_range_since_us == 0 {
+                self.diag_map.in_range_since_us = now_us;
+            }
+            let clear_time_us = (lim.clear_time_s as u32) * 1_000_000;
+            if now_us.wrapping_sub(self.diag_map.in_range_since_us) >= clear_time_us {
+                let dur = now_us.wrapping_sub(self.diag_map.start_us);
+                self.diag_map.total_us = self.diag_map.total_us.saturating_add(dur);
+                self.diag_log.push(diag::DiagEvent {
+                    code: diag::DiagCode::MapRange,
+                    start_us: self.diag_map.start_us,
+                    end_us: now_us,
+                });
+                self.diag_map = diag::DiagState::new();
+            }
+        }
+
+        // TPS diag
+        let tps_oob = raw_tps_percent < lim.tps_min_percent || raw_tps_percent > lim.tps_max_percent;
+        if tps_oob {
+            if !self.diag_tps.active {
+                self.diag_tps.active = true;
+                self.diag_tps.start_us = now_us;
+                self.diag_tps.in_range_since_us = 0;
+                if self.emergency_trigger_tps_oob {
+                    self.emergency_mode = true;
+                }
+            }
+        } else if self.diag_tps.active {
+            if self.diag_tps.in_range_since_us == 0 {
+                self.diag_tps.in_range_since_us = now_us;
+            }
+            let clear_time_us = (lim.clear_time_s as u32) * 1_000_000;
+            if now_us.wrapping_sub(self.diag_tps.in_range_since_us) >= clear_time_us {
+                let dur = now_us.wrapping_sub(self.diag_tps.start_us);
+                self.diag_tps.total_us = self.diag_tps.total_us.saturating_add(dur);
+                self.diag_log.push(diag::DiagEvent {
+                    code: diag::DiagCode::TpsRange,
+                    start_us: self.diag_tps.start_us,
+                    end_us: now_us,
+                });
+                self.diag_tps = diag::DiagState::new();
+            }
+        }
+
+        // Clear emergency mode if triggers inactive
+        if self.emergency_mode {
+            let map_emerg_active = self.emergency_trigger_map_oob && self.diag_map.active;
+            let tps_emerg_active = self.emergency_trigger_tps_oob && self.diag_tps.active;
+            if !(map_emerg_active || tps_emerg_active) {
+                self.emergency_mode = false;
+            }
+        }
+
+        self.map_kpa_x10 = map;
+        self.tps_percent = tps;
+        (map, tps)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_scale_u16_normal() {
-        assert_eq!(scale_u16(1000, 150), 1500);  // 1.5x
-        assert_eq!(scale_u16(1000, 80), 800);    // 0.8x
-        assert_eq!(scale_u16(1000, 100), 1000);  // 1.0x
-        assert_eq!(scale_u16(500, 200), 1000);   // 2.0x
+        assert_eq!(scale_u16(1000, 150), 1500); // 1.5x
+        assert_eq!(scale_u16(1000, 80), 800); // 0.8x
+        assert_eq!(scale_u16(1000, 100), 1000); // 1.0x
+        assert_eq!(scale_u16(500, 200), 1000); // 2.0x
     }
 
     #[test]
     fn test_scale_u16_saturation() {
         // Test overflow protection
-        assert_eq!(scale_u16(u16::MAX, 200), u16::MAX);  // Would overflow
-        assert_eq!(scale_u16(50000, 200), u16::MAX);     // Would overflow
+        assert_eq!(scale_u16(u16::MAX, 200), u16::MAX); // Would overflow
+        assert_eq!(scale_u16(50000, 200), u16::MAX); // Would overflow
     }
 
     #[test]
@@ -411,7 +551,7 @@ mod tests {
         let mut state = EcuState::new();
 
         // Test minimum clamping (with very low correction)
-        state.corrections.clt = 10;  // 0.1x (very low)
+        state.corrections.clt = 10; // 0.1x (very low)
         let pw = state.calculate_fuel(3000, 60);
         assert_eq!(pw, MIN_PULSE_WIDTH_US);
 
@@ -419,12 +559,12 @@ mod tests {
         // First set a high base value in the table
         // 3000 RPM maps to RPM bin index 5, 60 kPa maps to load bin index 4
         // Table is [load_idx][rpm_idx]
-        state.ipw_table[4][5] = 15000;  // 15ms base
-        state.corrections.clt = 255;  // 2.55x (very high)
+        state.ipw_table[4][5] = 15000; // 15ms base
+        state.corrections.clt = 255; // 2.55x (very high)
         state.corrections.iat = 255;
         state.corrections.vbatt = 255;
         // This should result in: 15000 * 2.55 * 2.55 * 2.55 = 249,146 which exceeds MAX
-        let pw = state.calculate_fuel(3000, 60);  // Maps to bin [4][5]
+        let pw = state.calculate_fuel(3000, 60); // Maps to bin [4][5]
         assert_eq!(pw, MAX_PULSE_WIDTH_US);
     }
 

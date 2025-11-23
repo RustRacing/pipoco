@@ -3,11 +3,21 @@
 //! This module contains realistic driving scenarios that can be simulated
 //! in software before hardware testing.
 
-use super::{EngineSimulator, SensorSimulator, TriggerGenerator, SimulatedTime, OutputCapture, EngineConfig, TriggerPattern};
-use ecu_core::{TriggerDecoder, EcuState};
+use super::{
+    EngineConfig, EngineSimulator, OutputCapture, SensorSimulator, SimulatedTime, TriggerGenerator,
+    TriggerPattern,
+};
+use ecu_core::{EcuState, TriggerDecoder};
 
 // Helper to avoid repetition
-fn setup_simulation() -> (EngineSimulator, TriggerGenerator, SensorSimulator, SimulatedTime, OutputCapture, EcuState) {
+fn setup_simulation() -> (
+    EngineSimulator,
+    TriggerGenerator,
+    SensorSimulator,
+    SimulatedTime,
+    OutputCapture,
+    EcuState,
+) {
     let engine = EngineSimulator::new(EngineConfig::default());
     let trigger = TriggerGenerator::new(TriggerPattern::SixtyMinusTwo);
     let sensors = SensorSimulator::new();
@@ -76,7 +86,7 @@ impl ColdStartScenario {
         // Phase 1: Cranking (up to 3 seconds)
         engine.start_cranking();
         let mut current_time = 0u32;
-        let crank_duration = 3_000_000;  // 3 seconds
+        let crank_duration = 3_000_000; // 3 seconds
 
         while current_time < crank_duration {
             engine.update(10);
@@ -143,7 +153,9 @@ impl ColdStartScenario {
         }
 
         if result.final_rpm < 600 {
-            result.errors.push(format!("RPM too low: {}", result.final_rpm));
+            result
+                .errors
+                .push(format!("RPM too low: {}", result.final_rpm));
         }
 
         if outputs.injection_count() == 0 {
@@ -185,7 +197,7 @@ impl HotStartScenario {
         // Cranking - should start quickly
         engine.start_cranking();
         let mut current_time = 0u32;
-        let max_duration = 1_000_000;  // 1 second max
+        let max_duration = 1_000_000; // 1 second max
 
         while current_time < max_duration {
             engine.update(10);
@@ -244,7 +256,7 @@ impl AccelerationScenario {
             duration_ms: 0,
             final_rpm: 0,
             avg_fuel_pw: 0,
-            sync_achieved: true,  // Start running
+            sync_achieved: true, // Start running
             errors: Vec::new(),
         };
 
@@ -316,7 +328,9 @@ impl AccelerationScenario {
 
         // Check maintained sync throughout
         if !decoder.synced() {
-            result.errors.push("Lost sync during acceleration".to_string());
+            result
+                .errors
+                .push("Lost sync during acceleration".to_string());
         }
 
         // Check we actually accelerated
@@ -350,7 +364,7 @@ impl IdleScenario {
         };
 
         // Setup
-        let (mut engine, mut trigger, mut sensors, time, mut outputs, mut ecu) = setup_simulation();
+        let (mut engine, mut trigger, mut sensors, time, mut outputs, ecu) = setup_simulation();
 
         let mut decoder = TriggerDecoder::new(&time);
 
@@ -396,7 +410,9 @@ impl IdleScenario {
         // Check idle stability (±100 RPM variation acceptable)
         let rpm_variation = max_rpm - min_rpm;
         if rpm_variation > 100 {
-            result.errors.push(format!("Idle unstable: {} RPM variation", rpm_variation));
+            result
+                .errors
+                .push(format!("Idle unstable: {rpm_variation} RPM variation"));
         }
 
         // Check maintained sync
@@ -418,7 +434,7 @@ mod tests {
         let scenario = ColdStartScenario::new(-10);
         let result = scenario.run();
 
-        println!("Cold start result: {:?}", result);
+        println!("Cold start result: {result:?}");
 
         // Should achieve sync
         assert!(result.sync_achieved, "Should achieve sync");
@@ -432,7 +448,7 @@ mod tests {
         let scenario = HotStartScenario;
         let result = scenario.run();
 
-        println!("Hot start result: {:?}", result);
+        println!("Hot start result: {result:?}");
 
         assert!(result.sync_achieved);
         assert!(result.duration_ms < 1000, "Hot start should be quick");
@@ -443,7 +459,7 @@ mod tests {
         let scenario = AccelerationScenario;
         let result = scenario.run();
 
-        println!("Acceleration result: {:?}", result);
+        println!("Acceleration result: {result:?}");
 
         assert!(result.sync_achieved);
         assert!(result.final_rpm > 2000, "Should accelerate significantly");
@@ -451,10 +467,10 @@ mod tests {
 
     #[test]
     fn test_idle_scenario() {
-        let scenario = IdleScenario::new(1);  // 1 second test
+        let scenario = IdleScenario::new(1); // 1 second test
         let result = scenario.run();
 
-        println!("Idle result: {:?}", result);
+        println!("Idle result: {result:?}");
 
         assert!(result.sync_achieved);
         assert!(result.success || !result.errors.is_empty());

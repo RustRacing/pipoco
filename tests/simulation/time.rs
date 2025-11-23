@@ -87,7 +87,7 @@ mod tests {
     fn test_time_wrapping() {
         let time = SimulatedTime::with_start(u32::MAX - 100);
         time.advance(200);
-        assert_eq!(time.micros(), 99);  // Wrapped around
+        assert_eq!(time.micros(), 99); // Wrapped around
     }
 
     #[test]

@@ -1,0 +1,16 @@
+[target.'cfg(all(target_arch = "arm", target_os = "none"))']
+# Use thumbv8m.main for Cortex-M33 (RP2350B has Cortex-M33 cores)
+runner = "probe-rs run --chip RP2350"
+rustflags = [
+  "-C", "link-arg=-Tlink.x",
+  "-C", "link-arg=--nmagic",
+]
+
+[build]
+# RP2350B uses Cortex-M33 (ARMv8-M Mainline)
+target = "thumbv8m.main-none-eabihf"
+
+[alias]
+# Convenience aliases
+rb = "build --release"
+rr = "run --release"

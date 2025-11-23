@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Sensor simulation
 //!
 //! Simulates realistic sensor behavior including:
@@ -119,8 +120,11 @@ impl SensorSimulator {
     /// Apply realistic sensor noise
     fn apply_noise(&mut self) {
         // Simple LCG pseudo-random number generator
-        self.noise_seed = self.noise_seed.wrapping_mul(1664525).wrapping_add(1013904223);
-        let noise = (self.noise_seed % 20) as i16 - 10;  // ±10 units
+        self.noise_seed = self
+            .noise_seed
+            .wrapping_mul(1664525)
+            .wrapping_add(1013904223);
+        let noise = (self.noise_seed % 20) as i16 - 10; // ±10 units
 
         // Apply noise to sensors (clamped to valid ranges)
         let map_noisy = (self.map_kpa as i32 + noise as i32 / 5).clamp(10, 250);
@@ -134,7 +138,7 @@ impl SensorSimulator {
     fn apply_faults(&mut self) {
         // MAP sensor faults
         match self.map_fault {
-            SensorFault::None => {},
+            SensorFault::None => {}
             SensorFault::OpenCircuit => self.map_kpa = 0,
             SensorFault::ShortToGround => self.map_kpa = 0,
             SensorFault::ShortToBattery => self.map_kpa = 250,
@@ -147,7 +151,7 @@ impl SensorSimulator {
 
         // TPS sensor faults
         match self.tps_fault {
-            SensorFault::None => {},
+            SensorFault::None => {}
             SensorFault::OpenCircuit => self.tps_percent = 0,
             SensorFault::ShortToGround => self.tps_percent = 0,
             SensorFault::ShortToBattery => self.tps_percent = 100,
@@ -160,7 +164,7 @@ impl SensorSimulator {
 
         // CLT sensor faults
         match self.clt_fault {
-            SensorFault::None => {},
+            SensorFault::None => {}
             SensorFault::OpenCircuit => self.clt_deg_c = -40,
             SensorFault::ShortToGround => self.clt_deg_c = 150,
             SensorFault::ShortToBattery => self.clt_deg_c = -40,
@@ -194,11 +198,12 @@ mod tests {
     #[test]
     fn test_sensor_update() {
         let mut sensors = SensorSimulator::new();
-        let mut engine = EngineState::default();
-
-        engine.load_kpa = 80;
-        engine.tps_percent = 50;
-        engine.coolant_temp_c = -10;
+        let engine = EngineState {
+            load_kpa: 80,
+            tps_percent: 50,
+            coolant_temp_c: -10,
+            ..Default::default()
+        };
 
         sensors.update(&engine);
 
@@ -230,8 +235,10 @@ mod tests {
     #[test]
     fn test_tps_sensor_fault() {
         let mut sensors = SensorSimulator::new();
-        let mut engine = EngineState::default();
-        engine.tps_percent = 50;
+        let engine = EngineState {
+            tps_percent: 50,
+            ..Default::default()
+        };
 
         sensors.update(&engine);
         assert_eq!(sensors.tps_percent(), 50);
@@ -266,14 +273,18 @@ mod tests {
     #[test]
     fn test_battery_voltage() {
         let mut sensors = SensorSimulator::new();
-        let mut engine = EngineState::default();
-
-        engine.battery_voltage_mv = 11000;  // Low voltage
-        sensors.update(&engine);
+        let engine_low = EngineState {
+            battery_voltage_mv: 11000,
+            ..Default::default()
+        };
+        sensors.update(&engine_low);
         assert_eq!(sensors.battery_voltage_mv(), 11000);
 
-        engine.battery_voltage_mv = 14500;  // High voltage (alternator)
-        sensors.update(&engine);
+        let engine_high = EngineState {
+            battery_voltage_mv: 14500,
+            ..Default::default()
+        };
+        sensors.update(&engine_high);
         assert_eq!(sensors.battery_voltage_mv(), 14500);
     }
 }

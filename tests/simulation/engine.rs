@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Engine physics simulator
 //!
 //! Simulates engine behavior including:
@@ -38,7 +39,7 @@ impl EngineSimulator {
     /// Start cranking the engine
     pub fn start_cranking(&mut self) {
         self.state.cranking = true;
-        self.target_rpm = 200;  // Typical cranking speed
+        self.target_rpm = 200; // Typical cranking speed
     }
 
     /// Stop cranking
@@ -112,13 +113,13 @@ impl EngineSimulator {
             let accel_rate = if rpm_delta > 0 {
                 // Accelerating - limited by torque
                 if self.state.cranking {
-                    500_000  // Cranking: slow acceleration (500 RPM/sec)
+                    500_000 // Cranking: slow acceleration (500 RPM/sec)
                 } else {
-                    2_000_000  // Running: faster acceleration (2000 RPM/sec)
+                    2_000_000 // Running: faster acceleration (2000 RPM/sec)
                 }
             } else {
                 // Decelerating - faster than acceleration
-                3_000_000  // 3000 RPM/sec deceleration
+                3_000_000 // 3000 RPM/sec deceleration
             };
 
             // Calculate RPM change for this time step
@@ -169,7 +170,8 @@ impl EngineSimulator {
                 // Idle/closed throttle - high vacuum
                 // Higher RPM = more vacuum
                 let vacuum_factor = (self.state.rpm as u32 * 100) / self.config.max_rpm as u32;
-                let vacuum_kpa = base_vacuum_kpa + ((atmospheric_kpa - base_vacuum_kpa) * vacuum_factor as u16) / 100;
+                let vacuum_kpa = base_vacuum_kpa
+                    + ((atmospheric_kpa - base_vacuum_kpa) * vacuum_factor as u16) / 100;
                 self.state.load_kpa = vacuum_kpa.max(base_vacuum_kpa);
             } else {
                 // Throttle open - load increases with throttle
@@ -293,7 +295,10 @@ mod tests {
         engine.set_throttle(100);
         engine.update(1000);
         let wot_load = engine.state().load_kpa;
-        assert!(wot_load > 90, "WOT load should be >90 kPa (near atmospheric)");
+        assert!(
+            wot_load > 90,
+            "WOT load should be >90 kPa (near atmospheric)"
+        );
     }
 
     #[test]
@@ -305,7 +310,7 @@ mod tests {
         let period = engine.tooth_period_us();
 
         // At 1000 RPM: 60,000,000 us / 1000 / 58 = ~1034 us
-        assert!(period >= 1030 && period <= 1040);
+        assert!((1030..=1040).contains(&period));
     }
 
     #[test]

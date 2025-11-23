@@ -10,18 +10,18 @@
 //!
 //! The architecture is transport-agnostic, memory-scalable, and highly modular.
 
+pub mod act;
+pub mod decide;
+pub mod history;
 pub mod observe;
 pub mod orient;
-pub mod decide;
-pub mod act;
-pub mod history;
 pub mod types;
 
-pub use observe::{Observer, Observation, ObservationSource, Quality};
-pub use orient::{Orienter, EngineContext, OperatingMode};
-pub use decide::{Decider, ControlStrategy, FuelCommand, IgnitionCommand};
-pub use act::{Actor, CommandDispatcher, ActError};
-pub use history::{History, HistoryConfig, HistoryChannel};
+pub use act::{ActError, Actor, CommandDispatcher};
+pub use decide::{ControlStrategy, Decider, FuelCommand, IgnitionCommand};
+pub use history::{History, HistoryChannel, HistoryConfig};
+pub use observe::{Observation, ObservationSource, Observer, Quality};
+pub use orient::{EngineContext, OperatingMode, Orienter};
 pub use types::*;
 
 use crate::Transport;

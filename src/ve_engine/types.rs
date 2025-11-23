@@ -2,8 +2,6 @@
 //!
 //! Data structures for VE→IPW calculations and transformations.
 
-#![cfg_attr(not(test), no_std)]
-
 /// VE Table - Volumetric Efficiency map
 ///
 /// Values represent how efficiently the engine fills cylinders with air.
@@ -25,11 +23,14 @@ impl VeTable {
     /// Should be replaced with properly tuned values.
     pub fn default_safe() -> Self {
         Self {
-            rpm_bins: [500, 1000, 1500, 2000, 2500, 3000, 3500, 4000,
-                      4500, 5000, 5500, 6000, 6500, 7000, 7500, 8000],
-            load_bins: [20, 30, 40, 50, 60, 70, 80, 90,
-                       100, 110, 120, 130, 140, 150, 160, 170],
-            values: [[80; 16]; 16],  // 80% VE everywhere
+            rpm_bins: [
+                500, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 4500, 5000, 5500, 6000, 6500, 7000,
+                7500, 8000,
+            ],
+            load_bins: [
+                20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 170,
+            ],
+            values: [[80; 16]; 16], // 80% VE everywhere
         }
     }
 
@@ -46,7 +47,7 @@ impl VeTable {
                 return i;
             }
         }
-        15  // Last bin
+        15 // Last bin
     }
 
     fn find_load_bin(&self, load: u16) -> usize {
@@ -55,7 +56,7 @@ impl VeTable {
                 return i;
             }
         }
-        15  // Last bin
+        15 // Last bin
     }
 }
 
@@ -79,22 +80,25 @@ pub struct AfrTable {
 impl AfrTable {
     /// Create typical AFR table for gasoline
     pub fn default_gasoline() -> Self {
-        let rpm_bins = [500, 1000, 1500, 2000, 2500, 3000, 3500, 4000,
-                       4500, 5000, 5500, 6000, 6500, 7000, 7500, 8000];
-        let load_bins = [20, 30, 40, 50, 60, 70, 80, 90,
-                        100, 110, 120, 130, 140, 150, 160, 170];
+        let rpm_bins = [
+            500, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 4500, 5000, 5500, 6000, 6500, 7000,
+            7500, 8000,
+        ];
+        let load_bins = [
+            20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 170,
+        ];
 
-        let mut values = [[147u16; 16]; 16];  // Default to stoich
+        let mut values = [[147u16; 16]; 16]; // Default to stoich
 
         // Set AFR based on load
         for (load_idx, &load) in load_bins.iter().enumerate() {
             for rpm_idx in 0..16 {
                 values[load_idx][rpm_idx] = if load >= 120 {
-                    125  // Rich for power (12.5:1)
+                    125 // Rich for power (12.5:1)
                 } else if load >= 60 {
-                    147  // Stoich (14.7:1)
+                    147 // Stoich (14.7:1)
                 } else {
-                    155  // Lean for economy (15.5:1)
+                    155 // Lean for economy (15.5:1)
                 };
             }
         }
@@ -139,28 +143,7 @@ pub struct InjectorConfig {
     pub dead_time_curve: [(u8, u16); 8],
 }
 
-impl InjectorConfig {
-    /// Generic injector configuration (440cc @ 3 bar, 4-cyl 2.0L)
-    pub fn default_generic() -> Self {
-        Self {
-            engine_displacement_cc: 2000,
-            num_cylinders: 4,
-            flow_rate_cc_min: 440,
-            reference_pressure_kpa: 300,
-            fuel_density_mg_cc: 750,
-            dead_time_curve: [
-                (90, 1500),   // 9V: 1.5ms
-                (100, 1300),  // 10V: 1.3ms
-                (110, 1150),  // 11V: 1.15ms
-                (120, 1000),  // 12V: 1.0ms
-                (130, 900),   // 13V: 0.9ms
-                (140, 800),   // 14V: 0.8ms
-                (150, 750),   // 15V: 0.75ms
-                (160, 700),   // 16V: 0.7ms
-            ],
-        }
-    }
-}
+// Intentionally no defaults for InjectorConfig to force explicit configuration
 
 /// Sensor data input for calculations
 #[derive(Debug, Clone, Copy)]
@@ -193,7 +176,7 @@ pub enum VeCommand {
     /// let cmd = VeCommand::EmergencyRich { percent: 20 };  // Add 20% fuel
     /// ```
     EmergencyRich {
-        percent: u8,  // 0-100% additional fuel
+        percent: u8, // 0-100% additional fuel
     },
 
     /// Emergency lean mode - reduce fuel percentage
@@ -201,7 +184,7 @@ pub enum VeCommand {
     /// Use when: Fuel pressure too high, need to conserve fuel
     /// Effect: Reduces fuel delivery
     EmergencyLean {
-        percent: u8,  // 0-100% fuel reduction
+        percent: u8, // 0-100% fuel reduction
     },
 
     /// Limp mode - run engine at minimal safe level
@@ -216,7 +199,7 @@ pub enum VeCommand {
     /// Effect: Adds fuel at low temperatures
     ColdStart {
         enrichment_percent: u8,
-        max_clt_celsius: i16,  // Apply only below this temperature
+        max_clt_celsius: i16, // Apply only below this temperature
     },
 
     /// Global fuel trim (fine tuning)
@@ -224,7 +207,7 @@ pub enum VeCommand {
     /// Use when: Tuner wants global adjustment without changing VE map
     /// Effect: Multiplies all fuel by this factor
     GlobalFuelTrim {
-        multiplier_percent: u8,  // 100 = 1.0x (no change)
+        multiplier_percent: u8, // 100 = 1.0x (no change)
     },
 
     /// Regional fuel trim (specific RPM/load range)
@@ -236,7 +219,7 @@ pub enum VeCommand {
         rpm_max: u16,
         load_min: u16,
         load_max: u16,
-        trim_percent: i8,  // -50 to +50%
+        trim_percent: i8, // -50 to +50%
     },
 
     /// Altitude compensation override
@@ -244,7 +227,7 @@ pub enum VeCommand {
     /// Use when: Rapid altitude changes, barometric sensor failure
     /// Effect: Adjusts fuel for altitude
     AltitudeCompensation {
-        altitude_m: i16,  // Meters above sea level
+        altitude_m: i16, // Meters above sea level
     },
 
     /// Fuel cut (complete shutdown)
@@ -289,7 +272,9 @@ impl VeCommand {
                 ((base_ve as u16 * 60) / 100) as u8
             }
 
-            VeCommand::ColdStart { enrichment_percent, .. } => {
+            VeCommand::ColdStart {
+                enrichment_percent, ..
+            } => {
                 // Increase VE for cold start
                 let increase = (base_ve as u16 * *enrichment_percent as u16) / 100;
                 base_ve.saturating_add(increase as u8)
@@ -300,7 +285,13 @@ impl VeCommand {
                 ((base_ve as u16 * *multiplier_percent as u16) / 100) as u8
             }
 
-            VeCommand::RegionalTrim { rpm_min, rpm_max, load_min, load_max, trim_percent } => {
+            VeCommand::RegionalTrim {
+                rpm_min,
+                rpm_max,
+                load_min,
+                load_max,
+                trim_percent,
+            } => {
                 // Check if in region
                 if rpm >= *rpm_min && rpm <= *rpm_max && load >= *load_min && load <= *load_max {
                     if *trim_percent >= 0 {
@@ -347,7 +338,7 @@ impl VeCommand {
 
             VeCommand::LimpMode => {
                 // Run slightly rich in limp mode (safer)
-                135  // 13.5:1 AFR
+                135 // 13.5:1 AFR
             }
 
             VeCommand::FuelCut => {
@@ -355,7 +346,7 @@ impl VeCommand {
                 u16::MAX
             }
 
-            _ => base_afr,  // Other commands don't affect AFR
+            _ => base_afr, // Other commands don't affect AFR
         }
     }
 }
@@ -396,13 +387,13 @@ mod tests {
         let table = AfrTable::default_gasoline();
 
         // Light load: lean
-        assert_eq!(table.values[0][5], 155);  // 15.5:1
+        assert_eq!(table.values[0][5], 155); // 15.5:1
 
         // Medium load: stoich
-        assert_eq!(table.values[5][5], 147);  // 14.7:1
+        assert_eq!(table.values[5][5], 147); // 14.7:1
 
         // High load: rich
-        assert_eq!(table.values[10][5], 125);  // 12.5:1
+        assert_eq!(table.values[10][5], 125); // 12.5:1
     }
 
     #[test]
@@ -412,7 +403,7 @@ mod tests {
         let transformed = cmd.transform_ve(base_ve, 3000, 100);
 
         // Should add 20% fuel
-        assert_eq!(transformed, 96);  // 80 + 16
+        assert_eq!(transformed, 96); // 80 + 16
     }
 
     #[test]
@@ -449,11 +440,11 @@ mod tests {
 
         // Inside range
         let transformed = cmd.transform_ve(base_ve, 3000, 100);
-        assert_eq!(transformed, 88);  // +10%
+        assert_eq!(transformed, 88); // +10%
 
         // Outside range
         let transformed = cmd.transform_ve(base_ve, 1000, 100);
-        assert_eq!(transformed, 80);  // No change
+        assert_eq!(transformed, 80); // No change
     }
 
     #[test]

@@ -29,9 +29,12 @@
 //! # Example Usage
 //!
 //! ```rust
-//! use ecu_core::ve_engine::{VeEngine, VeCommand, SensorData};
+//! use ecu_core::ve_engine::{VeEngine, VeCommand, SensorData, types::{InjectorConfig, VeTable, AfrTable}};
 //!
-//! let mut ve = VeEngine::new();
+//! let config = InjectorConfig { engine_displacement_cc: 2000, num_cylinders: 4, flow_rate_cc_min: 440, reference_pressure_kpa: 300, fuel_density_mg_cc: 750, dead_time_curve: [(90,1500),(100,1300),(110,1150),(120,1000),(130,900),(140,800),(150,750),(160,700)] };
+//! let ve_tbl = VeTable::default_safe();
+//! let afr_tbl = AfrTable::default_gasoline();
+//! let mut ve = VeEngine::new_with(config, ve_tbl, afr_tbl);
 //! let sensors = SensorData {
 //!     timestamp_us: 1000,
 //!     iat_celsius: 20,
@@ -50,17 +53,15 @@
 //! ve.clear_transformations();
 //! ```
 
-#![cfg_attr(not(test), no_std)]
-
-pub mod types;
-pub mod speed_density;
-pub mod interpolation;
 pub mod corrections;
 pub mod injector;
+pub mod interpolation;
+pub mod speed_density;
+pub mod types;
 
 pub use types::*;
 
-use crate::constants::fuel::{RPM_BINS, LOAD_BINS};
+use crate::constants::fuel::{LOAD_BINS, RPM_BINS};
 
 /// VE Engine - Main calculation engine with transformation support
 ///
@@ -83,13 +84,13 @@ pub struct VeEngine {
 }
 
 impl VeEngine {
-    /// Create new VE engine with safe defaults
-    pub fn new() -> Self {
+    /// Create a VE engine with explicit configuration (no defaults)
+    pub fn new_with(config: InjectorConfig, baseline: VeTable, afr: AfrTable) -> Self {
         Self {
-            baseline_ve: VeTable::default_safe(),
+            baseline_ve: baseline,
             transformations: TransformationStack::new(),
-            injector_config: InjectorConfig::default_generic(),
-            afr_table: AfrTable::default_gasoline(),
+            injector_config: config,
+            afr_table: afr,
             calculation_count: 0,
         }
     }
@@ -115,11 +116,8 @@ impl VeEngine {
         };
 
         // Calculate each cell
-        for load_idx in 0..16 {
-            for rpm_idx in 0..16 {
-                let rpm = RPM_BINS[rpm_idx];
-                let load = LOAD_BINS[load_idx];
-
+        for (load_idx, &load) in LOAD_BINS.iter().enumerate() {
+            for (rpm_idx, &rpm) in RPM_BINS.iter().enumerate() {
                 // Get base VE value
                 let base_ve = self.baseline_ve.values[load_idx][rpm_idx];
 
@@ -131,13 +129,8 @@ impl VeEngine {
                 let transformed_afr = self.transformations.apply_afr(target_afr, rpm, load);
 
                 // Calculate IPW for this cell
-                ipw_table.values[load_idx][rpm_idx] = self.calculate_ipw_cell(
-                    rpm,
-                    load,
-                    transformed_ve,
-                    transformed_afr,
-                    sensors,
-                );
+                ipw_table.values[load_idx][rpm_idx] =
+                    self.calculate_ipw_cell(rpm, load, transformed_ve, transformed_afr, sensors);
             }
         }
 
@@ -193,17 +186,12 @@ impl VeEngine {
         );
 
         // 4. Add injector dead time
-        let dead_time_us = injector::calculate_dead_time(
-            sensors.battery_voltage_mv,
-            &self.injector_config,
-        );
+        let dead_time_us =
+            injector::calculate_dead_time(sensors.battery_voltage_mv, &self.injector_config);
         let pw_with_deadtime = base_pw_us.saturating_add(dead_time_us as u32);
 
         // 5. Apply corrections
-        let pw_corrected = corrections::apply_all_corrections(
-            pw_with_deadtime,
-            sensors,
-        );
+        let pw_corrected = corrections::apply_all_corrections(pw_with_deadtime, sensors);
 
         // 6. Clamp to valid range
         pw_corrected.clamp(500, 20000) as u16
@@ -218,9 +206,9 @@ impl VeEngine {
     ///
     /// # Example
     /// ```rust
-    /// use ecu_core::ve_engine::{VeEngine, VeCommand};
-    ///
-    /// let mut ve = VeEngine::new();
+    /// use ecu_core::ve_engine::{VeEngine, VeCommand, types::{InjectorConfig, VeTable, AfrTable}};
+    /// let config = InjectorConfig { engine_displacement_cc: 2000, num_cylinders: 4, flow_rate_cc_min: 440, reference_pressure_kpa: 300, fuel_density_mg_cc: 750, dead_time_curve: [(90,1500),(100,1300),(110,1150),(120,1000),(130,900),(140,800),(150,750),(160,700)] };
+    /// let mut ve = VeEngine::new_with(config, VeTable::default_safe(), AfrTable::default_gasoline());
     /// ve.apply_command(VeCommand::EmergencyRich { percent: 20 });
     /// ve.apply_command(VeCommand::LimpMode);
     /// ```
@@ -278,7 +266,7 @@ impl VeEngine {
 ///
 /// Transformations are applied in FIFO order.
 struct TransformationStack {
-    stack: [Option<VeCommand>; 8],  // Max 8 simultaneous transformations
+    stack: [Option<VeCommand>; 8], // Max 8 simultaneous transformations
     count: usize,
 }
 
@@ -357,12 +345,7 @@ impl TransformationStack {
     fn list(&self) -> &[VeCommand] {
         // This is a workaround since we can't return &[Option<VeCommand>]
         // In real implementation, we'd filter out Nones
-        unsafe {
-            core::slice::from_raw_parts(
-                self.stack.as_ptr() as *const VeCommand,
-                self.count
-            )
-        }
+        unsafe { core::slice::from_raw_parts(self.stack.as_ptr() as *const VeCommand, self.count) }
     }
 
     /// Count active transformations
@@ -384,9 +367,30 @@ mod tests {
 
     #[test]
     fn test_ve_engine_creation() {
-        let ve = VeEngine::new();
+        let config = InjectorConfig {
+            engine_displacement_cc: 2000,
+            num_cylinders: 4,
+            flow_rate_cc_min: 440,
+            reference_pressure_kpa: 300,
+            fuel_density_mg_cc: 750,
+            dead_time_curve: [
+                (90, 1500),
+                (100, 1300),
+                (110, 1150),
+                (120, 1000),
+                (130, 900),
+                (140, 800),
+                (150, 750),
+                (160, 700),
+            ],
+        };
+        let ve = VeEngine::new_with(
+            config,
+            VeTable::default_safe(),
+            AfrTable::default_gasoline(),
+        );
         assert_eq!(ve.calculation_count, 0);
-        assert_eq!(ve.baseline_ve.values[0][0], 80);  // Default 80% VE
+        assert_eq!(ve.baseline_ve.values[0][0], 80); // Default 80% VE
     }
 
     #[test]
@@ -400,7 +404,7 @@ mod tests {
         // Apply to VE value
         let base_ve = 80;
         let transformed = stack.apply_ve(base_ve, 3000, 100);
-        assert!(transformed > base_ve);  // Should be richer
+        assert!(transformed > base_ve); // Should be richer
 
         // Clear
         stack.clear();
@@ -417,12 +421,33 @@ mod tests {
 
         // Add another emergency rich 30% (should replace)
         stack.push(VeCommand::EmergencyRich { percent: 30 });
-        assert_eq!(stack.count(), 1);  // Still only 1
+        assert_eq!(stack.count(), 1); // Still only 1
     }
 
     #[test]
     fn test_ipw_calculation_reasonable() {
-        let ve = VeEngine::new();
+        let config = InjectorConfig {
+            engine_displacement_cc: 2000,
+            num_cylinders: 4,
+            flow_rate_cc_min: 440,
+            reference_pressure_kpa: 300,
+            fuel_density_mg_cc: 750,
+            dead_time_curve: [
+                (90, 1500),
+                (100, 1300),
+                (110, 1150),
+                (120, 1000),
+                (130, 900),
+                (140, 800),
+                (150, 750),
+                (160, 700),
+            ],
+        };
+        let ve = VeEngine::new_with(
+            config,
+            VeTable::default_safe(),
+            AfrTable::default_gasoline(),
+        );
         let sensors = SensorData {
             timestamp_us: 1000,
             iat_celsius: 20,
@@ -444,7 +469,28 @@ mod tests {
 
     #[test]
     fn test_emergency_rich_increases_fuel() {
-        let mut ve = VeEngine::new();
+        let config = InjectorConfig {
+            engine_displacement_cc: 2000,
+            num_cylinders: 4,
+            flow_rate_cc_min: 440,
+            reference_pressure_kpa: 300,
+            fuel_density_mg_cc: 750,
+            dead_time_curve: [
+                (90, 1500),
+                (100, 1300),
+                (110, 1150),
+                (120, 1000),
+                (130, 900),
+                (140, 800),
+                (150, 750),
+                (160, 700),
+            ],
+        };
+        let mut ve = VeEngine::new_with(
+            config,
+            VeTable::default_safe(),
+            AfrTable::default_gasoline(),
+        );
         let sensors = SensorData {
             timestamp_us: 1000,
             iat_celsius: 20,
@@ -454,20 +500,44 @@ mod tests {
 
         // Normal calculation - get table and check a cell
         let normal_table = ve.calculate_ipw_table(&sensors);
-        let normal_ipw = normal_table.values[6][5];  // Arbitrary cell
+        let normal_ipw = normal_table.values[6][5]; // Arbitrary cell
 
         // Apply emergency rich
         ve.apply_command(VeCommand::EmergencyRich { percent: 20 });
         let rich_table = ve.calculate_ipw_table(&sensors);
-        let rich_ipw = rich_table.values[6][5];  // Same cell
+        let rich_ipw = rich_table.values[6][5]; // Same cell
 
         // Rich should give more fuel
-        assert!(rich_ipw > normal_ipw, "rich: {}, normal: {}", rich_ipw, normal_ipw);
+        assert!(
+            rich_ipw > normal_ipw,
+            "rich: {rich_ipw}, normal: {normal_ipw}"
+        );
     }
 
     #[test]
     fn test_clear_transformations() {
-        let mut ve = VeEngine::new();
+        let config = InjectorConfig {
+            engine_displacement_cc: 2000,
+            num_cylinders: 4,
+            flow_rate_cc_min: 440,
+            reference_pressure_kpa: 300,
+            fuel_density_mg_cc: 750,
+            dead_time_curve: [
+                (90, 1500),
+                (100, 1300),
+                (110, 1150),
+                (120, 1000),
+                (130, 900),
+                (140, 800),
+                (150, 750),
+                (160, 700),
+            ],
+        };
+        let mut ve = VeEngine::new_with(
+            config,
+            VeTable::default_safe(),
+            AfrTable::default_gasoline(),
+        );
         let sensors = SensorData {
             timestamp_us: 1000,
             iat_celsius: 20,
@@ -482,12 +552,18 @@ mod tests {
         ve.apply_command(VeCommand::EmergencyRich { percent: 20 });
         let transformed_table = ve.calculate_ipw_table(&sensors);
         let transformed_ipw = transformed_table.values[6][5];
-        assert_ne!(normal_ipw, transformed_ipw, "normal: {}, transformed: {}", normal_ipw, transformed_ipw);
+        assert_ne!(
+            normal_ipw, transformed_ipw,
+            "normal: {normal_ipw}, transformed: {transformed_ipw}"
+        );
 
         // Clear and verify back to normal
         ve.clear_transformations();
         let cleared_table = ve.calculate_ipw_table(&sensors);
         let cleared_ipw = cleared_table.values[6][5];
-        assert_eq!(normal_ipw, cleared_ipw, "normal: {}, cleared: {}", normal_ipw, cleared_ipw);
+        assert_eq!(
+            normal_ipw, cleared_ipw,
+            "normal: {normal_ipw}, cleared: {cleared_ipw}"
+        );
     }
 }

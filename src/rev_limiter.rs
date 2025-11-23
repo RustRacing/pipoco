@@ -83,14 +83,14 @@ impl RevLimiterConfig {
         max_rpm: 8000,
         soft_limit_start_rpm: 7800,
         strategy: LimiterStrategy::HardCut,
-        cut_cylinders: 4,  // Cut all cylinders (full cut)
+        cut_cylinders: 4, // Cut all cylinders (full cut)
         retard_amount: 0,
         hysteresis_rpm: 200,
     };
 
     /// Launch control configuration (smooth power limiting)
     pub const LAUNCH: Self = Self {
-        max_rpm: 4000,  // Launch RPM limit
+        max_rpm: 4000, // Launch RPM limit
         soft_limit_start_rpm: 3900,
         strategy: LimiterStrategy::Combined,
         cut_cylinders: 1,
@@ -132,6 +132,12 @@ impl RevLimiterState {
         self.fuel_cut_percent = 0;
         self.ignition_retard = 0;
         self.cut_counter = 0;
+    }
+}
+
+impl Default for RevLimiterState {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -235,13 +241,14 @@ fn apply_combined(rpm: u16, config: &RevLimiterConfig, state: &mut RevLimiterSta
     } else if rpm >= config.max_rpm {
         // Above max - full retard + partial fuel cut
         state.ignition_retard = config.retard_amount;
-        state.fuel_cut_percent = 50;  // 50% fuel cut + retard
+        state.fuel_cut_percent = 50; // 50% fuel cut + retard
     } else {
         // Between soft start and max - gradual retard
         let rpm_range = config.max_rpm - config.soft_limit_start_rpm;
         let rpm_above_start = rpm.saturating_sub(config.soft_limit_start_rpm);
         let retard_percent = ((rpm_above_start as u32 * 100) / rpm_range as u32) as u8;
-        state.ignition_retard = ((config.retard_amount as i32 * retard_percent as i32) / 100) as i16;
+        state.ignition_retard =
+            ((config.retard_amount as i32 * retard_percent as i32) / 100) as i16;
         state.fuel_cut_percent = 0;
     }
 }
@@ -352,7 +359,7 @@ mod tests {
     #[test]
     fn test_hysteresis_prevents_oscillation() {
         let mut config = RevLimiterConfig::DEFAULT;
-        config.strategy = LimiterStrategy::HardCut;  // Hard cut activates at max_rpm
+        config.strategy = LimiterStrategy::HardCut; // Hard cut activates at max_rpm
         config.max_rpm = 7000;
         config.hysteresis_rpm = 200;
 
@@ -456,7 +463,7 @@ mod tests {
         update_limiter(8000, &config, &mut state);
 
         assert!(state.active);
-        assert_eq!(state.fuel_cut_percent, 100);  // Full hard cut
+        assert_eq!(state.fuel_cut_percent, 100); // Full hard cut
     }
 
     #[test]

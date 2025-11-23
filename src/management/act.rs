@@ -3,7 +3,7 @@
 //! Sends control commands to execution modules via transport layer.
 
 use super::decide::ControlDecisions;
-use crate::{Transport, TransportError, Message};
+use crate::{Message, Transport};
 
 /// Command dispatcher trait
 pub trait CommandDispatcher {
@@ -31,7 +31,7 @@ impl<T: Transport> Actor<T> {
         let fuel_msg = Message::IpwTable {
             version: 1,
             data: decisions.fuel.ipw_table,
-            crc32: 0,  // Would calculate CRC
+            crc32: 0, // Would calculate CRC
         };
 
         self.transport
@@ -40,11 +40,11 @@ impl<T: Transport> Actor<T> {
 
         // Send ignition table (convert i16 to u16 with offset)
         let mut timing_table_u16 = [[0u16; 16]; 16];
-        for i in 0..16 {
-            for j in 0..16 {
+        for (i, row) in timing_table_u16.iter_mut().enumerate() {
+            for (j, cell) in row.iter_mut().enumerate() {
                 // Convert i16 timing (can be negative) to u16 with offset
                 // Add 180 to handle negative timing values (retard)
-                timing_table_u16[i][j] = (decisions.ignition.timing_table[i][j] + 180) as u16;
+                *cell = (decisions.ignition.timing_table[i][j] + 180) as u16;
             }
         }
 
@@ -80,6 +80,7 @@ pub enum ActError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::TransportError;
 
     struct MockTransport;
     impl Transport for MockTransport {

@@ -1,0 +1,62 @@
+[package]
+name = "ecu-rp2350b"
+version = "0.1.0"
+edition = "2021"
+autobins = false
+
+[dependencies]
+# Core ECU library
+ecu-core = { path = "..", default-features = false }
+
+# RP2350B HAL (using rp235x-hal for RP2350)
+rp235x-hal = { version = "0.2", features = ["critical-section-impl"] }
+
+# Cortex-M runtime
+cortex-m = "0.7"
+cortex-m-rt = "0.7"
+
+# Panic handler for embedded
+panic-halt = "0.2"
+
+# Embedded HAL traits
+embedded-hal = "1.0"
+
+[features]
+ve-demo = []
+capture-gpio = []
+capture-pio = []
+
+[profile.dev]
+opt-level = 1
+panic = "abort"
+
+[profile.release]
+opt-level = "z"      # Optimize for size
+lto = true           # Link-time optimization
+codegen-units = 1    # Better optimization
+debug = true         # Keep debug info for probe
+panic = "abort"
+
+[build-dependencies]
+
+[[bin]]
+name = "ecu-rp2350b-min"
+path = "src/bin/minimal_ecu.rs"
+
+[[bin]]
+name = "ecu-rp2350b-demo"
+path = "src/main.rs"
+required-features = ["ve-demo"]
+
+[[bin]]
+name = "rp2350-pio-capture-example"
+path = "src/bin/pio_capture_example.rs"
+required-features = ["capture-pio"]
+
+[[bin]]
+name = "ts-gauges"
+path = "src/bin/ts_gauges.rs"
+
+[[bin]]
+name = "rp2350b-datalogger-sensors-can"
+path = "src/bin/datalogger_sensors_can.rs"

@@ -2,8 +2,8 @@
 //!
 //! Configurable data logging with memory-aware buffering.
 
-use super::orient::EngineContext;
 use super::decide::ControlDecisions;
+use super::orient::EngineContext;
 
 /// History channel selection
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -22,7 +22,7 @@ pub enum HistoryChannel {
 /// History configuration
 pub struct HistoryConfig {
     pub enabled: bool,
-    pub sample_rate_divider: u16,  // Sample every Nth cycle
+    pub sample_rate_divider: u16, // Sample every Nth cycle
 }
 
 impl HistoryConfig {
@@ -36,7 +36,7 @@ impl HistoryConfig {
     pub fn tier_2() -> Self {
         Self {
             enabled: true,
-            sample_rate_divider: 10,  // Sample every 10th cycle
+            sample_rate_divider: 10, // Sample every 10th cycle
         }
     }
 }
@@ -116,13 +116,19 @@ impl<const N: usize> History<N> {
     }
 }
 
+impl<const N: usize> Default for History<N> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use super::super::orient::{EngineContext, OperatingMode, LoadEstimate};
-    use super::super::types::LoadMethod;
     use super::super::decide::{ControlDecisions, FuelCommand, IgnitionCommand};
-    use crate::{Corrections, ignition::IgnitionCorrections};
+    use super::super::orient::{EngineContext, LoadEstimate, OperatingMode};
+    use super::super::types::LoadMethod;
+    use super::*;
+    use crate::{ignition::IgnitionCorrections, Corrections};
 
     #[test]
     fn test_history_creation() {
@@ -164,7 +170,8 @@ mod tests {
         };
 
         // Record samples (accounting for divider)
-        for _ in 0..30 {  // 30 cycles = 3 samples (divider = 10)
+        for _ in 0..30 {
+            // 30 cycles = 3 samples (divider = 10)
             history.record(&ctx, &decisions);
         }
 

@@ -35,6 +35,19 @@ pub trait TimeSource {
     /// }
     /// ```
     fn micros(&self) -> u32;
+
+    /// Native tick counter (default: microseconds)
+    ///
+    /// Implementors may override to return a high-resolution hardware timer.
+    /// Defaults to `micros()` to avoid breaking existing targets.
+    fn ticks(&self) -> u32 {
+        self.micros()
+    }
+
+    /// Native tick frequency in Hz (default: 1_000_000 for micros)
+    fn freq_hz(&self) -> u32 {
+        1_000_000
+    }
 }
 
 /// Digital output pin trait
@@ -51,4 +64,42 @@ pub trait OutputPin {
     ///
     /// The actual voltage level is typically 0V (ground).
     fn set_low(&mut self);
+}
+
+/// Optional timestamp source for captured input edges
+///
+/// Implemented by targets that use hardware input-capture (with or without DMA)
+/// to enqueue trigger edge timestamps for low-jitter processing.
+pub trait EdgeTimestampSource {
+    /// Pop the next captured timestamp in microseconds, if available
+    fn try_pop(&mut self) -> Option<u32>;
+}
+
+/// Independent watchdog control
+pub trait Watchdog {
+    /// Start/enable the watchdog with a timeout in milliseconds
+    fn start(&mut self, timeout_ms: u32);
+
+    /// Pet/kick the watchdog to prevent a reset
+    fn pet(&mut self);
+}
+
+/// System reset reason and control
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum ResetReason {
+    PowerOn,
+    PinReset,
+    Software,
+    IndependentWatchdog,
+    WindowWatchdog,
+    BrownOut,
+    LowPower,
+    Unknown,
+}
+
+pub trait ResetController {
+    /// Read the last reset reason from hardware flags
+    fn reason(&self) -> ResetReason;
+    /// Clear latched reset flags
+    fn clear(&mut self);
 }

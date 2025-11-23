@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "stm32f4"]
+members = [".", "stm32f4", "rp2350b", "rp2040-pico", "ecu-target-common"]
 resolver = "2"
 
 [package]
@@ -21,7 +21,11 @@ bbqueue = { version = "0.5", optional = true }
 
 [features]
 default = []
+interp-bilinear = []
 transport-bbqueue = ["bbqueue"]
+transport-can = []
+transport-can-fd = []
+sched-simple = []
 
 # For testing only - enables test helpers
 test-utils = []
@@ -29,6 +33,7 @@ test-utils = []
 [dev-dependencies]
 # Enable test-utils feature when running tests
 # This allows integration tests to use create_test_pair()
+ecu-target-common = { path = "./ecu-target-common" }
 
 [[test]]
 name = "transport_integration"

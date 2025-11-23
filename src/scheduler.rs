@@ -3,8 +3,8 @@
 //! Manages a fixed-size queue of timed events for controlling injector and ignition outputs.
 //! Uses integer arithmetic and wrapping time comparisons to handle timer overflow.
 
-use crate::hal::OutputPin;
 use crate::constants::scheduler::*;
+use crate::hal::OutputPin;
 
 /// Type-safe channel identifier for outputs
 ///
@@ -23,6 +23,12 @@ impl Channel {
         Self(value)
     }
 
+    /// Create a channel from a raw index (0..MAX_CHANNELS)
+    /// Caller must ensure `index < MAX_CHANNELS`.
+    pub const fn from_index(index: u8) -> Self {
+        Self(index)
+    }
+
     /// Get the raw channel number
     pub const fn as_u8(&self) -> u8 {
         self.0
@@ -39,7 +45,7 @@ impl Channel {
 pub struct Event {
     time: u32,
     channel: Channel,
-    state: bool,  // true = high, false = low
+    state: bool, // true = high, false = low
     active: bool,
 }
 
@@ -133,6 +139,12 @@ impl Scheduler {
         false
     }
 
+    /// Schedule a new event using native tick timebase.
+    /// Identical semantics to `schedule`, but the time unit is target-specific ticks.
+    pub fn schedule_ticks(&mut self, ticks: u32, channel: Channel, state: bool) -> bool {
+        self.schedule(ticks, channel, state)
+    }
+
     /// Check for due events and execute them
     ///
     /// Uses wrapping arithmetic to correctly handle timer overflow.
@@ -171,6 +183,11 @@ impl Scheduler {
         }
     }
 
+    /// Tick-based variant of `check_and_execute` using the native timer domain.
+    pub fn check_and_execute_ticks(&mut self, now_ticks: u32, outputs: &mut [&mut dyn OutputPin]) {
+        self.check_and_execute(now_ticks, outputs)
+    }
+
     /// Clear all events
     ///
     /// Useful for emergency shutdown or reset.
@@ -196,5 +213,33 @@ impl Scheduler {
     /// Direct access to events array. Caller must ensure proper synchronization.
     pub fn events_mut(&mut self) -> &mut [Event; MAX_EVENTS] {
         &mut self.events
+    }
+
+    /// Deactivate all events for `channel` scheduled at or after `cutoff` (tick/micro domain consistent with schedule calls).
+    pub fn deactivate_channel_after(&mut self, cutoff: u32, channel: Channel) {
+        for e in &mut self.events {
+            if e.active && e.channel == channel {
+                // event is in the future relative to cutoff if (event.time - cutoff) < MAX/2
+                let is_future = e.time.wrapping_sub(cutoff) < (u32::MAX / 2);
+                if is_future {
+                    e.deactivate();
+                }
+            }
+        }
+    }
+
+    /// Deactivate all events for the given channel, regardless of time.
+    pub fn deactivate_channel_all(&mut self, channel: Channel) {
+        for e in &mut self.events {
+            if e.active && e.channel == channel {
+                e.deactivate();
+            }
+        }
+    }
+}
+
+impl Default for Scheduler {
+    fn default() -> Self {
+        Self::new()
     }
 }

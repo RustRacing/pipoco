@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! ECU Simulation Framework
 //!
 //! This module provides a complete software simulation environment for testing
@@ -50,22 +51,22 @@
 //! assert!(result.started_successfully);
 //! ```
 
-use ecu_core::{TriggerDecoder, EcuState};
 use ecu_core::hal::TimeSource;
+use ecu_core::{EcuState, TriggerDecoder};
 
 // Re-export submodules
 pub mod engine;
-pub mod trigger;
-pub mod sensors;
-pub mod scenarios;
-pub mod time;
 pub mod outputs;
+pub mod scenarios;
+pub mod sensors;
+pub mod time;
+pub mod trigger;
 
 pub use engine::EngineSimulator;
-pub use trigger::TriggerGenerator;
+pub use outputs::OutputCapture;
 pub use sensors::SensorSimulator;
 pub use time::SimulatedTime;
-pub use outputs::OutputCapture;
+pub use trigger::TriggerGenerator;
 
 /// Configuration for simulated engine
 #[derive(Debug, Clone)]
@@ -91,7 +92,7 @@ impl Default for EngineConfig {
             displacement_cc: 2000,
             max_rpm: 6500,
             idle_rpm: 850,
-            inertia_kg_m2: 0.15,  // Typical 4-cylinder
+            inertia_kg_m2: 0.15, // Typical 4-cylinder
             trigger_pattern: TriggerPattern::SixtyMinusTwo,
         }
     }
@@ -135,7 +136,7 @@ impl Default for EngineState {
     fn default() -> Self {
         Self {
             rpm: 0,
-            load_kpa: 100,  // Atmospheric
+            load_kpa: 100, // Atmospheric
             tps_percent: 0,
             coolant_temp_c: 20,
             intake_temp_c: 20,
@@ -299,7 +300,7 @@ impl Simulator {
             }
 
             // Update sensors based on engine state
-            self.sensors.update(&self.engine.state());
+            self.sensors.update(self.engine.state());
 
             // Track statistics
             let current_rpm = self.engine.state().rpm;

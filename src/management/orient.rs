@@ -57,7 +57,7 @@ pub struct EngineContext {
     /// Battery voltage (millivolts)
     pub battery_voltage_mv: u16,
     /// AFR/Lambda (if available)
-    pub afr: Option<u16>,  // AFR * 10 (e.g., 147 = 14.7:1)
+    pub afr: Option<u16>, // AFR * 10 (e.g., 147 = 14.7:1)
     /// Context confidence (0-255, 255 = perfect)
     pub confidence: u8,
 }
@@ -163,7 +163,7 @@ impl Orienter {
     /// Extract RPM (custom sensor or injected)
     fn extract_rpm(&self, observations: &ObservationSet) -> Option<u16> {
         observations
-            .get(SensorType::Custom(0))  // Assume RPM is Custom(0)
+            .get(SensorType::Custom(0)) // Assume RPM is Custom(0)
             .and_then(|o| o.value.as_u16())
     }
 
@@ -287,25 +287,27 @@ impl Orienter {
         let mut confidence = 255u16;
 
         // Reduce confidence for each fault or missing critical sensor
-        let critical_sensors = [
-            SensorType::MAP,
-            SensorType::TPS,
-            SensorType::CLT,
-        ];
+        let critical_sensors = [SensorType::MAP, SensorType::TPS, SensorType::CLT];
 
         for sensor in &critical_sensors {
             if let Some(obs) = observations.get(*sensor) {
                 match obs.quality {
-                    Quality::Good => {}  // No reduction
+                    Quality::Good => {} // No reduction
                     Quality::Degraded => confidence -= 50,
                     Quality::Fault => confidence -= 100,
                 }
             } else {
-                confidence -= 80;  // Missing sensor
+                confidence -= 80; // Missing sensor
             }
         }
 
         confidence.min(255) as u8
+    }
+}
+
+impl Default for Orienter {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -320,9 +322,9 @@ pub enum OrientError {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::observe::{Observation, ObservationSource};
     use super::super::types::ObservationValue;
+    use super::*;
 
     #[test]
     fn test_orienter_creation() {

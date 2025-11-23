@@ -1,0 +1,56 @@
+[package]
+name = "ecu-rp2040-pico"
+version = "0.1.0"
+edition = "2021"
+autobins = false
+
+[dependencies]
+ecu-core = { path = "..", default-features = false }
+ecu-target-common = { path = "../ecu-target-common" }
+rp2040-hal = { version = "0.9", features = ["rt"] }
+embedded-hal = "1.0"
+usb-device = "0.2"
+usbd-serial = "0.1"
+cortex-m = "0.7"
+cortex-m-rt = "0.7"
+panic-halt = "0.2"
+pio-proc = "0.2"
+pio = "0.2"
+embedded-storage = "0.3"
+# optional backends; we keep storage abstract and feature-gated
+sequential-storage = { version = "0.3", optional = true }
+
+[profile.dev]
+opt-level = 1
+panic = "abort"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+debug = true
+panic = "abort"
+
+[[bin]]
+name = "ts-gauges"
+path = "src/bin/ts_gauges.rs"
+
+[[bin]]
+name = "ts-ecu"
+path = "src/bin/ts_ecu.rs"
+
+[[bin]]
+name = "pio_capture_example"
+path = "src/bin/pio_capture_example.rs"
+
+[features]
+default = []
+# Enable flash-backed KV persistence (uses RP2040 ROM flash routines)
+flash-kv = ["sequential-storage"]
+# Enable PIO-based trigger capture in ts-ecu
+capture-pio = []
+# Optional cam input via GPIO IRQ
+capture-cam = []
+# ADC29 usage selection
+# If enabled, ADC29 is VSYS/3 and we compute VBATT from it. If disabled, ADC29 is IAT thermistor.
+vbatt-vsys = []

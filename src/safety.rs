@@ -54,6 +54,12 @@ impl FloodClearState {
     }
 }
 
+impl Default for FloodClearState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Sync loss recovery tracking
 ///
 /// Tracks sync loss events to distinguish ESD glitches from real failures.
@@ -105,7 +111,7 @@ impl SyncLossTracker {
             // Start new window
             self.window_start_us = current_time_us;
             self.loss_count = 1;
-            return false;  // First loss in window, attempt recovery
+            return false; // First loss in window, attempt recovery
         }
 
         // We're within the same window
@@ -154,6 +160,12 @@ impl SyncLossTracker {
         self.shutdown = false;
         self.loss_count = 0;
         self.window_start_us = 0;
+    }
+}
+
+impl Default for SyncLossTracker {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -215,9 +227,79 @@ pub fn should_allow_injection(flood_clear_active: bool, sync_shutdown: bool) -> 
     true
 }
 
+/// Cranking gate with simple hysteresis to avoid flapping around the threshold.
+#[derive(Debug, Clone, Copy)]
+pub struct CrankingGate {
+    cranking: bool,
+}
+
+impl CrankingGate {
+    pub const fn new() -> Self { Self { cranking: false } }
+    /// Update internal state based on current RPM and return `true` if cranking.
+    pub fn update(&mut self, rpm: u16) -> bool {
+        if self.cranking {
+            // stay cranking until safely above exit threshold
+            if rpm >= CRANKING_EXIT_RPM { self.cranking = false; }
+        } else if rpm < CRANKING_RPM_THRESHOLD { self.cranking = true; }
+        self.cranking
+    }
+    pub fn is_cranking(&self) -> bool { self.cranking }
+}
+
+impl Default for CrankingGate {
+    fn default() -> Self { Self::new() }
+}
+
+/// Output latch and helpers for fail-safe states
+#[derive(Debug, Clone, Copy)]
+pub struct OutputLatch {
+    latched_off: bool,
+}
+
+impl OutputLatch {
+    pub const fn new() -> Self {
+        Self { latched_off: false }
+    }
+    pub fn latch_off(&mut self) {
+        self.latched_off = true;
+    }
+    pub fn clear(&mut self) {
+        self.latched_off = false;
+    }
+    pub fn is_latched(&self) -> bool {
+        self.latched_off
+    }
+}
+
+impl Default for OutputLatch {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Force all outputs to safe state (logic-low)
+pub fn apply_safe_state(outputs: &mut [&mut dyn crate::hal::OutputPin]) {
+    for o in outputs.iter_mut() {
+        o.set_low();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cranking_gate_hysteresis() {
+        let mut cg = CrankingGate::new();
+        // Below threshold -> cranking
+        assert!(cg.update(300));
+        // Slightly above threshold but below exit -> still cranking
+        assert!(cg.update(CRANKING_RPM_THRESHOLD + 50));
+        // Above exit -> not cranking
+        assert!(!cg.update(CRANKING_EXIT_RPM));
+        // Drop below threshold -> cranking
+        assert!(cg.update(CRANKING_RPM_THRESHOLD - 1));
+    }
 
     #[test]
     fn test_flood_clear_inactive_during_normal_running() {
@@ -319,7 +401,7 @@ mod tests {
         // Should start new window
         let should_shutdown = tracker.record_sync_loss(6_000_000 + 1000);
         assert!(!should_shutdown);
-        assert_eq!(tracker.loss_count, 1);  // Reset to 1 in new window
+        assert_eq!(tracker.loss_count, 1); // Reset to 1 in new window
     }
 
     #[test]
@@ -352,8 +434,8 @@ mod tests {
         // Simulate rapid repeated losses (real failure pattern)
         // All within 1 second
         tracker.record_sync_loss(0);
-        tracker.record_sync_loss(100_000);   // 0.1s later
-        tracker.record_sync_loss(200_000);   // 0.2s later
+        tracker.record_sync_loss(100_000); // 0.1s later
+        tracker.record_sync_loss(200_000); // 0.2s later
 
         // Should shut down - too many losses too quickly
         assert!(tracker.is_shutdown());

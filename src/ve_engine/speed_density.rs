@@ -21,8 +21,6 @@
 //! We use integer arithmetic with careful scaling to avoid floating point.
 //! The result is air mass in milligrams (mg).
 
-#![cfg_attr(not(test), no_std)]
-
 /// Calculate air mass per cylinder per cycle
 ///
 /// Uses the speed-density equation with integer-only arithmetic.
@@ -75,9 +73,7 @@ pub fn calculate_air_mass(
     // Calculate air mass (mg)
     // mass = volume × density × VE
     // density_factor is scaled by 100 (120 = 1.2 mg/cc), VE is %, so divide by 10000
-    let air_mass = (effective_displacement * air_density_factor * ve_percent as u32) / 10000;
-
-    air_mass
+    (effective_displacement * air_density_factor * ve_percent as u32) / 10000
 }
 
 /// Calculate air density factor relative to standard conditions
@@ -102,9 +98,9 @@ pub fn calculate_air_mass(
 /// - T = actual temperature (Kelvin)
 /// - T₀ = standard temperature (293K)
 fn calculate_air_density_factor(map_kpa: u16, iat_celsius: i16) -> u32 {
-    const STANDARD_PRESSURE_KPA: u32 = 101;  // Simplified
-    const STANDARD_TEMP_K: u32 = 293;  // 20°C
-    const AIR_DENSITY_MG_CC: u32 = 120;  // 1.2 mg/cc scaled by 100
+    const STANDARD_PRESSURE_KPA: u32 = 101; // Simplified
+    const STANDARD_TEMP_K: u32 = 293; // 20°C
+    const AIR_DENSITY_MG_CC: u32 = 120; // 1.2 mg/cc scaled by 100
 
     // Convert IAT to Kelvin
     let iat_kelvin = (iat_celsius + 273) as u32;
@@ -117,9 +113,7 @@ fn calculate_air_density_factor(map_kpa: u16, iat_celsius: i16) -> u32 {
 
     // Density factor = pressure_ratio × temp_ratio × base_density
     // Both ratios are scaled by 100, so divide by 10000
-    let density_factor = (pressure_ratio * temp_ratio * AIR_DENSITY_MG_CC) / 10000;
-
-    density_factor
+    (pressure_ratio * temp_ratio * AIR_DENSITY_MG_CC) / 10000
 }
 
 /// Calculate air mass flow rate (mg/s)
@@ -149,11 +143,7 @@ fn calculate_air_density_factor(map_kpa: u16, iat_celsius: i16) -> u32 {
 /// // 500mg × 100 = 50,000 mg/s = 50 g/s
 /// assert!(maf_mg_s > 45000 && maf_mg_s < 55000);
 /// ```
-pub fn calculate_maf(
-    air_mass_per_cycle_mg: u32,
-    rpm: u16,
-    num_cylinders: u8,
-) -> u32 {
+pub fn calculate_maf(air_mass_per_cycle_mg: u32, rpm: u16, num_cylinders: u8) -> u32 {
     // For 4-stroke: power strokes per second = (RPM / 60) / 2
     // Total firing events per second = power_strokes × num_cylinders
     let firing_events_per_minute = (rpm as u32 * num_cylinders as u32) / 2;
@@ -173,8 +163,8 @@ mod tests {
         let air_mass = calculate_air_mass(2000, 4, 100, 85, 20);
 
         // Expected: ~255mg (250cc effective × 1.2 mg/cc × 0.85)
-        assert!(air_mass > 240, "air_mass = {}", air_mass);
-        assert!(air_mass < 270, "air_mass = {}", air_mass);
+        assert!(air_mass > 240, "air_mass = {air_mass}");
+        assert!(air_mass < 270, "air_mass = {air_mass}");
     }
 
     #[test]
@@ -183,8 +173,8 @@ mod tests {
         let air_mass = calculate_air_mass(2000, 4, 150, 85, 20);
 
         // Should be ~1.5x more air (~380mg)
-        assert!(air_mass > 360, "air_mass = {}", air_mass);
-        assert!(air_mass < 400, "air_mass = {}", air_mass);
+        assert!(air_mass > 360, "air_mass = {air_mass}");
+        assert!(air_mass < 400, "air_mass = {air_mass}");
     }
 
     #[test]
@@ -194,7 +184,7 @@ mod tests {
 
         // Should be slightly more than at 20°C
         let warm_air = calculate_air_mass(2000, 4, 100, 85, 20);
-        assert!(air_mass > warm_air, "cold: {}, warm: {}", air_mass, warm_air);
+        assert!(air_mass > warm_air, "cold: {air_mass}, warm: {warm_air}");
     }
 
     #[test]
@@ -204,7 +194,7 @@ mod tests {
 
         // Should be less than at 20°C
         let warm_air = calculate_air_mass(2000, 4, 100, 85, 20);
-        assert!(air_mass < warm_air, "hot: {}, warm: {}", air_mass, warm_air);
+        assert!(air_mass < warm_air, "hot: {air_mass}, warm: {warm_air}");
     }
 
     #[test]
@@ -214,7 +204,7 @@ mod tests {
 
         // 100% VE should give 25% more air than 80% VE
         let ratio = (ve_100 as f32) / (ve_80 as f32);
-        assert!(ratio > 1.2 && ratio < 1.3, "ratio = {}", ratio);
+        assert!(ratio > 1.2 && ratio < 1.3, "ratio = {ratio}");
     }
 
     #[test]
@@ -222,7 +212,7 @@ mod tests {
         let factor = calculate_air_density_factor(100, 20);
 
         // At standard conditions, factor should be ~120 (1.2 mg/cc)
-        assert!(factor > 110 && factor < 130, "factor = {}", factor);
+        assert!(factor > 110 && factor < 130, "factor = {factor}");
     }
 
     #[test]
@@ -233,7 +223,7 @@ mod tests {
         // 3000 RPM / 2 (4-stroke) = 1500 power strokes/min = 25 Hz
         // 4 cylinders × 25 Hz = 100 events/sec
         // 500mg × 100 = 50,000 mg/s
-        assert!(maf > 45000 && maf < 55000, "maf = {}", maf);
+        assert!(maf > 45000 && maf < 55000, "maf = {maf}");
     }
 
     #[test]
@@ -243,7 +233,7 @@ mod tests {
 
         // Double RPM should double MAF
         let ratio = (maf_6000 as f32) / (maf_3000 as f32);
-        assert!(ratio > 1.95 && ratio < 2.05, "ratio = {}", ratio);
+        assert!(ratio > 1.95 && ratio < 2.05, "ratio = {ratio}");
     }
 
     #[test]
@@ -252,7 +242,7 @@ mod tests {
         let air_mass = calculate_air_mass(600, 2, 100, 80, 20);
 
         // 300cc per cylinder, 150cc effective, 150 * 1.2 * 0.8 = 144mg
-        assert!(air_mass > 135 && air_mass < 155, "air_mass = {}", air_mass);
+        assert!(air_mass > 135 && air_mass < 155, "air_mass = {air_mass}");
     }
 
     #[test]
@@ -261,6 +251,6 @@ mod tests {
         let air_mass = calculate_air_mass(6200, 8, 100, 90, 20);
 
         // 775cc per cylinder, 387.5cc effective, 387.5 * 1.2 * 0.9 = 418mg
-        assert!(air_mass > 405 && air_mass < 430, "air_mass = {}", air_mass);
+        assert!(air_mass > 405 && air_mass < 430, "air_mass = {air_mass}");
     }
 }

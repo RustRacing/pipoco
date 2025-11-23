@@ -66,6 +66,12 @@ pub mod bbq;
 #[cfg(feature = "transport-bbqueue")]
 pub use bbq::BbqTransport;
 
+// CAN transport (optional)
+#[cfg(feature = "transport-can")]
+pub mod can;
+#[cfg(feature = "transport-can")]
+pub use can::{CanDevice, CanTransport};
+
 /// Transport-agnostic message passing interface
 ///
 /// All physical transports implement this trait to provide a unified API.

@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Output capture for analyzing ECU behavior
 //!
 //! Records injector and ignition events for post-simulation analysis.
@@ -17,7 +18,7 @@ pub struct CapturedEvent {
     pub time_us: u32,
     pub channel: u8,
     pub event: OutputEvent,
-    pub duration_us: Option<u16>,  // For injection pulse width or dwell time
+    pub duration_us: Option<u16>, // For injection pulse width or dwell time
 }
 
 /// Output capture for recording ECU outputs
@@ -39,7 +40,7 @@ impl OutputCapture {
     pub fn record_injection(&mut self, time_us: u32, pulse_width_us: u16) {
         self.events.push(CapturedEvent {
             time_us,
-            channel: 0,  // Channel doesn't matter for MVP batch injection
+            channel: 0, // Channel doesn't matter for MVP batch injection
             event: OutputEvent::InjectionStart,
             duration_us: Some(pulse_width_us),
         });

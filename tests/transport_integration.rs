@@ -3,7 +3,7 @@
 //! This test simulates communication between management engine and injection
 //! module using the BBQueue transport.
 
-use ecu_core::{BbqTransport, Transport, Message};
+use ecu_core::{BbqTransport, Message, Transport};
 
 /// Simulated management engine that sends IPW tables and config
 struct ManagementEngine<T: Transport> {
@@ -26,11 +26,12 @@ impl<T: Transport> ManagementEngine<T> {
         let msg = Message::IpwTable {
             version: self.table_version,
             data: table,
-            crc32: 0x12345678,  // Simplified - should calculate real CRC
+            crc32: 0x12345678, // Simplified - should calculate real CRC
         };
 
-        self.transport.send(&msg)
-            .map_err(|e| format!("Failed to send table: {:?}", e))
+        self.transport
+            .send(&msg)
+            .map_err(|e| format!("Failed to send table: {e:?}"))
     }
 
     /// Send engine configuration
@@ -38,14 +39,15 @@ impl<T: Transport> ManagementEngine<T> {
         let msg = Message::EngineConfig {
             num_cylinders,
             displacement_cc,
-            injection_mode: 0,  // Batch
-            ignition_mode: 0,   // Wasted spark
+            injection_mode: 0, // Batch
+            ignition_mode: 0,  // Wasted spark
             trigger_teeth: 58,
             trigger_missing: 2,
         };
 
-        self.transport.send(&msg)
-            .map_err(|e| format!("Failed to send config: {:?}", e))
+        self.transport
+            .send(&msg)
+            .map_err(|e| format!("Failed to send config: {e:?}"))
     }
 
     /// Poll for incoming messages (e.g., status, errors)
@@ -55,19 +57,31 @@ impl<T: Transport> ManagementEngine<T> {
         // Check for incoming messages
         while let Some(msg) = self.transport.try_receive() {
             match msg {
-                Message::TriggerTiming { gap_period_us, synced, .. } => {
+                Message::TriggerTiming {
+                    gap_period_us,
+                    synced,
+                    ..
+                } => {
                     if synced {
                         // Calculate exact RPM from gap period
                         let exact_rpm = 2_068_966_u32 / gap_period_us;
-                        println!("Injection module synced, RPM: {}", exact_rpm);
+                        println!("Injection module synced, RPM: {exact_rpm}");
                     }
                 }
-                Message::Error { node_id, error_code, severity, .. } => {
-                    eprintln!("Error from node {}: code {} severity {}",
-                             node_id, error_code, severity);
+                Message::Error {
+                    node_id,
+                    error_code,
+                    severity,
+                    ..
+                } => {
+                    eprintln!("Error from node {node_id}: code {error_code} severity {severity}");
                 }
-                Message::Heartbeat { node_id, uptime_seconds, .. } => {
-                    println!("Heartbeat from node {} at {}s", node_id, uptime_seconds);
+                Message::Heartbeat {
+                    node_id,
+                    uptime_seconds,
+                    ..
+                } => {
+                    println!("Heartbeat from node {node_id} at {uptime_seconds}s");
                 }
                 _ => {}
             }
@@ -96,9 +110,12 @@ impl<T: Transport> InjectionModule<T> {
     }
 
     /// Send trigger timing data to management engine
-    fn send_timing(&mut self, gap_period_us: u32, tooth_position: u8, synced: bool)
-        -> Result<(), String>
-    {
+    fn send_timing(
+        &mut self,
+        gap_period_us: u32,
+        tooth_position: u8,
+        synced: bool,
+    ) -> Result<(), String> {
         let msg = Message::TriggerTiming {
             gap_period_us,
             tooth_period_us: (gap_period_us / 2) as u16,
@@ -107,8 +124,9 @@ impl<T: Transport> InjectionModule<T> {
             timestamp_us: self.uptime_seconds * 1_000_000,
         };
 
-        self.transport.send(&msg)
-            .map_err(|e| format!("Failed to send timing: {:?}", e))
+        self.transport
+            .send(&msg)
+            .map_err(|e| format!("Failed to send timing: {e:?}"))
     }
 
     /// Send heartbeat
@@ -121,8 +139,9 @@ impl<T: Transport> InjectionModule<T> {
             cpu_usage: 50,
         };
 
-        self.transport.send(&msg)
-            .map_err(|e| format!("Failed to send heartbeat: {:?}", e))
+        self.transport
+            .send(&msg)
+            .map_err(|e| format!("Failed to send heartbeat: {e:?}"))
     }
 
     /// Poll for incoming messages (tables, config, commands)
@@ -131,15 +150,23 @@ impl<T: Transport> InjectionModule<T> {
 
         while let Some(msg) = self.transport.try_receive() {
             match msg {
-                Message::IpwTable { version, data, crc32 } => {
-                    println!("Received IPW table version {} (CRC: 0x{:08x})",
-                            version, crc32);
+                Message::IpwTable {
+                    version,
+                    data,
+                    crc32,
+                } => {
+                    println!("Received IPW table version {version} (CRC: 0x{crc32:08x})");
                     self.current_table_version = version;
                     self.current_table = data;
                 }
-                Message::EngineConfig { num_cylinders, displacement_cc, .. } => {
-                    println!("Received engine config: {} cylinders, {}cc",
-                            num_cylinders, displacement_cc);
+                Message::EngineConfig {
+                    num_cylinders,
+                    displacement_cc,
+                    ..
+                } => {
+                    println!(
+                        "Received engine config: {num_cylinders} cylinders, {displacement_cc}cc"
+                    );
                 }
                 Message::CmdReset { target_node_id } => {
                     if target_node_id == self.node_id || target_node_id == 0xFF {
@@ -174,7 +201,7 @@ fn test_management_to_injection_communication() {
 
     // Management sends IPW table
     let mut test_table = [[1000u16; 16]; 16];
-    test_table[0][0] = 1500;  // Unique value for testing
+    test_table[0][0] = 1500; // Unique value for testing
     management.send_ipw_table(test_table).unwrap();
 
     // Injection receives table
@@ -191,10 +218,10 @@ fn test_management_to_injection_communication() {
     let mgmt_stats = management.transport.stats();
     let inj_stats = injection.transport.stats();
 
-    assert_eq!(mgmt_stats.tx_count, 2);  // Config + table
-    assert_eq!(inj_stats.tx_count, 1);   // Timing
-    assert_eq!(mgmt_stats.rx_count, 1);  // Timing
-    assert_eq!(inj_stats.rx_count, 2);   // Config + table
+    assert_eq!(mgmt_stats.tx_count, 2); // Config + table
+    assert_eq!(inj_stats.tx_count, 1); // Timing
+    assert_eq!(mgmt_stats.rx_count, 1); // Timing
+    assert_eq!(inj_stats.rx_count, 2); // Config + table
 
     // === Test 2: Bidirectional communication ===
     println!("\nTest 2: Bidirectional communication");
@@ -226,9 +253,9 @@ fn test_management_to_injection_communication() {
 
     // Create table with unique values
     let mut test_table2 = [[0u16; 16]; 16];
-    for i in 0..16 {
-        for j in 0..16 {
-            test_table2[i][j] = 2000 + (i * 16 + j) as u16;
+    for (i, row) in test_table2.iter_mut().enumerate() {
+        for (j, cell) in row.iter_mut().enumerate() {
+            *cell = 2000 + (i * 16 + j) as u16;
         }
     }
 
@@ -242,10 +269,16 @@ fn test_management_to_injection_communication() {
     assert_eq!(injection.current_table[15][15], 2000 + 255);
 
     println!("\nAll integration tests passed!");
-    println!("Management TX: {}, RX: {}",
-             management.transport.stats().tx_count,
-             management.transport.stats().rx_count);
-    println!("Injection TX: {}, RX: {}",
-             injection.transport.stats().tx_count,
-             injection.transport.stats().rx_count);
+    let mgmt_stats = management.transport.stats();
+    let inj_stats = injection.transport.stats();
+    println!(
+        "Management TX: {tx}, RX: {rx}",
+        tx = mgmt_stats.tx_count,
+        rx = mgmt_stats.rx_count
+    );
+    println!(
+        "Injection TX: {tx}, RX: {rx}",
+        tx = inj_stats.tx_count,
+        rx = inj_stats.rx_count
+    );
 }

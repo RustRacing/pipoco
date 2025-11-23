@@ -18,6 +18,8 @@
 //! - High voltage = shorter dwell (builds energy faster)
 
 use crate::constants::ignition::*;
+#[cfg(feature = "interp-bilinear")]
+use crate::ve_engine::interpolation::{bilinear_interpolate_i16, find_bin_interpolation};
 
 /// Ignition timing table (16x16 grid)
 ///
@@ -26,14 +28,14 @@ use crate::constants::ignition::*;
 pub struct IgnitionTable {
     pub rpm_bins: [u16; 16],
     pub load_bins: [u16; 16],
-    pub values: [[i16; 16]; 16],  // Degrees BTDC (can be negative for retard)
+    pub values: [[i16; 16]; 16], // Degrees BTDC (can be negative for retard)
 }
 
 impl IgnitionTable {
     /// Create new ignition table with default values
     pub const fn new() -> Self {
         Self {
-            rpm_bins: crate::constants::fuel::RPM_BINS,  // Reuse RPM bins
+            rpm_bins: crate::constants::fuel::RPM_BINS, // Reuse RPM bins
             load_bins: crate::constants::fuel::LOAD_BINS, // Reuse load bins
             values: [[DEFAULT_TIMING_BTDC; 16]; 16],
         }
@@ -48,23 +50,34 @@ impl IgnitionTable {
     /// # Returns
     /// Timing in degrees BTDC (positive = advance, negative = retard)
     pub fn lookup(&self, rpm: u16, load: u16) -> i16 {
-        let rpm_idx = self.find_index(&self.rpm_bins, rpm);
-        let load_idx = self.find_index(&self.load_bins, load);
-        self.values[load_idx][rpm_idx]
+        #[cfg(feature = "interp-bilinear")]
+        {
+            let (rx0, rx1, fx) = find_bin_interpolation(&self.rpm_bins, rpm);
+            let (ly0, ly1, fy) = find_bin_interpolation(&self.load_bins, load);
+            let v00 = self.values[ly0][rx0];
+            let v01 = self.values[ly0][rx1];
+            let v10 = self.values[ly1][rx0];
+            let v11 = self.values[ly1][rx1];
+            bilinear_interpolate_i16(v00, v01, v10, v11, fx, fy)
+        }
+        #[cfg(not(feature = "interp-bilinear"))]
+        {
+            let rpm_idx = self.find_index(&self.rpm_bins, rpm);
+            let load_idx = self.find_index(&self.load_bins, load);
+            self.values[load_idx][rpm_idx]
+        }
     }
 
-    /// Find closest bin index (same logic as fuel tables)
+    #[cfg(not(feature = "interp-bilinear"))]
     fn find_index(&self, bins: &[u16; 16], value: u16) -> usize {
         if value < bins[0] {
             return 0;
         }
-
         for i in 0..15 {
             if value < bins[i + 1] {
                 return i;
             }
         }
-
         15
     }
 }
@@ -108,6 +121,12 @@ impl IgnitionCorrections {
     }
 }
 
+impl Default for IgnitionCorrections {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Calculate final ignition timing with corrections
 ///
 /// # Arguments
@@ -122,15 +141,10 @@ pub fn calculate_timing(base_timing: i16, corrections: &IgnitionCorrections) -> 
     // Apply corrections
     timing += corrections.clt_correction;
     timing += corrections.iat_correction;
-    timing -= corrections.knock_retard;  // Subtract because retard is positive
+    timing -= corrections.knock_retard; // Subtract because retard is positive
 
     // Clamp to safe limits
-    if timing < MIN_TIMING_BTDC {
-        timing = MIN_TIMING_BTDC;
-    }
-    if timing > MAX_TIMING_BTDC {
-        timing = MAX_TIMING_BTDC;
-    }
+    timing = timing.clamp(MIN_TIMING_BTDC, MAX_TIMING_BTDC);
 
     timing
 }
@@ -148,11 +162,12 @@ pub fn calculate_timing(base_timing: i16, corrections: &IgnitionCorrections) -> 
 pub fn calculate_dwell(battery_voltage_mv: u16) -> u32 {
     // Base dwell at 13.5V (typical running voltage)
     const BASE_VOLTAGE_MV: u32 = 13500;
-    const BASE_DWELL_US: u32 = 3000;  // 3ms at 13.5V
+    const BASE_DWELL_US: u32 = 3000; // 3ms at 13.5V
 
     // Guard against zero/very low voltage (sensor failure)
-    if battery_voltage_mv < 5000 {  // < 5V is unrealistic, likely sensor failure
-        return MAX_DWELL_US;  // Safe default
+    if battery_voltage_mv < 5000 {
+        // < 5V is unrealistic, likely sensor failure
+        return MAX_DWELL_US; // Safe default
     }
 
     // Calculate voltage factor (fixed-point math, scaled by 1000)
@@ -161,13 +176,7 @@ pub fn calculate_dwell(battery_voltage_mv: u16) -> u32 {
     let dwell_us = (BASE_DWELL_US * voltage_factor) / 1000;
 
     // Clamp to safe limits
-    if dwell_us < MIN_DWELL_US {
-        MIN_DWELL_US
-    } else if dwell_us > MAX_DWELL_US {
-        MAX_DWELL_US
-    } else {
-        dwell_us
-    }
+    dwell_us.clamp(MIN_DWELL_US, MAX_DWELL_US)
 }
 
 /// Initialize ignition table with safe conservative values
@@ -189,22 +198,22 @@ pub fn init_conservative_table(table: &mut IgnitionTable) {
 
             // Base timing calculation (conservative)
             let base = if rpm < 1500 {
-                10  // Low RPM: 10° BTDC
+                10 // Low RPM: 10° BTDC
             } else if rpm < 3000 {
-                15  // Mid-low RPM: 15° BTDC
+                15 // Mid-low RPM: 15° BTDC
             } else if rpm < 5000 {
-                20  // Mid RPM: 20° BTDC
+                20 // Mid RPM: 20° BTDC
             } else {
-                18  // High RPM: 18° BTDC
+                18 // High RPM: 18° BTDC
             };
 
             // Reduce timing at high load (prevent knock)
             let load_correction = if load > 100 {
-                -5  // High load: reduce 5°
+                -5 // High load: reduce 5°
             } else if load > 80 {
-                -2  // Medium-high load: reduce 2°
+                -2 // Medium-high load: reduce 2°
             } else {
-                2   // Low load: add 2°
+                2 // Low load: add 2°
             };
 
             table.values[load_idx][rpm_idx] = base + load_correction;
@@ -226,24 +235,33 @@ mod tests {
 
     #[test]
     fn test_ignition_table_lookup() {
-        let table = IgnitionTable::new();
-
-        // All default values should be DEFAULT_TIMING_BTDC
+        let mut table = IgnitionTable::new();
+        // Default everywhere
         for rpm in [500, 2000, 4000, 8000] {
             for load in [20, 60, 100, 170] {
                 let timing = table.lookup(rpm, load);
                 assert_eq!(timing, DEFAULT_TIMING_BTDC);
             }
         }
+        #[cfg(feature = "interp-bilinear")]
+        {
+            // Distinct corners in first 2x2 to test bilinear at midpoint
+            table.values[0][0] = 10;
+            table.values[0][1] = 20;
+            table.values[1][0] = 30;
+            table.values[1][1] = 40;
+            let t = table.lookup(750, 25);
+            assert!((24..=26).contains(&t), "t={t}");
+        }
     }
 
     #[test]
     fn test_timing_calculation_with_corrections() {
-        let base = 20;  // 20° BTDC
+        let base = 20; // 20° BTDC
         let corrections = IgnitionCorrections {
-            clt_correction: -5,  // Cold engine, reduce advance
-            iat_correction: -2,  // Hot air, reduce advance
-            knock_retard: 3,     // Knock detected, retard 3°
+            clt_correction: -5, // Cold engine, reduce advance
+            iat_correction: -2, // Hot air, reduce advance
+            knock_retard: 3,    // Knock detected, retard 3°
         };
 
         let final_timing = calculate_timing(base, &corrections);
@@ -283,7 +301,7 @@ mod tests {
     fn test_dwell_calculation() {
         // Nominal voltage (13.5V)
         let dwell_nominal = calculate_dwell(13500);
-        assert_eq!(dwell_nominal, 3000);  // 3ms
+        assert_eq!(dwell_nominal, 3000); // 3ms
 
         // Low voltage (11V) - should increase dwell
         let dwell_low = calculate_dwell(11000);
@@ -297,19 +315,22 @@ mod tests {
     #[test]
     fn test_dwell_clamping() {
         // Very low voltage - should clamp to max
-        let dwell_very_low = calculate_dwell(6000);  // 6V
+        let dwell_very_low = calculate_dwell(6000); // 6V
         assert_eq!(dwell_very_low, MAX_DWELL_US);
 
         // Very high voltage - should be at or near min
-        let dwell_high = calculate_dwell(20000);  // 20V
-        assert!(dwell_high <= 2100, "Dwell at 20V should be <=2100us, got {}", dwell_high);
+        let dwell_high = calculate_dwell(20000); // 20V
+        assert!(
+            dwell_high <= 2100,
+            "Dwell at 20V should be <=2100us, got {dwell_high}"
+        );
 
         // Extremely high voltage - definitely hits min
-        let dwell_extreme = calculate_dwell(30000);  // 30V (unrealistic but tests clamping)
+        let dwell_extreme = calculate_dwell(30000); // 30V (unrealistic but tests clamping)
         assert_eq!(dwell_extreme, MIN_DWELL_US);
 
         // Verify clamping at extremes
-        assert_eq!(calculate_dwell(5000), MAX_DWELL_US);  // 5V hits max
+        assert_eq!(calculate_dwell(5000), MAX_DWELL_US); // 5V hits max
         assert_eq!(calculate_dwell(50000), MIN_DWELL_US); // 50V hits min
     }
 
@@ -321,18 +342,20 @@ mod tests {
         // Verify some known points
         // Low RPM, low load should have moderate advance
         let timing_low = table.lookup(1000, 40);
-        assert!(timing_low >= 8 && timing_low <= 15);
+        assert!((8..=15).contains(&timing_low));
 
         // High RPM, high load should have less advance
         let timing_high = table.lookup(6000, 150);
-        assert!(timing_high >= 10 && timing_high <= 20);
+        assert!((10..=20).contains(&timing_high));
 
         // All values should be within safe range
         for row in 0..16 {
             for col in 0..16 {
                 let timing = table.values[row][col];
-                assert!(timing >= MIN_TIMING_BTDC && timing <= MAX_TIMING_BTDC,
-                       "Timing out of range at [{},{}]: {}", row, col, timing);
+                assert!(
+                    (MIN_TIMING_BTDC..=MAX_TIMING_BTDC).contains(&timing),
+                    "Timing out of range at [{row},{col}]: {timing}"
+                );
             }
         }
     }
@@ -340,8 +363,14 @@ mod tests {
     #[test]
     fn test_knock_retard_reduces_timing() {
         let base = 25;
-        let no_knock = IgnitionCorrections { knock_retard: 0, ..IgnitionCorrections::DEFAULT };
-        let with_knock = IgnitionCorrections { knock_retard: 5, ..IgnitionCorrections::DEFAULT };
+        let no_knock = IgnitionCorrections {
+            knock_retard: 0,
+            ..IgnitionCorrections::DEFAULT
+        };
+        let with_knock = IgnitionCorrections {
+            knock_retard: 5,
+            ..IgnitionCorrections::DEFAULT
+        };
 
         let timing_no_knock = calculate_timing(base, &no_knock);
         let timing_with_knock = calculate_timing(base, &with_knock);

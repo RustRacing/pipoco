@@ -69,7 +69,7 @@ impl Observation {
             source,
             timestamp_us,
             value,
-            quality: Quality::Good,  // Default, can be updated by validator
+            quality: Quality::Good, // Default, can be updated by validator
         }
     }
 
@@ -81,7 +81,7 @@ impl Observation {
 
 /// Collection of observations from one cycle
 pub struct ObservationSet {
-    observations: [Option<Observation>; 32],  // Up to 32 sensors
+    observations: [Option<Observation>; 32], // Up to 32 sensors
     count: usize,
 }
 
@@ -95,9 +95,9 @@ impl ObservationSet {
     }
 
     /// Add observation to set
-    pub fn add(&mut self, obs: Observation) -> Result<(), ()> {
+    pub fn add(&mut self, obs: Observation) -> Result<(), ObserveError> {
         if self.count >= 32 {
-            return Err(());
+            return Err(ObserveError::BufferFull);
         }
         self.observations[self.count] = Some(obs);
         self.count += 1;
@@ -130,6 +130,12 @@ impl ObservationSet {
     }
 }
 
+impl Default for ObservationSet {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Observer - manages sensor inputs
 pub struct Observer {
     // Sensor validators (range checking)
@@ -141,13 +147,13 @@ impl Observer {
     pub fn new() -> Self {
         Self {
             validators: [
-                (SensorType::MAP, Some(Validator::new(20, 250))),      // 20-250 kPa
-                (SensorType::TPS, Some(Validator::new(0, 100))),       // 0-100%
-                (SensorType::CLT, Some(Validator::new(-40, 150))),     // -40 to 150°C
-                (SensorType::IAT, Some(Validator::new(-40, 100))),     // -40 to 100°C
+                (SensorType::MAP, Some(Validator::new(20, 250))), // 20-250 kPa
+                (SensorType::TPS, Some(Validator::new(0, 100))),  // 0-100%
+                (SensorType::CLT, Some(Validator::new(-40, 150))), // -40 to 150°C
+                (SensorType::IAT, Some(Validator::new(-40, 100))), // -40 to 100°C
                 (SensorType::VBatt, Some(Validator::new(8000, 18000))), // 8-18V (mv)
-                (SensorType::O2, None),  // Variable based on sensor type
-                (SensorType::VSS, None), // Variable
+                (SensorType::O2, None),                           // Variable based on sensor type
+                (SensorType::VSS, None),                          // Variable
                 (SensorType::Knock, None),
                 (SensorType::CamPos, None),
                 (SensorType::Custom(0), None),
@@ -185,7 +191,7 @@ impl Observer {
             obs.quality = validator.validate(&obs.value);
         }
 
-        set.add(obs).map_err(|_| ObserveError::BufferFull)
+        set.add(obs)
     }
 
     /// Get validator for sensor type
@@ -194,6 +200,12 @@ impl Observer {
             .iter()
             .find(|(s, _)| *s == sensor)
             .and_then(|(_, v)| v.as_ref())
+    }
+}
+
+impl Default for Observer {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -215,7 +227,7 @@ impl Validator {
             } else if v < self.min + (self.max - self.min) / 10
                 || v > self.max - (self.max - self.min) / 10
             {
-                Quality::Degraded  // Near limits
+                Quality::Degraded // Near limits
             } else {
                 Quality::Good
             }
@@ -284,10 +296,7 @@ mod tests {
     fn test_validator() {
         let validator = Validator::new(0, 100);
 
-        assert_eq!(
-            validator.validate(&ObservationValue::U8(50)),
-            Quality::Good
-        );
+        assert_eq!(validator.validate(&ObservationValue::U8(50)), Quality::Good);
         assert_eq!(
             validator.validate(&ObservationValue::U8(5)),
             Quality::Degraded
@@ -320,7 +329,7 @@ mod tests {
             SensorType::MAP,
             ObservationSource::DirectADC(0),
             1000,
-            ObservationValue::U16(300),  // > 250 kPa max
+            ObservationValue::U16(300), // > 250 kPa max
         );
         observer.observe(obs, &mut set2).unwrap();
 

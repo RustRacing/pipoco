@@ -14,17 +14,20 @@ fn test_cold_start_minus_10c() {
     let result = scenario.run();
 
     println!("\n=== Cold Start (-10°C) ===");
-    println!("Duration: {}ms", result.duration_ms);
-    println!("Final RPM: {}", result.final_rpm);
-    println!("Avg fuel PW: {}us", result.avg_fuel_pw);
-    println!("Sync achieved: {}", result.sync_achieved);
+    println!("Duration: {ms}ms", ms = result.duration_ms);
+    println!("Final RPM: {rpm}", rpm = result.final_rpm);
+    println!("Avg fuel PW: {pw}us", pw = result.avg_fuel_pw);
+    println!("Sync achieved: {ok}", ok = result.sync_achieved);
 
     assert!(result.sync_achieved, "ECU should achieve sync");
-    assert!(result.avg_fuel_pw > 1000, "Cold start should use enrichment (>1000us)");
+    assert!(
+        result.avg_fuel_pw > 1000,
+        "Cold start should use enrichment (>1000us)"
+    );
 
     if !result.success {
         for error in &result.errors {
-            println!("ERROR: {}", error);
+            println!("ERROR: {error}");
         }
     }
 
@@ -38,14 +41,17 @@ fn test_hot_start_80c() {
     let result = scenario.run();
 
     println!("\n=== Hot Start (80°C) ===");
-    println!("Duration: {}ms", result.duration_ms);
-    println!("Final RPM: {}", result.final_rpm);
-    println!("Avg fuel PW: {}us", result.avg_fuel_pw);
+    println!("Duration: {ms}ms", ms = result.duration_ms);
+    println!("Final RPM: {rpm}", rpm = result.final_rpm);
+    println!("Avg fuel PW: {pw}us", pw = result.avg_fuel_pw);
 
     assert!(result.sync_achieved, "ECU should achieve sync");
-    assert!(result.duration_ms < 1000, "Hot start should be quick (<1 second)");
+    assert!(
+        result.duration_ms < 1000,
+        "Hot start should be quick (<1 second)"
+    );
 
-    println!("Hot start success: {}", result.success);
+    println!("Hot start success: {ok}", ok = result.success);
 }
 
 #[test]
@@ -54,16 +60,19 @@ fn test_idle_stability_1_second() {
     let result = scenario.run();
 
     println!("\n=== Idle Stability (1 second) ===");
-    println!("Duration: {}ms", result.duration_ms);
-    println!("Final RPM: {}", result.final_rpm);
-    println!("Avg fuel PW: {}us", result.avg_fuel_pw);
-    println!("Sync maintained: {}", result.sync_achieved);
+    println!("Duration: {ms}ms", ms = result.duration_ms);
+    println!("Final RPM: {rpm}", rpm = result.final_rpm);
+    println!("Avg fuel PW: {pw}us", pw = result.avg_fuel_pw);
+    println!("Sync maintained: {ok}", ok = result.sync_achieved);
 
     assert!(result.sync_achieved, "Should maintain sync during idle");
-    assert!(result.final_rpm > 600 && result.final_rpm < 1200,
-            "Idle RPM should be in reasonable range: {}", result.final_rpm);
+    assert!(
+        result.final_rpm > 600 && result.final_rpm < 1200,
+        "Idle RPM should be in reasonable range: {rpm}",
+        rpm = result.final_rpm
+    );
 
-    println!("Idle stability success: {}", result.success);
+    println!("Idle stability success: {ok}", ok = result.success);
 }
 
 #[test]
@@ -72,12 +81,19 @@ fn test_acceleration_idle_to_4000_rpm() {
     let result = scenario.run();
 
     println!("\n=== Acceleration (Idle → 4000 RPM) ===");
-    println!("Duration: {}ms", result.duration_ms);
-    println!("Final RPM: {}", result.final_rpm);
-    println!("Avg fuel PW: {}us", result.avg_fuel_pw);
+    println!("Duration: {ms}ms", ms = result.duration_ms);
+    println!("Final RPM: {rpm}", rpm = result.final_rpm);
+    println!("Avg fuel PW: {pw}us", pw = result.avg_fuel_pw);
 
-    assert!(result.sync_achieved, "Should maintain sync during acceleration");
-    assert!(result.final_rpm > 2000, "Should accelerate significantly: got {} RPM", result.final_rpm);
+    assert!(
+        result.sync_achieved,
+        "Should maintain sync during acceleration"
+    );
+    assert!(
+        result.final_rpm > 2000,
+        "Should accelerate significantly: got {rpm} RPM",
+        rpm = result.final_rpm
+    );
 
     println!("Acceleration success: {}", result.success);
 }
@@ -85,16 +101,17 @@ fn test_acceleration_idle_to_4000_rpm() {
 /// Test sync loss and recovery scenario
 #[test]
 fn test_sync_loss_recovery() {
+    use ecu_core::{EcuState, TriggerDecoder};
     use simulation::*;
-    use ecu_core::{TriggerDecoder, EcuState};
 
-    let (mut engine, mut trigger, mut sensors, time, mut outputs, mut ecu) =
-        (EngineSimulator::new(EngineConfig::default()),
-         TriggerGenerator::new(TriggerPattern::SixtyMinusTwo),
-         SensorSimulator::new(),
-         SimulatedTime::new(),
-         OutputCapture::new(),
-         EcuState::new());
+    let (mut engine, mut trigger, mut sensors, time, _outputs, _ecu) = (
+        EngineSimulator::new(EngineConfig::default()),
+        TriggerGenerator::new(TriggerPattern::SixtyMinusTwo),
+        SensorSimulator::new(),
+        SimulatedTime::new(),
+        OutputCapture::new(),
+        EcuState::new(),
+    );
 
     let mut decoder = TriggerDecoder::new(&time);
 
@@ -124,7 +141,7 @@ fn test_sync_loss_recovery() {
     println!("Phase 2: Simulating signal loss (300ms)...");
     trigger.reset();
     time.set_micros(current_time + 300_000);
-    decoder.tooth_edge();  // Trigger timeout
+    decoder.tooth_edge(); // Trigger timeout
 
     assert!(!decoder.synced(), "Should lose sync after timeout");
     println!("Sync lost as expected");
@@ -146,25 +163,29 @@ fn test_sync_loss_recovery() {
     }
 
     assert!(decoder.synced(), "Should recover sync");
-    println!("Sync recovered at {}ms after signal return", (current_time - recovery_start) / 1000);
+    println!(
+        "Sync recovered at {}ms after signal return",
+        (current_time - recovery_start) / 1000
+    );
     println!("Total test duration: {}ms", current_time / 1000);
 }
 
 /// Test sensor fault handling
 #[test]
 fn test_sensor_fault_handling() {
+    use ecu_core::{EcuState, TriggerDecoder};
     use simulation::*;
-    use ecu_core::{TriggerDecoder, EcuState};
 
     println!("\n=== Sensor Fault Handling ===");
 
-    let (mut engine, mut trigger, mut sensors, time, mut outputs, mut ecu) =
-        (EngineSimulator::new(EngineConfig::default()),
-         TriggerGenerator::new(TriggerPattern::SixtyMinusTwo),
-         SensorSimulator::new(),
-         SimulatedTime::new(),
-         OutputCapture::new(),
-         EcuState::new());
+    let (mut engine, mut trigger, mut sensors, time, mut outputs, ecu) = (
+        EngineSimulator::new(EngineConfig::default()),
+        TriggerGenerator::new(TriggerPattern::SixtyMinusTwo),
+        SensorSimulator::new(),
+        SimulatedTime::new(),
+        OutputCapture::new(),
+        EcuState::new(),
+    );
 
     let mut decoder = TriggerDecoder::new(&time);
 
@@ -194,7 +215,7 @@ fn test_sensor_fault_handling() {
 
     let normal_injections = outputs.injection_count();
     let normal_avg_pw = outputs.average_injection_pw();
-    println!("Normal operation: {} injections, avg PW: {}us", normal_injections, normal_avg_pw);
+    println!("Normal operation: {normal_injections} injections, avg PW: {normal_avg_pw}us");
 
     // Inject MAP sensor fault
     println!("Phase 2: Injecting MAP sensor fault...");
@@ -215,8 +236,10 @@ fn test_sensor_fault_handling() {
                 let pw = ecu.calculate_fuel(rpm, load);
 
                 // Safety: pulse width should still be clamped
-                assert!(pw >= 500 && pw <= 20000,
-                        "Fuel PW out of safe range with sensor fault: {}us", pw);
+                assert!(
+                    (500..=20000).contains(&pw),
+                    "Fuel PW out of safe range with sensor fault: {pw}us"
+                );
 
                 outputs.record_injection(edge_time, pw);
             }
@@ -225,25 +248,31 @@ fn test_sensor_fault_handling() {
     }
 
     let fault_injections = outputs.injection_count();
-    println!("With MAP fault: {} injections (ECU still operating)", fault_injections);
+    println!("With MAP fault: {fault_injections} injections (ECU still operating)");
     println!("Sensor fault handled safely - no runaway fuel or crashes");
 
     // ECU should continue operating even with faulty sensor
-    assert!(fault_injections > 0, "ECU should continue operating with sensor fault");
+    assert!(
+        fault_injections > 0,
+        "ECU should continue operating with sensor fault"
+    );
 }
 
 /// Stress test: 10 second idle
 #[test]
-#[ignore]  // Long-running test, run with --ignored flag
+#[ignore] // Long-running test, run with --ignored flag
 fn test_long_duration_idle() {
     let scenario = IdleScenario::new(10);
     let result = scenario.run();
 
     println!("\n=== Long Duration Idle (10 seconds) ===");
-    println!("Duration: {}ms", result.duration_ms);
-    println!("Final RPM: {}", result.final_rpm);
-    println!("Sync maintained: {}", result.sync_achieved);
+    println!("Duration: {ms}ms", ms = result.duration_ms);
+    println!("Final RPM: {rpm}", rpm = result.final_rpm);
+    println!("Sync maintained: {ok}", ok = result.sync_achieved);
 
-    assert!(result.sync_achieved, "Should maintain sync for extended period");
+    assert!(
+        result.sync_achieved,
+        "Should maintain sync for extended period"
+    );
     assert!(result.final_rpm > 600, "Should maintain idle RPM");
 }

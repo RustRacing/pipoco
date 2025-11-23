@@ -4,8 +4,6 @@
 //! Currently implements nearest-neighbor lookup (no interpolation).
 //! Full bilinear interpolation can be added when needed.
 
-#![cfg_attr(not(test), no_std)]
-
 /// Find nearest bin index in sorted array
 ///
 /// # Arguments
@@ -167,12 +165,7 @@ pub fn interpolate_u16(a: u16, b: u16, frac: u8) -> u16 {
 /// // Should be ~87.5 (average of all 4 corners)
 /// assert!(result >= 87 && result <= 88, "result = {}", result);
 /// ```
-pub fn bilinear_interpolate_u8(
-    v00: u8, v01: u8,
-    v10: u8, v11: u8,
-    frac_x: u8,
-    frac_y: u8,
-) -> u8 {
+pub fn bilinear_interpolate_u8(v00: u8, v01: u8, v10: u8, v11: u8, frac_x: u8, frac_y: u8) -> u8 {
     // Interpolate along X axis (bottom row)
     let v0 = interpolate_u8(v00, v01, frac_x);
 
@@ -185,8 +178,10 @@ pub fn bilinear_interpolate_u8(
 
 /// Bilinear interpolation for 2D table (u16 version)
 pub fn bilinear_interpolate_u16(
-    v00: u16, v01: u16,
-    v10: u16, v11: u16,
+    v00: u16,
+    v01: u16,
+    v10: u16,
+    v11: u16,
     frac_x: u8,
     frac_y: u8,
 ) -> u16 {
@@ -198,6 +193,29 @@ pub fn bilinear_interpolate_u16(
     interpolate_u16(v0, v1, frac_y)
 }
 
+/// Linear interpolation between two i16 values with rounding
+pub fn interpolate_i16(a: i16, b: i16, frac: u8) -> i16 {
+    let a32 = a as i32;
+    let b32 = b as i32;
+    let frac32 = frac as i32;
+    let num = a32 * (255 - frac32) + b32 * frac32 + 127;
+    (num / 255) as i16
+}
+
+/// Bilinear interpolation for 2D table (i16 version)
+pub fn bilinear_interpolate_i16(
+    v00: i16,
+    v01: i16,
+    v10: i16,
+    v11: i16,
+    frac_x: u8,
+    frac_y: u8,
+) -> i16 {
+    let v0 = interpolate_i16(v00, v01, frac_x);
+    let v1 = interpolate_i16(v10, v11, frac_x);
+    interpolate_i16(v0, v1, frac_y)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -206,12 +224,12 @@ mod tests {
     fn test_find_nearest_bin() {
         let bins = [1000, 2000, 3000, 4000, 5000];
 
-        assert_eq!(find_nearest_bin(&bins, 500), 0);    // Below range
-        assert_eq!(find_nearest_bin(&bins, 1000), 0);   // Exact match
-        assert_eq!(find_nearest_bin(&bins, 1400), 0);   // Closer to 1000 (400 away vs 600 away)
-        assert_eq!(find_nearest_bin(&bins, 1600), 1);   // Closer to 2000 (400 away vs 600 away)
-        assert_eq!(find_nearest_bin(&bins, 3000), 2);   // Exact match
-        assert_eq!(find_nearest_bin(&bins, 5500), 4);   // Above range
+        assert_eq!(find_nearest_bin(&bins, 500), 0); // Below range
+        assert_eq!(find_nearest_bin(&bins, 1000), 0); // Exact match
+        assert_eq!(find_nearest_bin(&bins, 1400), 0); // Closer to 1000 (400 away vs 600 away)
+        assert_eq!(find_nearest_bin(&bins, 1600), 1); // Closer to 2000 (400 away vs 600 away)
+        assert_eq!(find_nearest_bin(&bins, 3000), 2); // Exact match
+        assert_eq!(find_nearest_bin(&bins, 5500), 4); // Above range
     }
 
     #[test]
@@ -220,28 +238,28 @@ mod tests {
 
         // Exact at bin 2000 (between bins 0 and 1)
         let (low, high, frac) = find_bin_interpolation(&bins, 2000);
-        assert_eq!(low, 0);   // Lower bin
-        assert_eq!(high, 1);  // Upper bin
-        assert_eq!(frac, 255);  // 100% towards upper bin
+        assert_eq!(low, 0); // Lower bin
+        assert_eq!(high, 1); // Upper bin
+        assert_eq!(frac, 255); // 100% towards upper bin
 
         // Midpoint between 2000 and 3000
         let (low, high, frac) = find_bin_interpolation(&bins, 2500);
         assert_eq!(low, 1);
         assert_eq!(high, 2);
-        assert_eq!(frac, 128);  // ~50% (255/2 rounded)
+        assert_eq!(frac, 128); // ~50% (255/2 rounded)
 
         // Exact at bin 3000 (between bins 1 and 2)
         let (low, high, frac) = find_bin_interpolation(&bins, 3000);
         assert_eq!(low, 1);
         assert_eq!(high, 2);
-        assert_eq!(frac, 255);  // 100% towards upper bin
+        assert_eq!(frac, 255); // 100% towards upper bin
     }
 
     #[test]
     fn test_interpolate_u8() {
-        assert_eq!(interpolate_u8(80, 100, 0), 80);     // 0% = lower bound
-        assert_eq!(interpolate_u8(80, 100, 255), 100);  // 100% = upper bound
-        assert_eq!(interpolate_u8(80, 100, 128), 90);   // 50% = midpoint
+        assert_eq!(interpolate_u8(80, 100, 0), 80); // 0% = lower bound
+        assert_eq!(interpolate_u8(80, 100, 255), 100); // 100% = upper bound
+        assert_eq!(interpolate_u8(80, 100, 128), 90); // 50% = midpoint
     }
 
     #[test]
@@ -257,12 +275,8 @@ mod tests {
     fn test_bilinear_interpolate_u8() {
         // Square with values 80, 90, 85, 95
         // At center (50%, 50%), should be average ≈ 87.5
-        let result = bilinear_interpolate_u8(
-            80, 90,
-            85, 95,
-            128, 128
-        );
-        assert!(result >= 87 && result <= 88, "result = {}", result);
+        let result = bilinear_interpolate_u8(80, 90, 85, 95, 128, 128);
+        assert!((87..=88).contains(&result), "result = {result}");
     }
 
     #[test]
@@ -279,18 +293,29 @@ mod tests {
         // Test midpoints of edges
         // Bottom edge (y=0)
         let result = bilinear_interpolate_u8(80, 90, 85, 95, 128, 0);
-        assert_eq!(result, 85);  // Midpoint of 80 and 90
+        assert_eq!(result, 85); // Midpoint of 80 and 90
 
         // Top edge (y=255)
         let result = bilinear_interpolate_u8(80, 90, 85, 95, 128, 255);
-        assert_eq!(result, 90);  // Midpoint of 85 and 95
+        assert_eq!(result, 90); // Midpoint of 85 and 95
 
         // Left edge (x=0)
         let result = bilinear_interpolate_u8(80, 90, 85, 95, 0, 128);
-        assert!(result >= 82 && result <= 83, "result = {}", result);  // Midpoint of 80 and 85
+        assert!((82..=83).contains(&result), "result = {result}"); // Midpoint of 80 and 85
 
         // Right edge (x=255)
         let result = bilinear_interpolate_u8(80, 90, 85, 95, 255, 128);
-        assert!(result >= 92 && result <= 93, "result = {}", result);  // Midpoint of 90 and 95
+        assert!((92..=93).contains(&result), "result = {result}"); // Midpoint of 90 and 95
+    }
+
+    #[test]
+    fn test_interpolate_i16_and_bilinear() {
+        assert_eq!(interpolate_i16(10, 20, 0), 10);
+        assert_eq!(interpolate_i16(10, 20, 255), 20);
+        let mid = interpolate_i16(10, 20, 128);
+        assert!((15..=16).contains(&mid));
+
+        let center = bilinear_interpolate_i16(10, 20, 30, 40, 128, 128);
+        assert!((24..=26).contains(&center));
     }
 }

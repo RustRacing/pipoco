@@ -3,7 +3,7 @@
 //! Determines optimal control actions based on engine context.
 
 use super::orient::EngineContext;
-use crate::{Corrections, ignition::IgnitionCorrections};
+use crate::{ignition::IgnitionCorrections, Corrections};
 
 /// Fuel command output
 #[derive(Debug, Clone, Copy)]
@@ -49,16 +49,13 @@ impl Decider {
     /// Create new decider with default tables
     pub fn new() -> Self {
         Self {
-            ve_table: [[80; 16]; 16],  // 80% VE default
-            timing_table: [[15; 16]; 16],  // 15° BTDC default
+            ve_table: [[80; 16]; 16],     // 80% VE default
+            timing_table: [[15; 16]; 16], // 15° BTDC default
         }
     }
 
     /// Compute control decisions
-    pub fn compute_control(
-        &self,
-        ctx: &EngineContext,
-    ) -> Result<ControlDecisions, DecideError> {
+    pub fn compute_control(&self, ctx: &EngineContext) -> Result<ControlDecisions, DecideError> {
         let fuel = self.calculate_fuel(ctx);
         let ignition = self.calculate_ignition(ctx);
 
@@ -72,11 +69,10 @@ impl Decider {
         let mut ipw_table = [[1000u16; 16]; 16];
 
         // Scale VE by load
-        for row in 0..16 {
-            for col in 0..16 {
+        for (row, row_slice) in ipw_table.iter_mut().enumerate() {
+            for (col, cell) in row_slice.iter_mut().enumerate() {
                 let ve_percent = self.ve_table[row][col];
-                let base_pw = (ve_percent as u32 * 10) as u16;  // Simplified
-                ipw_table[row][col] = base_pw;
+                *cell = (ve_percent as u32 * 10) as u16; // Simplified
             }
         }
 
@@ -113,18 +109,18 @@ impl Decider {
     /// CLT correction for fuel (100 = 1.0x)
     fn calculate_clt_correction(&self, clt_c: i16) -> u8 {
         if clt_c < 0 {
-            150  // 1.5x enrichment when cold
+            150 // 1.5x enrichment when cold
         } else if clt_c < 60 {
-            120  // 1.2x enrichment
+            120 // 1.2x enrichment
         } else {
-            100  // No correction when warm
+            100 // No correction when warm
         }
     }
 
     /// IAT correction for fuel
     fn calculate_iat_correction(&self, iat_c: i16) -> u8 {
         if iat_c > 40 {
-            95  // Slight reduction when hot
+            95 // Slight reduction when hot
         } else {
             100
         }
@@ -133,9 +129,9 @@ impl Decider {
     /// Battery voltage correction
     fn calculate_vbatt_correction(&self, vbatt_mv: u16) -> u8 {
         if vbatt_mv < 11000 {
-            110  // More fuel at low voltage
+            110 // More fuel at low voltage
         } else if vbatt_mv > 14000 {
-            95   // Less fuel at high voltage
+            95 // Less fuel at high voltage
         } else {
             100
         }
@@ -144,10 +140,16 @@ impl Decider {
     /// CLT correction for timing (degrees)
     fn calculate_timing_clt_correction(&self, clt_c: i16) -> i16 {
         if clt_c < 60 {
-            -5  // Retard 5° when cold
+            -5 // Retard 5° when cold
         } else {
             0
         }
+    }
+}
+
+impl Default for Decider {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -160,9 +162,9 @@ pub enum DecideError {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use super::super::orient::{EngineContext, OperatingMode, LoadEstimate};
+    use super::super::orient::{EngineContext, LoadEstimate, OperatingMode};
     use super::super::types::LoadMethod;
+    use super::*;
 
     fn create_test_context() -> EngineContext {
         EngineContext {
@@ -198,7 +200,7 @@ mod tests {
         assert!(result.is_ok());
 
         let decisions = result.unwrap();
-        assert_eq!(decisions.fuel.corrections.clt, 100);  // Warm engine
+        assert_eq!(decisions.fuel.corrections.clt, 100); // Warm engine
     }
 
     #[test]

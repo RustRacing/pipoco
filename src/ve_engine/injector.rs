@@ -3,8 +3,6 @@
 //! Converts fuel mass requirement to injector pulse width.
 //! Accounts for injector flow rate, fuel density, and dead time.
 
-#![cfg_attr(not(test), no_std)]
-
 use super::types::InjectorConfig;
 
 /// Calculate injector pulse width from fuel mass
@@ -49,12 +47,10 @@ pub fn calculate_pulse_width(
     // So: pulse_width_us = (fuel_mass_mg × 60,000,000) / flow_mg_min
 
     if flow_mg_min == 0 {
-        return 1000;  // Safe default
+        return 1000; // Safe default
     }
 
-    let pulse_width_us = (fuel_mass_mg * 60_000_000) / flow_mg_min;
-
-    pulse_width_us
+    (fuel_mass_mg * 60_000_000) / flow_mg_min
 }
 
 /// Calculate injector dead time based on battery voltage
@@ -74,17 +70,24 @@ pub fn calculate_pulse_width(
 /// use ecu_core::ve_engine::injector::calculate_dead_time;
 /// use ecu_core::ve_engine::types::InjectorConfig;
 ///
-/// let config = InjectorConfig::default_generic();
+/// let config = InjectorConfig {
+///     engine_displacement_cc: 2000,
+///     num_cylinders: 4,
+///     flow_rate_cc_min: 440,
+///     reference_pressure_kpa: 300,
+///     fuel_density_mg_cc: 750,
+///     dead_time_curve: [
+///         (90, 1500), (100, 1300), (110, 1150), (120, 1000),
+///         (130, 900), (140, 800), (150, 750), (160, 700),
+///     ],
+/// };
 /// let dead_time = calculate_dead_time(13500, &config);
 ///
 /// // At 13.5V, dead time should be ~900us
 /// assert!(dead_time > 800 && dead_time < 1000, "dead_time = {}", dead_time);
 /// ```
-pub fn calculate_dead_time(
-    battery_voltage_mv: u16,
-    config: &InjectorConfig,
-) -> u16 {
-    let voltage_x10 = (battery_voltage_mv / 100) as u8;  // Convert to voltage × 10
+pub fn calculate_dead_time(battery_voltage_mv: u16, config: &InjectorConfig) -> u16 {
+    let voltage_x10 = (battery_voltage_mv / 100) as u8; // Convert to voltage × 10
 
     // Find bounding points in curve
     for i in 0..7 {
@@ -102,7 +105,7 @@ pub fn calculate_dead_time(
                 return t1;
             }
 
-            let slope = (t2 as i32 - t1 as i32) as i32 / (v2 as i32 - v1 as i32);
+            let slope = (t2 as i32 - t1 as i32) / (v2 as i32 - v1 as i32);
             let offset = voltage_x10 as i32 - v1 as i32;
             let result = t1 as i32 + slope * offset;
 
@@ -120,7 +123,7 @@ pub fn calculate_dead_time(
                 return config.dead_time_curve[i].1;
             }
         }
-        1000  // Fallback
+        1000 // Fallback
     }
 }
 
@@ -163,7 +166,7 @@ mod tests {
         // 440 cc/min × 750 mg/cc = 330,000 mg/min
         // 330,000 mg/min = 5,500 mg/s
         // 35 mg / 5.5 mg/ms = 6.36ms ≈ 6360us
-        assert!(pw > 6000 && pw < 7000, "pw = {}", pw);
+        assert!(pw > 6000 && pw < 7000, "pw = {pw}");
     }
 
     #[test]
@@ -173,7 +176,7 @@ mod tests {
 
         // Double fuel should double pulse width
         let ratio = (pw_40mg as f32) / (pw_20mg as f32);
-        assert!(ratio > 1.95 && ratio < 2.05, "ratio = {}", ratio);
+        assert!(ratio > 1.95 && ratio < 2.05, "ratio = {ratio}");
     }
 
     #[test]
@@ -183,39 +186,112 @@ mod tests {
 
         // Double flow rate should halve pulse width
         let ratio = (pw_440 as f32) / (pw_880 as f32);
-        assert!(ratio > 1.95 && ratio < 2.05, "ratio = {}", ratio);
+        assert!(ratio > 1.95 && ratio < 2.05, "ratio = {ratio}");
     }
 
     #[test]
     fn test_dead_time_at_nominal_voltage() {
-        let config = InjectorConfig::default_generic();
+        let config = InjectorConfig {
+            engine_displacement_cc: 2000,
+            num_cylinders: 4,
+            flow_rate_cc_min: 440,
+            reference_pressure_kpa: 300,
+            fuel_density_mg_cc: 750,
+            dead_time_curve: [
+                (90, 1500),
+                (100, 1300),
+                (110, 1150),
+                (120, 1000),
+                (130, 900),
+                (140, 800),
+                (150, 750),
+                (160, 700),
+            ],
+        };
         let dead_time = calculate_dead_time(13000, &config);
 
         // At 13V, should be ~900us
-        assert!(dead_time > 850 && dead_time < 950, "dead_time = {}", dead_time);
+        assert!(
+            dead_time > 850 && dead_time < 950,
+            "dead_time = {dead_time}"
+        );
     }
 
     #[test]
     fn test_dead_time_at_low_voltage() {
-        let config = InjectorConfig::default_generic();
+        let config = InjectorConfig {
+            engine_displacement_cc: 2000,
+            num_cylinders: 4,
+            flow_rate_cc_min: 440,
+            reference_pressure_kpa: 300,
+            fuel_density_mg_cc: 750,
+            dead_time_curve: [
+                (90, 1500),
+                (100, 1300),
+                (110, 1150),
+                (120, 1000),
+                (130, 900),
+                (140, 800),
+                (150, 750),
+                (160, 700),
+            ],
+        };
         let dead_time = calculate_dead_time(10000, &config);
 
         // At 10V, should be ~1300us (higher)
-        assert!(dead_time > 1250 && dead_time < 1350, "dead_time = {}", dead_time);
+        assert!(
+            dead_time > 1250 && dead_time < 1350,
+            "dead_time = {dead_time}"
+        );
     }
 
     #[test]
     fn test_dead_time_at_high_voltage() {
-        let config = InjectorConfig::default_generic();
+        let config = InjectorConfig {
+            engine_displacement_cc: 2000,
+            num_cylinders: 4,
+            flow_rate_cc_min: 440,
+            reference_pressure_kpa: 300,
+            fuel_density_mg_cc: 750,
+            dead_time_curve: [
+                (90, 1500),
+                (100, 1300),
+                (110, 1150),
+                (120, 1000),
+                (130, 900),
+                (140, 800),
+                (150, 750),
+                (160, 700),
+            ],
+        };
         let dead_time = calculate_dead_time(15000, &config);
 
         // At 15V, should be ~750us (lower)
-        assert!(dead_time > 700 && dead_time < 800, "dead_time = {}", dead_time);
+        assert!(
+            dead_time > 700 && dead_time < 800,
+            "dead_time = {dead_time}"
+        );
     }
 
     #[test]
     fn test_dead_time_interpolation() {
-        let config = InjectorConfig::default_generic();
+        let config = InjectorConfig {
+            engine_displacement_cc: 2000,
+            num_cylinders: 4,
+            flow_rate_cc_min: 440,
+            reference_pressure_kpa: 300,
+            fuel_density_mg_cc: 750,
+            dead_time_curve: [
+                (90, 1500),
+                (100, 1300),
+                (110, 1150),
+                (120, 1000),
+                (130, 900),
+                (140, 800),
+                (150, 750),
+                (160, 700),
+            ],
+        };
 
         // Test midpoint between 12V and 13V
         let dead_12v = calculate_dead_time(12000, &config);
@@ -223,24 +299,46 @@ mod tests {
         let dead_12_5v = calculate_dead_time(12500, &config);
 
         // Should be between the two
-        assert!(dead_12_5v < dead_12v, "12.5V: {}, 12V: {}", dead_12_5v, dead_12v);
-        assert!(dead_12_5v > dead_13v, "12.5V: {}, 13V: {}", dead_12_5v, dead_13v);
+        assert!(
+            dead_12_5v < dead_12v,
+            "12.5V: {dead_12_5v}, 12V: {dead_12v}"
+        );
+        assert!(
+            dead_12_5v > dead_13v,
+            "12.5V: {dead_12_5v}, 13V: {dead_13v}"
+        );
     }
 
     #[test]
     fn test_effective_pulse_width() {
-        let config = InjectorConfig::default_generic();
+        let config = InjectorConfig {
+            engine_displacement_cc: 2000,
+            num_cylinders: 4,
+            flow_rate_cc_min: 440,
+            reference_pressure_kpa: 300,
+            fuel_density_mg_cc: 750,
+            dead_time_curve: [
+                (90, 1500),
+                (100, 1300),
+                (110, 1150),
+                (120, 1000),
+                (130, 900),
+                (140, 800),
+                (150, 750),
+                (160, 700),
+            ],
+        };
         let total_pw = calculate_effective_pulse_width(35, 13000, &config);
 
         // Should be base (~6400us) + dead time (~900us) ≈ 7300us
-        assert!(total_pw > 7000 && total_pw < 7600, "total_pw = {}", total_pw);
+        assert!(total_pw > 7000 && total_pw < 7600, "total_pw = {total_pw}");
     }
 
     #[test]
     fn test_zero_flow_safety() {
         // Should not panic with zero flow
         let pw = calculate_pulse_width(35, 0, 750);
-        assert_eq!(pw, 1000);  // Safe default
+        assert_eq!(pw, 1000); // Safe default
     }
 
     #[test]
@@ -251,7 +349,7 @@ mod tests {
         let pw = calculate_pulse_width(14, 440, 750);
 
         // Expected: ~2.5ms
-        assert!(pw > 2000 && pw < 3000, "pw = {}", pw);
+        assert!(pw > 2000 && pw < 3000, "pw = {pw}");
     }
 
     #[test]
@@ -262,7 +360,7 @@ mod tests {
         let pw = calculate_pulse_width(35, 440, 750);
 
         // Expected: ~6.4ms
-        assert!(pw > 6000 && pw < 7000, "pw = {}", pw);
+        assert!(pw > 6000 && pw < 7000, "pw = {pw}");
     }
 
     #[test]
@@ -273,6 +371,6 @@ mod tests {
         let pw = calculate_pulse_width(46, 440, 750);
 
         // Expected: ~8.4ms
-        assert!(pw > 8000 && pw < 9000, "pw = {}", pw);
+        assert!(pw > 8000 && pw < 9000, "pw = {pw}");
     }
 }

@@ -1,5 +1,5 @@
-use ecu_core::{TriggerDecoder, IpwTable, scale_u16, EcuState};
 use ecu_core::hal::TimeSource;
+use ecu_core::{scale_u16, EcuState, IpwTable, TriggerDecoder};
 use std::cell::Cell;
 
 // Mock time source for testing with interior mutability
@@ -31,7 +31,8 @@ fn test_trigger_sync_detection() {
     let mut decoder = TriggerDecoder::new(time_source);
 
     // Simulate normal teeth (1ms each)
-    for i in 0..57 {  // 57 normal teeth before missing tooth
+    for i in 0..57 {
+        // 57 normal teeth before missing tooth
         decoder.time_source().set_time(i * 1000);
         decoder.tooth_edge();
     }
@@ -42,7 +43,7 @@ fn test_trigger_sync_detection() {
     // Simulate missing tooth gap (2ms instead of 1ms)
     decoder.time_source().set_time(57 * 1000);
     decoder.tooth_edge();
-    decoder.time_source().set_time(57 * 1000 + 2000);  // Missing tooth gap
+    decoder.time_source().set_time(57 * 1000 + 2000); // Missing tooth gap
     decoder.tooth_edge();
 
     // Should sync now
@@ -69,13 +70,15 @@ fn test_rpm_calculation() {
     // Trigger sync with missing tooth gap (2x normal period)
     decoder.time_source().set_time(tooth_period * 57);
     decoder.tooth_edge();
-    decoder.time_source().set_time(tooth_period * 57 + tooth_period * 2);
+    decoder
+        .time_source()
+        .set_time(tooth_period * 57 + tooth_period * 2);
     decoder.tooth_edge();
 
     // Check RPM (should be close to 1000)
     // Due to approximation in RPM calc, accept wide range for MVP
     let rpm = decoder.rpm();
-    assert!(rpm >= 800 && rpm <= 1200, "RPM was {}, expected ~1000", rpm);
+    assert!((800..=1200).contains(&rpm), "RPM was {rpm}, expected ~1000");
 }
 
 #[test]
@@ -90,13 +93,13 @@ fn test_loss_of_sync() {
     }
     decoder.time_source().set_time(57 * 1000);
     decoder.tooth_edge();
-    decoder.time_source().set_time(59 * 1000);  // Missing tooth gap
+    decoder.time_source().set_time(59 * 1000); // Missing tooth gap
     decoder.tooth_edge();
 
     assert!(decoder.synced());
 
     // Now simulate signal loss (no teeth for 200ms+)
-    decoder.time_source().set_time(59 * 1000 + 250_000);  // 250ms later
+    decoder.time_source().set_time(59 * 1000 + 250_000); // 250ms later
     decoder.tooth_edge();
 
     // Should lose sync
@@ -160,10 +163,10 @@ fn test_table_cell_independence() {
     state.ipw_table[4][5] = 2000;
 
     // Lookup should return modified value
-    let pw = state.calculate_fuel(3000, 60);  // Maps to bin [4][5]
+    let pw = state.calculate_fuel(3000, 60); // Maps to bin [4][5]
     assert_eq!(pw, 2000);
 
     // Other cells should be unaffected
-    let pw2 = state.calculate_fuel(1000, 30);  // Different bin
+    let pw2 = state.calculate_fuel(1000, 30); // Different bin
     assert_eq!(pw2, 1000);
 }

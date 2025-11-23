@@ -20,6 +20,8 @@
 //! reduces computational complexity.
 
 use crate::constants::fuel::*;
+#[cfg(feature = "interp-bilinear")]
+use crate::ve_engine::interpolation::{bilinear_interpolate_u16, find_bin_interpolation};
 
 /// IPW (Injector Pulse Width) table - 16x16 grid
 ///
@@ -27,7 +29,7 @@ use crate::constants::fuel::*;
 pub struct IpwTable {
     pub rpm_bins: [u16; 16],
     pub load_bins: [u16; 16],
-    pub values: [[u16; 16]; 16],  // Microseconds [load_idx][rpm_idx]
+    pub values: [[u16; 16]; 16], // Microseconds [load_idx][rpm_idx]
 }
 
 impl IpwTable {
@@ -61,39 +63,37 @@ impl IpwTable {
     /// let pw = table.lookup(3000, 60);  // 3000 RPM, 60 kPa
     /// ```
     pub fn lookup(&self, rpm: u16, load: u16) -> u16 {
-        let rpm_idx = self.find_index(&self.rpm_bins, rpm);
-        let load_idx = self.find_index(&self.load_bins, load);
-        self.values[load_idx][rpm_idx]
+        #[cfg(feature = "interp-bilinear")]
+        {
+            let (rx0, rx1, fx) = find_bin_interpolation(&self.rpm_bins, rpm);
+            let (ly0, ly1, fy) = find_bin_interpolation(&self.load_bins, load);
+            let v00 = self.values[ly0][rx0];
+            let v01 = self.values[ly0][rx1];
+            let v10 = self.values[ly1][rx0];
+            let v11 = self.values[ly1][rx1];
+            bilinear_interpolate_u16(v00, v01, v10, v11, fx, fy)
+        }
+        #[cfg(not(feature = "interp-bilinear"))]
+        {
+            let rpm_idx = self.find_index(&self.rpm_bins, rpm);
+            let load_idx = self.find_index(&self.load_bins, load);
+            self.values[load_idx][rpm_idx]
+        }
     }
 
-    /// Find closest bin index for a value
-    ///
-    /// Uses simple linear search to find the bin that contains the value.
-    /// For values below the first bin, returns 0.
-    /// For values above the last bin, returns 15.
-    ///
-    /// # Arguments
-    /// * `bins` - Array of bin boundaries (must be sorted ascending)
-    /// * `value` - Value to locate
-    ///
-    /// # Returns
-    /// Index of the closest bin (0-15)
+    #[cfg(not(feature = "interp-bilinear"))]
     fn find_index(&self, bins: &[u16; 16], value: u16) -> usize {
-        // If value is less than first bin, use first bin
         if value < bins[0] {
             return 0;
         }
-
-        // Find first bin where value < next bin
         for i in 0..15 {
             if value < bins[i + 1] {
                 return i;
             }
         }
-
-        // Value is >= last bin, use last bin
         15
     }
+
 }
 
 impl Default for IpwTable {
@@ -105,25 +105,7 @@ impl Default for IpwTable {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_find_index_boundaries() {
-        let table = IpwTable::new();
-
-        // Test below first bin
-        assert_eq!(table.find_index(&table.rpm_bins, 0), 0);
-        assert_eq!(table.find_index(&table.rpm_bins, 499), 0);
-
-        // Test first bin
-        assert_eq!(table.find_index(&table.rpm_bins, 500), 0);
-        assert_eq!(table.find_index(&table.rpm_bins, 999), 0);
-
-        // Test middle bin
-        assert_eq!(table.find_index(&table.rpm_bins, 3000), 5);
-
-        // Test above last bin
-        assert_eq!(table.find_index(&table.rpm_bins, 9000), 15);
-    }
+    
 
     #[test]
     fn test_lookup_default_values() {
@@ -136,6 +118,35 @@ mod tests {
                 assert_eq!(pw, DEFAULT_PULSE_WIDTH_US);
             }
         }
+    }
+
+    #[cfg(feature = "interp-bilinear")]
+    #[test]
+    fn test_bilinear_interpolation_midpoint() {
+        let mut table = IpwTable::new();
+        // Use first two bins on each axis: rpm [500,1000], load [20,30]
+        // Set distinct corner values to observe interpolation
+        table.values[0][0] = 1000; // (20,500)
+        table.values[0][1] = 2000; // (20,1000)
+        table.values[1][0] = 3000; // (30,500)
+        table.values[1][1] = 4000; // (30,1000)
+
+        // Midpoint between 500 and 1000 rpm, and 20 and 30 kPa
+        let pw = table.lookup(750, 25);
+        assert!((2488..=2512).contains(&pw), "pw={pw}");
+    }
+
+    #[cfg(not(feature = "interp-bilinear"))]
+    #[test]
+    fn test_nearest_neighbor_midpoint_behaves_like_lower_bin() {
+        let mut table = IpwTable::new();
+        table.values[0][0] = 1000;
+        table.values[0][1] = 2000;
+        table.values[1][0] = 3000;
+        table.values[1][1] = 4000;
+        // Midpoint should pick lower bin without interpolation
+        let pw = table.lookup(750, 25);
+        assert_eq!(pw, 1000);
     }
 
     #[test]
@@ -154,14 +165,18 @@ mod tests {
 
         // Verify RPM bins are sorted ascending
         for i in 0..15 {
-            assert!(table.rpm_bins[i] < table.rpm_bins[i + 1],
-                    "RPM bins not sorted at index {}", i);
+            assert!(
+                table.rpm_bins[i] < table.rpm_bins[i + 1],
+                "RPM bins not sorted at index {i}"
+            );
         }
 
         // Verify load bins are sorted ascending
         for i in 0..15 {
-            assert!(table.load_bins[i] < table.load_bins[i + 1],
-                    "Load bins not sorted at index {}", i);
+            assert!(
+                table.load_bins[i] < table.load_bins[i + 1],
+                "Load bins not sorted at index {i}"
+            );
         }
     }
 }

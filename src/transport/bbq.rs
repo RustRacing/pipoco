@@ -28,9 +28,9 @@
 //! }
 //! ```
 
-use super::{Transport, TransportError, TransportStats, Message};
+use super::{Message, Transport, TransportError, TransportStats};
 use bbqueue::{BBBuffer, Consumer, Producer};
-use postcard::{to_slice, from_bytes};
+use postcard::{from_bytes, to_slice};
 
 /// BBQueue transport for same-chip communication
 ///
@@ -87,8 +87,8 @@ impl BbqTransport {
         // Note: producers/consumers are swapped for transport_b
         // so that A's TX goes to B's RX and vice versa
         let transport_b = BbqTransport {
-            tx_producer: rx_prod_a,  // Swapped
-            rx_consumer: tx_cons_a,  // Swapped
+            tx_producer: rx_prod_a, // Swapped
+            rx_consumer: tx_cons_a, // Swapped
             stats: TransportStats::default(),
         };
 
@@ -150,21 +150,18 @@ impl Transport for BbqTransport {
         // Request write grant from BBQueue
         // We need space for: [length: u16][data: estimated_size]
         let frame_size = 2 + estimated_size;
-        let mut grant = self.tx_producer
-            .grant_exact(frame_size)
-            .map_err(|_| {
-                self.stats.tx_errors += 1;
-                TransportError::BufferFull
-            })?;
+        let mut grant = self.tx_producer.grant_exact(frame_size).map_err(|_| {
+            self.stats.tx_errors += 1;
+            TransportError::BufferFull
+        })?;
 
         // Serialize message into grant buffer (zero-copy!)
         // Format: [length: u16 LE][serialized message data]
         let data_slice = &mut grant[2..];
-        let serialized = to_slice(message, data_slice)
-            .map_err(|_| {
-                self.stats.tx_errors += 1;
-                TransportError::SerializationFailed
-            })?;
+        let serialized = to_slice(message, data_slice).map_err(|_| {
+            self.stats.tx_errors += 1;
+            TransportError::SerializationFailed
+        })?;
 
         let data_len = serialized.len();
 
@@ -233,9 +230,9 @@ impl Transport for BbqTransport {
         // BBQueue doesn't expose current buffer usage easily,
         // but we can provide what we track
         TransportStats {
-            tx_buffer_usage: 0,  // Would need additional tracking
-            rx_buffer_usage: 0,  // Would need additional tracking
-            avg_latency_us: Some(0),  // <1μs, effectively zero
+            tx_buffer_usage: 0,      // Would need additional tracking
+            rx_buffer_usage: 0,      // Would need additional tracking
+            avg_latency_us: Some(0), // <1μs, effectively zero
             ..self.stats
         }
     }
@@ -252,7 +249,7 @@ mod tests {
 
     #[test]
     fn test_create_pair() {
-        let (mut tx, mut rx) = BbqTransport::create_test_pair();
+        let (tx, rx) = BbqTransport::create_test_pair();
 
         // Verify both transports are ready
         assert!(tx.is_ready());
@@ -291,7 +288,7 @@ mod tests {
                 assert_eq!(gap_period_us, 2000);
                 assert_eq!(tooth_period_us, 1000);
                 assert_eq!(tooth_position, 1);
-                assert_eq!(synced, true);
+                assert!(synced);
                 assert_eq!(timestamp_us, 12345);
             }
             _ => panic!("Wrong message type"),
@@ -308,9 +305,9 @@ mod tests {
 
         // Send large IPW table with unique values for testing
         let mut table_data = [[0u16; 16]; 16];
-        for i in 0..16 {
-            for j in 0..16 {
-                table_data[i][j] = 1000u16 + (i * 16 + j) as u16;
+        for (i, row) in table_data.iter_mut().enumerate() {
+            for (j, cell) in row.iter_mut().enumerate() {
+                *cell = 1000u16 + (i * 16 + j) as u16;
             }
         }
 
@@ -325,10 +322,14 @@ mod tests {
         // Receive table
         let received = rx.try_receive().expect("Should receive table");
         match received {
-            Message::IpwTable { version, data, crc32 } => {
+            Message::IpwTable {
+                version,
+                data,
+                crc32,
+            } => {
                 assert_eq!(version, 42);
                 assert_eq!(data[0][0], 1000);
-                assert_eq!(data[1][2], 1000 + 18);  // 1*16 + 2
+                assert_eq!(data[1][2], 1000 + 18); // 1*16 + 2
                 assert_eq!(crc32, 0x12345678);
             }
             _ => panic!("Wrong message type"),
@@ -352,7 +353,11 @@ mod tests {
         // B receives from A
         let received = transport_b.try_receive().unwrap();
         match received {
-            Message::Heartbeat { node_id, uptime_seconds, .. } => {
+            Message::Heartbeat {
+                node_id,
+                uptime_seconds,
+                ..
+            } => {
                 assert_eq!(node_id, 1);
                 assert_eq!(uptime_seconds, 100);
             }
@@ -393,7 +398,11 @@ mod tests {
         for i in 0..10 {
             let received = rx.try_receive().expect("Should receive message");
             match received {
-                Message::Heartbeat { node_id, uptime_seconds, .. } => {
+                Message::Heartbeat {
+                    node_id,
+                    uptime_seconds,
+                    ..
+                } => {
                     assert_eq!(node_id, i as u8);
                     assert_eq!(uptime_seconds, i);
                 }
@@ -421,10 +430,10 @@ mod tests {
             match tx.send(&msg) {
                 Ok(()) => sent += 1,
                 Err(TransportError::BufferFull) => break,
-                Err(e) => panic!("Unexpected error: {:?}", e),
+                Err(e) => panic!("Unexpected error: {e:?}"),
             }
             if sent > 10 {
-                break;  // Should be full by now
+                break; // Should be full by now
             }
         }
 

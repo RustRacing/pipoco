@@ -1,7 +1,6 @@
 /// Tests ported from RusEFI and Speeduino
 /// Adapted to work with our simplified IPW-based architecture
-
-use ecu_core::{TriggerDecoder, IpwTable, EcuState, scale_u16, hal::TimeSource, Channel};
+use ecu_core::{hal::TimeSource, scale_u16, Channel, EcuState, IpwTable, TriggerDecoder};
 use std::cell::Cell;
 
 // Mock time source for testing with interior mutability
@@ -77,7 +76,10 @@ fn test_sync_persistence() {
         decoder.time_source().set_time(time);
         decoder.tooth_edge();
 
-        assert!(decoder.synced(), "Should maintain sync through revolution {}", revolution);
+        assert!(
+            decoder.synced(),
+            "Should maintain sync through revolution {revolution}"
+        );
     }
 }
 
@@ -86,9 +88,9 @@ fn test_sync_persistence() {
 #[test]
 fn test_rpm_at_various_speeds() {
     let test_cases = vec![
-        (500, 2068),   // 500 RPM -> ~2ms per tooth
-        (1000, 1034),  // 1000 RPM -> ~1ms per tooth
-        (2000, 517),   // 2000 RPM -> ~0.5ms per tooth
+        (500, 2068),  // 500 RPM -> ~2ms per tooth
+        (1000, 1034), // 1000 RPM -> ~1ms per tooth
+        (2000, 517),  // 2000 RPM -> ~0.5ms per tooth
     ];
 
     for (target_rpm, tooth_period_us) in test_cases {
@@ -104,16 +106,19 @@ fn test_rpm_at_various_speeds() {
         // Missing tooth for sync
         decoder.time_source().set_time(tooth_period_us * 57);
         decoder.tooth_edge();
-        decoder.time_source().set_time(tooth_period_us * 57 + tooth_period_us * 2);
+        decoder
+            .time_source()
+            .set_time(tooth_period_us * 57 + tooth_period_us * 2);
         decoder.tooth_edge();
 
         let measured_rpm = decoder.rpm();
         let tolerance = target_rpm as f32 * 0.25; // 25% tolerance for MVP approximation
+        let mr = measured_rpm as i32;
+        let tr = target_rpm;
 
         assert!(
-            (measured_rpm as i32 - target_rpm as i32).abs() < tolerance as i32,
-            "RPM at {} target: got {}, expected within 25% tolerance",
-            target_rpm, measured_rpm
+            (mr - tr).abs() < tolerance as i32,
+            "RPM at {target_rpm} target: got {measured_rpm}, expected within 25% tolerance",
         );
     }
 }
@@ -125,9 +130,9 @@ fn test_table_lookup_corners() {
     let table = IpwTable::new();
 
     // Test corner lookups
-    let pw_low_low = table.lookup(500, 20);    // Bottom-left
-    let pw_low_high = table.lookup(500, 170);  // Top-left
-    let pw_high_low = table.lookup(8000, 20);  // Bottom-right
+    let pw_low_low = table.lookup(500, 20); // Bottom-left
+    let pw_low_high = table.lookup(500, 170); // Top-left
+    let pw_high_low = table.lookup(8000, 20); // Bottom-right
     let pw_high_high = table.lookup(8000, 170); // Top-right
 
     // All should be default value
@@ -159,15 +164,15 @@ fn test_multiple_corrections() {
     let mut state = EcuState::new();
 
     // Apply multiple corrections
-    state.corrections.clt = 120;  // 1.2x for cold
-    state.corrections.iat = 110;  // 1.1x for cold air
-    state.corrections.vbatt = 95;  // 0.95x for low voltage
+    state.corrections.clt = 120; // 1.2x for cold
+    state.corrections.iat = 110; // 1.1x for cold air
+    state.corrections.vbatt = 95; // 0.95x for low voltage
 
     let pw = state.calculate_fuel(3000, 60);
 
     // Expected: 1000 * 1.2 * 1.1 * 0.95 = 1254
     // With integer rounding it should be close
-    assert!(pw >= 1250 && pw <= 1260, "Expected ~1254, got {}", pw);
+    assert!((1250..=1260).contains(&pw), "Expected ~1254, got {pw}");
 }
 
 /// Test that individual table cells are independent
@@ -177,16 +182,16 @@ fn test_table_cell_independence() {
 
     // Modify several cells - remember table is [load_idx][rpm_idx]
     // RPM 500 -> idx 0, Load 20 -> idx 0
-    state.ipw_table[0][0] = 500;   // Low RPM, low load
-    // RPM 8000 -> idx 15, Load 170 -> idx 15
+    state.ipw_table[0][0] = 500; // Low RPM, low load
+                                 // RPM 8000 -> idx 15, Load 170 -> idx 15
     state.ipw_table[15][15] = 3000; // High RPM, high load
-    // RPM 3500 -> idx 6, Load 100 -> idx 8
-    state.ipw_table[8][6] = 1500;  // Middle
+                                    // RPM 3500 -> idx 6, Load 100 -> idx 8
+    state.ipw_table[8][6] = 1500; // Middle
 
     // Verify each lookup returns correct value
-    let pw1 = state.calculate_fuel(500, 20);    // Should hit [0][0]
-    let pw2 = state.calculate_fuel(8000, 170);  // Should hit [15][15]
-    let pw3 = state.calculate_fuel(3500, 100);  // Should hit [8][6]
+    let pw1 = state.calculate_fuel(500, 20); // Should hit [0][0]
+    let pw2 = state.calculate_fuel(8000, 170); // Should hit [15][15]
+    let pw3 = state.calculate_fuel(3500, 100); // Should hit [8][6]
 
     assert_eq!(pw1, 500);
     assert_eq!(pw2, 3000);
@@ -199,7 +204,7 @@ fn test_extreme_corrections() {
     let mut state = EcuState::new();
 
     // Extreme low correction
-    state.corrections.clt = 1;  // 0.01x (almost zero)
+    state.corrections.clt = 1; // 0.01x (almost zero)
     let pw_low = state.calculate_fuel(3000, 60);
     assert_eq!(pw_low, 500, "Should clamp to minimum");
 
@@ -227,9 +232,13 @@ fn test_time_wrapping() {
     }
 
     // Missing tooth that wraps around
-    decoder.time_source().set_time((u32::MAX - 10000).wrapping_add(57 * 1000));
+    decoder
+        .time_source()
+        .set_time((u32::MAX - 10000).wrapping_add(57 * 1000));
     decoder.tooth_edge();
-    decoder.time_source().set_time((u32::MAX - 10000).wrapping_add(59 * 1000));
+    decoder
+        .time_source()
+        .set_time((u32::MAX - 10000).wrapping_add(59 * 1000));
     decoder.tooth_edge();
 
     // Should still sync correctly with wrapping
@@ -272,12 +281,13 @@ fn test_linear_table_init() {
     state.init_linear_table();
 
     // Verify table has increasing values with load
-    let pw_low_load = state.calculate_fuel(3000, 20);   // Low load
+    let pw_low_load = state.calculate_fuel(3000, 20); // Low load
     let pw_high_load = state.calculate_fuel(3000, 170); // High load
 
-    assert!(pw_high_load > pw_low_load,
-            "Higher load should give more fuel: {} vs {}",
-            pw_high_load, pw_low_load);
+    assert!(
+        pw_high_load > pw_low_load,
+        "Higher load should give more fuel: {pw_high_load} vs {pw_low_load}"
+    );
 }
 
 /// Test that scale_u16 uses saturating arithmetic
