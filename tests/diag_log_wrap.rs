@@ -22,7 +22,7 @@ fn diag_log_wraps_and_retains_recent() {
         now = now.wrapping_add(10_000);
     }
 
-    let pages = EcuPageStore { fuel: &mut state.ipw_table, ign: &mut state.ignition_table, sens: &mut state.sensors_cal, ae: &mut state.ae_config, dfco: &mut state.dfco_config, limits: &mut state.sensors_limits, emerg_trig_map: &mut state.emergency_trigger_map_oob, emerg_trig_tps: &mut state.emergency_trigger_tps_oob, diag_emergency: &state.emergency_mode, diag_map: &state.diag_map, diag_tps: &state.diag_tps, diag_cam: &state.diag_cam, diag_log: &state.diag_log, angles_inj: &mut state.inj_angle_btdc_x10, angles_tdc: &mut state.tdc_per_cyl_x10, tooth0_angle_x10: &mut state.tooth0_angle_x10, cam_timeout_ms: &mut state.cam_missing_timeout_ms };
+    let pages = EcuPageStore { fuel: &mut state.ipw_table, ign: &mut state.ignition_table, sens: &mut state.sensors_cal, idle: &mut state.idle_config, fan: &mut state.fan_config, cl: &mut state.cl_config, wue: &mut state.wue_config, ase: &mut state.ase_config, ae: &mut state.ae_config, dfco: &mut state.dfco_config, limits: &mut state.sensors_limits, emerg_trig_map: &mut state.emergency_trigger_map_oob, emerg_trig_tps: &mut state.emergency_trigger_tps_oob, diag_emergency: &state.emergency_mode, diag_map: &state.diag_map, diag_tps: &state.diag_tps, diag_cam: &state.diag_cam, diag_log: &state.diag_log, angles_inj: &mut state.inj_angle_btdc_x10, angles_tdc: &mut state.tdc_per_cyl_x10, tooth0_angle_x10: &mut state.tooth0_angle_x10, cam_timeout_ms: &mut state.cam_missing_timeout_ms };
 
     let mut out = [0u8; 16 * 9];
     let _ = pages.read_page(PAGE_DIAG_LOG, &mut out).expect("read log");
@@ -33,4 +33,3 @@ fn diag_log_wraps_and_retains_recent() {
         .count();
     assert_eq!(count, 16, "ring buffer should contain 16 recent events");
 }
-

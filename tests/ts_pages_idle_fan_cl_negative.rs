@@ -1,0 +1,65 @@
+use ecu_core::ts::pages::EcuPageStore;
+use ecu_core::ts::PageStore;
+use ecu_core::EcuState;
+
+#[test]
+fn idle_fan_cl_pages_validate_ranges_and_sizes() {
+    let mut state = EcuState::new();
+    let mut pages = EcuPageStore {
+        fuel: &mut state.ipw_table,
+        ign: &mut state.ignition_table,
+        sens: &mut state.sensors_cal,
+        idle: &mut state.idle_config,
+        fan: &mut state.fan_config,
+        cl: &mut state.cl_config,
+        wue: &mut state.wue_config,
+        ase: &mut state.ase_config,
+        ae: &mut state.ae_config,
+        dfco: &mut state.dfco_config,
+        limits: &mut state.sensors_limits,
+        emerg_trig_map: &mut state.emergency_trigger_map_oob,
+        emerg_trig_tps: &mut state.emergency_trigger_tps_oob,
+        diag_emergency: &state.emergency_mode,
+        diag_map: &state.diag_map,
+        diag_tps: &state.diag_tps,
+        diag_cam: &state.diag_cam,
+        diag_log: &state.diag_log,
+        angles_inj: &mut state.inj_angle_btdc_x10,
+        angles_tdc: &mut state.tdc_per_cyl_x10,
+        tooth0_angle_x10: &mut state.tooth0_angle_x10,
+        cam_timeout_ms: &mut state.cam_missing_timeout_ms,
+    };
+
+    // Idle: wrong size and invalid fields
+    assert!(pages.write_page(ecu_core::ts::pages::PAGE_IDLE, &[0u8; 3]).is_err());
+    let mut idle = [0u8; 6];
+    idle[0] = 1;
+    idle[1..3].copy_from_slice(&1500u16.to_le_bytes()); // 150.0% -> invalid
+    idle[3..5].copy_from_slice(&50u16.to_le_bytes());
+    assert!(pages.write_page(ecu_core::ts::pages::PAGE_IDLE, &idle).is_err());
+    let mut idle_freq0 = [0u8; 6];
+    idle_freq0[0] = 1;
+    idle_freq0[1..3].copy_from_slice(&500u16.to_le_bytes());
+    // freq = 0 invalid
+    idle_freq0[3..5].copy_from_slice(&0u16.to_le_bytes());
+    assert!(pages.write_page(ecu_core::ts::pages::PAGE_IDLE, &idle_freq0).is_err());
+
+    // Fan: on <= off rejected
+    let mut fan = [0u8; 6];
+    fan[0] = 1;
+    fan[1..3].copy_from_slice(&80i16.to_le_bytes());
+    fan[3..5].copy_from_slice(&85i16.to_le_bytes());
+    assert!(pages.write_page(ecu_core::ts::pages::PAGE_FAN, &fan).is_err());
+
+    // CL: size and target bounds
+    assert!(pages.write_page(ecu_core::ts::pages::PAGE_CL, &[0u8; 4]).is_err());
+    let mut cl = [0u8; 8];
+    cl[0] = 1;
+    cl[2..4].copy_from_slice(&90u16.to_le_bytes()); // target below 1.00 lambda (100)
+    cl[4..6].copy_from_slice(&10u16.to_le_bytes());
+    cl[6..8].copy_from_slice(&0u16.to_le_bytes());
+    assert!(pages.write_page(ecu_core::ts::pages::PAGE_CL, &cl).is_err());
+    // Above upper bound
+    cl[2..4].copy_from_slice(&300u16.to_le_bytes());
+    assert!(pages.write_page(ecu_core::ts::pages::PAGE_CL, &cl).is_err());
+}

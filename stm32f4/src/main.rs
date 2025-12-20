@@ -60,28 +60,51 @@ mod ts_support {
     }
     #[cfg(feature = "flash-kv")]
     impl KvStore for FlashKv {
+        const LEN_FUEL: usize = 512;
+        const LEN_IGN: usize = 512;
+        const LEN_ANGLES: usize = 68;
+        const HDR_SZ: usize = 64;
+        const FUEL_OFF: usize = Self::HDR_SZ;
+        const IGN_OFF: usize = Self::HDR_SZ + Self::LEN_FUEL;
+        const ANGLES_OFF: usize = Self::HDR_SZ + Self::LEN_FUEL + Self::LEN_IGN;
+
+        #[derive(Copy, Clone)]
+        struct KvHeader {
+            ok: bool,
+            seq: u16,
+            fuel_len: u16,
+            ign_len: u16,
+            angles_len: u16,
+            fuel_crc: u16,
+            ign_crc: u16,
+            angles_crc: u16,
+        }
+
         fn read(&mut self, key: &[u8], out: &mut [u8]) -> Result<usize, KvError> {
             const BASE_A: u32 = 0x080C0000; // Sector 10
             const BASE_B: u32 = 0x080E0000; // Sector 11
-            const HDR_SZ: usize = 64;
-            const FUEL_OFF: usize = HDR_SZ;
-            const IGN_OFF: usize = HDR_SZ + 512;
             const MAGIC: u32 = 0x32504B56; // 'V''K''P''2' LE
 
-            unsafe fn read_header(base: u32) -> (bool, u16, u16, u16, u16) {
+            unsafe fn read_header(base: u32) -> KvHeader {
                 let p = base as *const u8;
                 let magic = core::ptr::read_volatile(p as *const u32);
                 if magic != MAGIC {
-                    return (false, 0, 0, 0, 0);
+                    return KvHeader { ok: false, seq: 0, fuel_len: 0, ign_len: 0, angles_len: 0, fuel_crc: 0, ign_crc: 0, angles_crc: 0 };
                 }
                 let valid = core::ptr::read_volatile(p.add(6) as *const u16);
                 if valid != 0 {
-                    return (false, 0, 0, 0, 0);
+                    return KvHeader { ok: false, seq: 0, fuel_len: 0, ign_len: 0, angles_len: 0, fuel_crc: 0, ign_crc: 0, angles_crc: 0 };
                 }
-                let seq = core::ptr::read_volatile(p.add(8) as *const u16);
-                let fuel_len = core::ptr::read_volatile(p.add(10) as *const u16);
-                let ign_len = core::ptr::read_volatile(p.add(12) as *const u16);
-                (true, seq, fuel_len, ign_len, 0)
+                KvHeader {
+                    ok: true,
+                    seq: core::ptr::read_volatile(p.add(8) as *const u16),
+                    fuel_len: core::ptr::read_volatile(p.add(10) as *const u16),
+                    ign_len: core::ptr::read_volatile(p.add(12) as *const u16),
+                    angles_len: core::ptr::read_volatile(p.add(18) as *const u16),
+                    fuel_crc: core::ptr::read_volatile(p.add(14) as *const u16),
+                    ign_crc: core::ptr::read_volatile(p.add(16) as *const u16),
+                    angles_crc: core::ptr::read_volatile(p.add(20) as *const u16),
+                }
             }
 
             unsafe fn read_page(base: u32, off: usize, out: &mut [u8]) {
@@ -92,44 +115,54 @@ mod ts_support {
             }
 
             // Choose newest valid sector by seq
-            let (a_ok, a_seq, a_flen, a_ilen, _a_rsv) = unsafe { read_header(BASE_A) };
-            let (b_ok, b_seq, b_flen, b_ilen, _b_rsv) = unsafe { read_header(BASE_B) };
-            let pick_b = b_ok && (!a_ok || b_seq.wrapping_sub(a_seq) < 0x8000);
+            let a_hdr = unsafe { read_header(BASE_A) };
+            let b_hdr = unsafe { read_header(BASE_B) };
+            let pick_b = b_hdr.ok && (!a_hdr.ok || b_hdr.seq.wrapping_sub(a_hdr.seq) < 0x8000);
             let base = if pick_b { BASE_B } else { BASE_A };
-            let flen = if pick_b { b_flen } else { a_flen } as usize;
-            let ilen = if pick_b { b_ilen } else { a_ilen } as usize;
+            let hdr = if pick_b { b_hdr } else { a_hdr };
             if key == b"fuel" {
-                if flen != 512 || out.len() < 512 {
+                if hdr.fuel_len as usize != Self::LEN_FUEL || out.len() < Self::LEN_FUEL {
                     return Err(KvError::NotFound);
                 }
                 unsafe {
-                    read_page(base, FUEL_OFF, &mut out[..512]);
+                    read_page(base, Self::FUEL_OFF, &mut out[..Self::LEN_FUEL]);
                 }
-                Ok(512)
+                if ecu_core::ts::proto::crc16_ccitt(&out[..Self::LEN_FUEL]) != hdr.fuel_crc {
+                    return Err(KvError::Io);
+                }
+                Ok(Self::LEN_FUEL)
             } else if key == b"ign" {
-                if ilen != 512 || out.len() < 512 {
+                if hdr.ign_len as usize != Self::LEN_IGN || out.len() < Self::LEN_IGN {
                     return Err(KvError::NotFound);
                 }
                 unsafe {
-                    read_page(base, IGN_OFF, &mut out[..512]);
+                    read_page(base, Self::IGN_OFF, &mut out[..Self::LEN_IGN]);
                 }
-                Ok(512)
+                if ecu_core::ts::proto::crc16_ccitt(&out[..Self::LEN_IGN]) != hdr.ign_crc {
+                    return Err(KvError::Io);
+                }
+                Ok(Self::LEN_IGN)
+            } else if key == b"angles" {
+                if hdr.angles_len as usize != Self::LEN_ANGLES || out.len() < Self::LEN_ANGLES {
+                    return Err(KvError::NotFound);
+                }
+                unsafe {
+                    read_page(base, Self::ANGLES_OFF, &mut out[..Self::LEN_ANGLES]);
+                }
+                if ecu_core::ts::proto::crc16_ccitt(&out[..Self::LEN_ANGLES]) != hdr.angles_crc {
+                    return Err(KvError::Io);
+                }
+                Ok(Self::LEN_ANGLES)
             } else {
                 Err(KvError::Io)
             }
         }
 
         fn write(&mut self, key: &[u8], data: &[u8]) -> Result<(), KvError> {
-            if data.len() != 512 {
-                return Err(KvError::Io);
-            }
             const BASE_A: u32 = 0x080C0000; // Sector 10
             const BASE_B: u32 = 0x080E0000; // Sector 11
             const SECTOR_A: u8 = 10;
             const SECTOR_B: u8 = 11;
-            const HDR_SZ: usize = 64;
-            const FUEL_OFF: usize = HDR_SZ;
-            const IGN_OFF: usize = HDR_SZ + 512;
             const MAGIC: u32 = 0x32504B56; // 'V''K''P''2'
 
             unsafe fn read_seq(base: u32) -> Option<u16> {
@@ -144,12 +177,14 @@ mod ts_support {
             }
 
             // Read existing pages and sequence
-            let mut fuel = [0u8; 512];
-            let mut ign = [0u8; 512];
+            let mut fuel = [0u8; Self::LEN_FUEL];
+            let mut ign = [0u8; Self::LEN_IGN];
+            let mut angles = [0u8; Self::LEN_ANGLES];
             let mut seq_a = None;
             let mut seq_b = None;
             let _ = self.read(b"fuel", &mut fuel); // ignore NotFound
             let _ = self.read(b"ign", &mut ign);
+            let _ = self.read(b"angles", &mut angles);
             unsafe {
                 seq_a = read_seq(BASE_A);
                 seq_b = read_seq(BASE_B);
@@ -166,16 +201,24 @@ mod ts_support {
                 (None, Some(b)) => b,
                 _ => 0,
             };
-            if key == b"fuel" {
-                fuel.copy_from_slice(data);
-            } else if key == b"ign" {
-                ign.copy_from_slice(data);
-            } else {
-                return Err(KvError::Io);
+            match key {
+                b"fuel" => {
+                    if data.len() != Self::LEN_FUEL { return Err(KvError::Io); }
+                    fuel.copy_from_slice(data);
+                }
+                b"ign" => {
+                    if data.len() != Self::LEN_IGN { return Err(KvError::Io); }
+                    ign.copy_from_slice(data);
+                }
+                b"angles" => {
+                    if data.len() != Self::LEN_ANGLES { return Err(KvError::Io); }
+                    angles.copy_from_slice(data);
+                }
+                _ => return Err(KvError::Io),
             }
 
             // Prepare header (valid field stays 0xFFFF until the very end)
-            let mut hdr = [0xFFu8; HDR_SZ];
+            let mut hdr = [0xFFu8; Self::HDR_SZ];
             // magic 'VKP2' LE
             hdr[0] = 0x56;
             hdr[1] = 0x4B;
@@ -190,17 +233,22 @@ mod ts_support {
             hdr[8] = (new_seq & 0xFF) as u8;
             hdr[9] = (new_seq >> 8) as u8;
             // lengths
-            hdr[10] = 0x00;
-            hdr[11] = 0x02; // fuel 512
-            hdr[12] = 0x00;
-            hdr[13] = 0x02; // ign  512
-                            // CRC16s
+            hdr[10] = (Self::LEN_FUEL as u16 & 0xFF) as u8;
+            hdr[11] = (Self::LEN_FUEL as u16 >> 8) as u8; // fuel 512
+            hdr[12] = (Self::LEN_IGN as u16 & 0xFF) as u8;
+            hdr[13] = (Self::LEN_IGN as u16 >> 8) as u8; // ign  512
+            hdr[18] = (Self::LEN_ANGLES as u16 & 0xFF) as u8;
+            hdr[19] = (Self::LEN_ANGLES as u16 >> 8) as u8;
+            // CRC16s
             let fuel_crc = ecu_core::ts::proto::crc16_ccitt(&fuel);
             let ign_crc = ecu_core::ts::proto::crc16_ccitt(&ign);
+            let angles_crc = ecu_core::ts::proto::crc16_ccitt(&angles);
             hdr[14] = (fuel_crc & 0xFF) as u8;
             hdr[15] = (fuel_crc >> 8) as u8;
             hdr[16] = (ign_crc & 0xFF) as u8;
             hdr[17] = (ign_crc >> 8) as u8;
+            hdr[20] = (angles_crc & 0xFF) as u8;
+            hdr[21] = (angles_crc >> 8) as u8;
 
             cortex_m::interrupt::free(|_| unsafe {
                 let flash = &*pac::FLASH::ptr();
@@ -247,22 +295,29 @@ mod ts_support {
 
                 // Write header (without committing valid field)
                 let mut a = target_base;
-                for i in (0..HDR_SZ).step_by(2) {
+                for i in (0..Self::HDR_SZ).step_by(2) {
                     let v = (hdr[i] as u16) | ((hdr[i + 1] as u16) << 8);
                     prog_half(a, v);
                     a += 2;
                 }
                 // Write fuel page
-                let mut a = target_base + (FUEL_OFF as u32);
-                for i in (0..512).step_by(2) {
+                let mut a = target_base + (Self::FUEL_OFF as u32);
+                for i in (0..Self::LEN_FUEL).step_by(2) {
                     let v = (fuel[i] as u16) | ((fuel[i + 1] as u16) << 8);
                     prog_half(a, v);
                     a += 2;
                 }
                 // Write ign page
-                let mut a = target_base + (IGN_OFF as u32);
-                for i in (0..512).step_by(2) {
+                let mut a = target_base + (Self::IGN_OFF as u32);
+                for i in (0..Self::LEN_IGN).step_by(2) {
                     let v = (ign[i] as u16) | ((ign[i + 1] as u16) << 8);
+                    prog_half(a, v);
+                    a += 2;
+                }
+                // Write angles page
+                let mut a = target_base + (Self::ANGLES_OFF as u32);
+                for i in (0..Self::LEN_ANGLES).step_by(2) {
+                    let v = (angles[i] as u16) | ((angles[i + 1] as u16) << 8);
                     prog_half(a, v);
                     a += 2;
                 }

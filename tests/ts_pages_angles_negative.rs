@@ -9,6 +9,11 @@ fn angles_page_wrong_size_is_error() {
         fuel: &mut state.ipw_table,
         ign: &mut state.ignition_table,
         sens: &mut state.sensors_cal,
+        idle: &mut state.idle_config,
+        fan: &mut state.fan_config,
+        cl: &mut state.cl_config,
+        wue: &mut state.wue_config,
+        ase: &mut state.ase_config,
         ae: &mut state.ae_config,
         dfco: &mut state.dfco_config,
         limits: &mut state.sensors_limits,
@@ -35,6 +40,11 @@ fn angles_page_range_validation() {
         fuel: &mut state.ipw_table,
         ign: &mut state.ignition_table,
         sens: &mut state.sensors_cal,
+        idle: &mut state.idle_config,
+        fan: &mut state.fan_config,
+        cl: &mut state.cl_config,
+        wue: &mut state.wue_config,
+        ase: &mut state.ase_config,
         ae: &mut state.ae_config,
         dfco: &mut state.dfco_config,
         limits: &mut state.sensors_limits,
@@ -88,4 +98,3 @@ fn angles_page_range_validation() {
         .write_page(ecu_core::ts::pages::PAGE_ANGLES, &bad3)
         .is_err());
 }
-

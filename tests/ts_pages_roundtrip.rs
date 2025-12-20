@@ -40,6 +40,11 @@ fn sensors_ae_dfco_read_write() {
         fuel: &mut state.ipw_table,
         ign: &mut state.ignition_table,
         sens: &mut state.sensors_cal,
+        idle: &mut state.idle_config,
+        fan: &mut state.fan_config,
+        cl: &mut state.cl_config,
+        wue: &mut state.wue_config,
+        ase: &mut state.ase_config,
         ae: &mut state.ae_config,
         dfco: &mut state.dfco_config,
         limits: &mut state.sensors_limits,
@@ -119,6 +124,63 @@ fn sensors_ae_dfco_read_write() {
     let n = pages.read_page(PAGE_DFCO, &mut dread).expect("read dfco");
     assert_eq!(n, 16);
     assert_eq!(&d[..], &dread[..]);
+
+    // Idle page (6 bytes) write/read
+    let mut idle = [0u8; 6];
+    idle[0] = 1; // enable
+    idle[1..3].copy_from_slice(&(450u16).to_le_bytes()); // 45.0%
+    idle[3..5].copy_from_slice(&(100u16).to_le_bytes()); // 100Hz
+    pages.write_page(ecu_core::ts::pages::PAGE_IDLE, &idle).expect("write idle");
+    let mut idread = [0u8; 6];
+    let n = pages.read_page(ecu_core::ts::pages::PAGE_IDLE, &mut idread).expect("read idle");
+    assert_eq!(n, 6);
+    assert_eq!(&idle[..], &idread[..]);
+
+    // Fan page (6 bytes) write/read
+    let mut fan = [0u8; 6];
+    fan[0] = 1; // enable
+    fan[1..3].copy_from_slice(&(95i16).to_le_bytes()); // on at 95C
+    fan[3..5].copy_from_slice(&(90i16).to_le_bytes()); // off at 90C
+    pages.write_page(ecu_core::ts::pages::PAGE_FAN, &fan).expect("write fan");
+    let mut fnread = [0u8; 6];
+    let n = pages.read_page(ecu_core::ts::pages::PAGE_FAN, &mut fnread).expect("read fan");
+    assert_eq!(n, 6);
+    assert_eq!(&fan[..], &fnread[..]);
+
+    // CL page (8 bytes) write/read
+    let mut cl = [0u8; 8];
+    cl[0] = 1; // enable
+    cl[2..4].copy_from_slice(&(147u16).to_le_bytes());
+    cl[4..6].copy_from_slice(&(10u16).to_le_bytes());
+    cl[6..8].copy_from_slice(&(2u16).to_le_bytes());
+    pages.write_page(ecu_core::ts::pages::PAGE_CL, &cl).expect("write cl");
+    let mut clread = [0u8; 8];
+    let n = pages.read_page(ecu_core::ts::pages::PAGE_CL, &mut clread).expect("read cl");
+    assert_eq!(n, 8);
+    assert_eq!(&cl[..], &clread[..]);
+
+    // WUE page (8 bytes) write/read
+    let mut wue = [0u8; 8];
+    wue[0] = 30; // max percent
+    wue[1] = 0;  // min percent
+    wue[2..4].copy_from_slice(&(-10i16).to_le_bytes()); // start_c
+    wue[4..6].copy_from_slice(&(60i16).to_le_bytes());  // end_c
+    pages.write_page(ecu_core::ts::pages::PAGE_WUE, &wue).expect("write wue");
+    let mut wread = [0u8; 8];
+    let n = pages.read_page(ecu_core::ts::pages::PAGE_WUE, &mut wread).expect("read wue");
+    assert_eq!(n, 8);
+    assert_eq!(&wue[..], &wread[..]);
+
+    // ASE page (8 bytes) write/read
+    let mut ase = [0u8; 8];
+    ase[0] = 15; // percent
+    ase[2..6].copy_from_slice(&(3000u32).to_le_bytes()); // taper 3s
+    ase[6..8].copy_from_slice(&(1000u16).to_le_bytes()); // lockout 1s
+    pages.write_page(ecu_core::ts::pages::PAGE_ASE, &ase).expect("write ase");
+    let mut aread = [0u8; 8];
+    let n = pages.read_page(ecu_core::ts::pages::PAGE_ASE, &mut aread).expect("read ase");
+    assert_eq!(n, 8);
+    assert_eq!(&ase[..], &aread[..]);
 }
 
 #[test]
@@ -128,6 +190,11 @@ fn sensors_ae_dfco_negative_sizes_and_ranges() {
         fuel: &mut state.ipw_table,
         ign: &mut state.ignition_table,
         sens: &mut state.sensors_cal,
+        idle: &mut state.idle_config,
+        fan: &mut state.fan_config,
+        cl: &mut state.cl_config,
+        wue: &mut state.wue_config,
+        ase: &mut state.ase_config,
         ae: &mut state.ae_config,
         dfco: &mut state.dfco_config,
         limits: &mut state.sensors_limits,
@@ -212,6 +279,11 @@ fn angles_page_roundtrip() {
         fuel: &mut state.ipw_table,
         ign: &mut state.ignition_table,
         sens: &mut state.sensors_cal,
+        idle: &mut state.idle_config,
+        fan: &mut state.fan_config,
+        cl: &mut state.cl_config,
+        wue: &mut state.wue_config,
+        ase: &mut state.ase_config,
         ae: &mut state.ae_config,
         dfco: &mut state.dfco_config,
         limits: &mut state.sensors_limits,

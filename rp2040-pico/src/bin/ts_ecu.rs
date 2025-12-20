@@ -31,7 +31,7 @@ use ecu_core::ts::proto::{self, Cmd};
 use ecu_core::ts::OutpcProvider;
 use ecu_core::{
     dfco::{DfcoConfig, DfcoState},
-    enrichment::{AeConfig, AeState},
+    enrichment::{AeConfig, AeState, AseConfig, AseState, WueConfig},
 };
 use ecu_core::{CaptureBuffer, EcuApp, EcuState};
 use ecu_target_common::kv::ram::RamKv512;
@@ -40,9 +40,14 @@ use ecu_target_common::sensors::adc_pipeline::{
 };
 use ecu_target_common::ts::service::TsService;
 use ecu_target_common::ts::store::PersistedEcuPageStore;
-#[cfg(feature = "flash-kv")]
+#[cfg(all(feature = "flash-kv", not(target_arch = "arm")))]
 mod seq_kv;
-#[cfg(feature = "flash-kv")]
+#[cfg(all(feature = "flash-kv", target_arch = "arm"))]
+#[path = "../flash_kv.rs"]
+mod flash_kv;
+#[cfg(all(feature = "flash-kv", target_arch = "arm"))]
+use flash_kv::FlashKv;
+#[cfg(all(feature = "flash-kv", not(target_arch = "arm")))]
 use seq_kv::SeqKv;
 
 // Arduino-style outputs — edit these to remap pins quickly
@@ -66,6 +71,17 @@ macro_rules! IGN2_GPIO {
         $pins.gpio3.into_push_pull_output()
     };
 }
+// Additional outputs for idle PWM and fan relay (adjust pins as needed)
+macro_rules! IDLE_GPIO {
+    ($pins:ident) => {
+        $pins.gpio6.into_push_pull_output()
+    };
+}
+macro_rules! FAN_GPIO {
+    ($pins:ident) => {
+        $pins.gpio7.into_push_pull_output()
+    };
+}
 const TRIGGER_PIN: u8 = 4; // use with GPIO-IRQ or PIO example bins
 #[cfg(feature = "capture-cam")]
 const CAM_PIN: u8 = 5;
@@ -82,8 +98,22 @@ static mut APP: Option<EcuApp<RpTime>> = None;
 static mut SENS: Sensors = Sensors::new();
 static mut AE_STATE: AeState = AeState::new();
 static mut DFCO_STATE: DfcoState = DfcoState::new();
+static mut ASE_STATE: AseState = AseState::new();
+static mut CRANK_GATE: ecu_core::safety::CrankingGate = ecu_core::safety::CrankingGate::new();
 #[cfg(feature = "capture-cam")]
 static mut CAM_PHASE: u8 = 0; // toggles on cam edges
+static mut CL_STATE: ClRuntime = ClRuntime { integ: 0 };
+
+// Simple runtime for open-loop idle PWM
+struct ClRuntime {
+    integ: i32,
+}
+
+struct IdlePwmRuntime {
+    last_start_us: u32,
+    pin_is_high: bool,
+}
+impl IdlePwmRuntime { const fn new() -> Self { Self { last_start_us: 0, pin_is_high: false } } }
 
 #[derive(Copy, Clone)]
 struct RpTime;
@@ -120,14 +150,37 @@ impl OutpcProvider for Provider {
         out.clt_c = sens.clt_c;
         out.iat_c = sens.iat_c;
         out.vbatt_mv = sens.vbatt_mv;
-        out.lambda_x100 = 100; // TODO: from wideband
-        out.pw_us = s.calculate_fuel(2000, 100); // example fuel calc
+        out.lambda_x100 = sens.lambda_x100;
+        // Example fuel calc with enrichments + simple CL (proportional only)
+        let ae_pct = ae;
+        let ase_pct = ase;
+        let wue_pct = wue_pct;
+        let cl_cfg = &s.cl_config;
+        // Compute target lambda from AFR target (approx gasoline stoich 14.7)
+        let target_lambda_x100 = ((cl_cfg.target_afr_x10 as u32) * 1000 / 147) as i32;
+        let lambda_meas_x100 = out.lambda_x100 as i32;
+        let error = target_lambda_x100 - lambda_meas_x100; // positive -> richer target than measured
+        // Proportional gain: kp_i is percent per 100 lambda error
+        let kp = cl_cfg.kp_i as i32;
+        let mut cl_delta = (error * kp) / 100; // i16 percent
+        // Integral term (simple accumulator, clamped)
+        let ki = cl_cfg.ki_i as i32;
+        if ki > 0 {
+            let st = unsafe { &mut CL_STATE };
+            st.integ = (st.integ + (error * ki) / 100).clamp(-50, 50);
+            cl_delta += st.integ;
+        } else {
+            unsafe { CL_STATE.integ = 0; }
+        }
+        // Clamp to +/-25%
+        cl_delta = cl_delta.clamp(-25, 25);
+        out.pw_us = s.calculate_fuel_with_enrichments(2000, 100, wue_pct, ase_pct, ae_pct, cl_delta as i16);
         out.dwell_us = 3000;
         out.advance_x10 = 150;
         out.synced = if s.synced { 1 } else { 0 };
         // Extended fields
         out.target_afr_x10 = 147;
-        out.ego_correction_percent = 100;
+        out.ego_correction_percent = (100 + cl_delta as i32).clamp(0, 200) as u16;
         out.ego_sensor = 2; // assume WB
         out.mapdot_kpa_s = sens.mapdot_kpa_s;
         out.tpsdot_pct_s = sens.tpsdot_pct_s;
@@ -141,9 +194,9 @@ impl OutpcProvider for Provider {
         out.fan_state = 0;
         // Engine state bits: bit0=WUE, bit1=ASE, bit2=CL, bit3=DFCO, bit4=AE, bit5=EMERGENCY
         let mut flags: u16 = 0;
-        if sens.clt_c < 60 {
-            flags |= 1 << 0;
-        } // WUE
+        // WUE (based on config and CLT)
+        let wue_pct = WueConfig::DEFAULT.compute_percent(sens.clt_c);
+        if wue_pct > 0 { flags |= 1 << 0; }
           // AE
         let ae = unsafe {
             AE_STATE.update(
@@ -156,6 +209,12 @@ impl OutpcProvider for Provider {
         if ae > 0 {
             flags |= 1 << 4;
         }
+        // ASE: trigger when leaving cranking
+        let prev_crank = unsafe { CRANK_GATE.is_cranking() };
+        let _ = unsafe { CRANK_GATE.update(out.rpm) };
+        let just_started = prev_crank && !unsafe { CRANK_GATE.is_cranking() };
+        let ase = unsafe { ASE_STATE.update(RpTime.micros(), just_started, &AseConfig::DEFAULT) };
+        if ase > 0 { flags |= 1 << 1; }
         // DFCO
         let dfco = unsafe {
             DFCO_STATE.update(
@@ -184,6 +243,7 @@ struct Sensors {
     clt_c: i16,
     iat_c: i16,
     vbatt_mv: u16,
+    lambda_x100: u16,
     mapdot_kpa_s: i16,
     tpsdot_pct_s: i16,
     last_map_kpa_x10: u16,
@@ -198,6 +258,7 @@ impl Sensors {
             clt_c: 20,
             iat_c: 25,
             vbatt_mv: 12000,
+            lambda_x100: 100,
             mapdot_kpa_s: 0,
             tpsdot_pct_s: 0,
             last_map_kpa_x10: 1000,
@@ -208,13 +269,15 @@ impl Sensors {
 
     fn update(&mut self, adc: &mut Adc, pins: &mut AdcPins, cal: &ecu_core::sensors::SensorsCal, state: &mut ecu_core::EcuState) {
         // Read raw counts
+        let iat_counts = adc.read(&mut pins.iat).unwrap_or(0);
         let raw = TsRawCounts {
             map: adc.read(&mut pins.map).unwrap_or(0),
             tps: adc.read(&mut pins.tps).unwrap_or(0),
             clt: adc.read(&mut pins.clt).unwrap_or(0),
-            iat: adc.read(&mut pins.iat).unwrap_or(0),
+            iat: iat_counts,
             // Reuse IAT channel for VBATT when using VSYS/3
-            vbatt: adc.read(&mut pins.iat).unwrap_or(0),
+            vbatt: iat_counts,
+            lambda: iat_counts, // simple analog WB placeholder on the same channel
         };
 
         // When vbatt-vsys is enabled, compute VBATT from VSYS/3 (scale x3).
@@ -253,6 +316,7 @@ impl Sensors {
         {
             self.vbatt_mv = out.vbatt_mv;
         }
+        self.lambda_x100 = out.lambda_x100;
 
         // Derivatives based on time delta
         let rp = RpTime;
@@ -421,12 +485,18 @@ fn main() -> ! {
     let ign1 = IGN1_GPIO!(pins);
     let ign2 = IGN2_GPIO!(pins);
     let mut outs4 = ecu_target_common::outputs::Outputs4::new(inj1, inj2, ign1, ign2);
+    // Extra outputs
+    let mut idle_pin = IDLE_GPIO!(pins);
+    let mut fan_pin = FAN_GPIO!(pins);
+    let mut idle_pwm = IdlePwmRuntime::new();
 
     // TS service (uses shared TsService; KV is feature-selectable)
     let provider = Provider {
         state: state as *const EcuState,
     };
-    #[cfg(feature = "flash-kv")]
+    #[cfg(all(feature = "flash-kv", target_arch = "arm"))]
+    let mut store = PersistedEcuPageStore::new(state, FlashKv::new());
+    #[cfg(all(feature = "flash-kv", not(target_arch = "arm")))]
     let mut store = PersistedEcuPageStore::new(state, SeqKv::new());
     #[cfg(not(feature = "flash-kv"))]
     let mut store = PersistedEcuPageStore::new(state, RamKv512::new());
@@ -539,6 +609,51 @@ fn main() -> ! {
         // Update sensors
         unsafe {
             SENS.update(&mut adc, &mut adc_pins, &state.sensors_cal, state);
+        }
+
+        // Fan control (on/off with hysteresis)
+        {
+            let sref = unsafe { &*state };
+            let fan_cfg = sref.fan_config;
+            if fan_cfg.enable {
+                let clt = unsafe { SENS.clt_c };
+                if clt >= fan_cfg.on_c {
+                    let _ = fan_pin.set_high();
+                } else if clt <= fan_cfg.off_c {
+                    let _ = fan_pin.set_low();
+                }
+            } else {
+                let _ = fan_pin.set_low();
+            }
+        }
+
+        // Idle PWM (open-loop)
+        {
+            let sref = unsafe { &*state };
+            let cfg = sref.idle_config;
+            if !cfg.enable || cfg.duty_x10 == 0 || cfg.freq_hz == 0 {
+                let _ = idle_pin.set_low();
+                idle_pwm.pin_is_high = false;
+                idle_pwm.last_start_us = RpTime.micros();
+            } else {
+                let now = RpTime.micros();
+                let period_us = (1_000_000u32).saturating_div(core::cmp::max(1, cfg.freq_hz as u32));
+                let on_us = (period_us as u64 * (cfg.duty_x10 as u64) / 1000u64) as u32;
+                let elapsed = now.wrapping_sub(idle_pwm.last_start_us);
+                if elapsed >= period_us {
+                    idle_pwm.last_start_us = now;
+                    if on_us > 0 {
+                        let _ = idle_pin.set_high();
+                        idle_pwm.pin_is_high = true;
+                    } else {
+                        let _ = idle_pin.set_low();
+                        idle_pwm.pin_is_high = false;
+                    }
+                } else if idle_pwm.pin_is_high && elapsed >= on_us {
+                    let _ = idle_pin.set_low();
+                    idle_pwm.pin_is_high = false;
+                }
+            }
         }
 
         // Common tick: drain capture + drive outputs

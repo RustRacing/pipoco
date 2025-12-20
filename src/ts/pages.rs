@@ -17,6 +17,11 @@ pub const PAGE_LIMITS: u8 = 6; // New page for sensor limits + emergency trigger
 pub const PAGE_DIAG: u8 = 7;   // Read-only diagnostics summary
 pub const PAGE_DIAG_LOG: u8 = 8; // Read-only recent diagnostics events
 pub const PAGE_ANGLES: u8 = 9; // Per-cylinder angle + cam timeout config
+pub const PAGE_WUE: u8 = 10; // Warmup Enrichment config
+pub const PAGE_ASE: u8 = 11; // AfterStart Enrichment config
+pub const PAGE_IDLE: u8 = 12; // Idle control (open-loop)
+pub const PAGE_FAN: u8 = 13;  // Fan control (on/off with hysteresis)
+pub const PAGE_CL: u8 = 14;   // Closed-loop fuel (target AFR and gains)
 
 /// Exposes references to fuel and ignition tables as TS pages
 pub struct EcuStatePageStore<'a> {
@@ -199,6 +204,11 @@ pub struct EcuPageStore<'a> {
     pub sens: &'a mut SensorsCal,
     pub ae: &'a mut AeConfig,
     pub dfco: &'a mut DfcoConfig,
+    pub wue: &'a mut crate::enrichment::WueConfig,
+    pub ase: &'a mut crate::enrichment::AseConfig,
+    pub idle: &'a mut crate::actuators::IdleConfig,
+    pub fan: &'a mut crate::actuators::FanConfig,
+    pub cl: &'a mut crate::actuators::ClConfig,
     pub limits: &'a mut SensorsLimits,
     pub emerg_trig_map: &'a mut bool,
     pub emerg_trig_tps: &'a mut bool,
@@ -324,6 +334,11 @@ impl<'a> PageStore for EcuPageStore<'a> {
             PAGE_ANGLES => Some(68),
             PAGE_SENSORS => Some(128),
             PAGE_AE | PAGE_DFCO => Some(16),
+            PAGE_WUE => Some(8),
+            PAGE_ASE => Some(8),
+            PAGE_IDLE => Some(6),
+            PAGE_FAN => Some(6),
+            PAGE_CL => Some(8),
             _ => None,
         }
     }
@@ -478,6 +493,51 @@ impl<'a> PageStore for EcuPageStore<'a> {
                 w32(out, &mut idx, self.dfco.resume_hyst_ms);
                 Some(16)
             }
+            PAGE_WUE => {
+                if out.len() < 8 { return None; }
+                let mut idx = 0usize;
+                let w16s = |buf: &mut [u8], i: &mut usize, v: i16| { buf[*i..*i+2].copy_from_slice(&v.to_le_bytes()); *i += 2; };
+                out[idx] = self.wue.max_percent; idx += 1;
+                out[idx] = self.wue.min_percent; idx += 1;
+                w16s(out, &mut idx, self.wue.start_c);
+                w16s(out, &mut idx, self.wue.end_c);
+                out[idx] = 0; idx += 1; // reserved
+                out[idx] = 0; // reserved
+                Some(8)
+            }
+            PAGE_ASE => {
+                if out.len() < 8 { return None; }
+                let mut idx = 0usize;
+                out[idx] = self.ase.percent; idx += 2; // +1 reserved
+                let w32 = |buf:&mut [u8], i:&mut usize, v:u32| { buf[*i..*i+4].copy_from_slice(&v.to_le_bytes()); *i+=4; };
+                w32(out, &mut idx, self.ase.taper_time_ms);
+                let lock = (self.ase.lockout_ms as u16).to_le_bytes(); out[idx]=lock[0]; out[idx+1]=lock[1];
+                Some(8)
+            }
+            PAGE_IDLE => {
+                if out.len() < 6 { return None; }
+                out[0] = self.idle.enable as u8;
+                out[1..3].copy_from_slice(&self.idle.duty_x10.to_le_bytes());
+                out[3..5].copy_from_slice(&self.idle.freq_hz.to_le_bytes());
+                out[5] = 0;
+                Some(6)
+            }
+            PAGE_FAN => {
+                if out.len() < 6 { return None; }
+                out[0] = self.fan.enable as u8;
+                out[1..3].copy_from_slice(&self.fan.on_c.to_le_bytes());
+                out[3..5].copy_from_slice(&self.fan.off_c.to_le_bytes());
+                out[5] = 0;
+                Some(6)
+            }
+            PAGE_CL => {
+                if out.len() < 8 { return None; }
+                out[0] = self.cl.enable as u8; out[1] = 0;
+                out[2..4].copy_from_slice(&self.cl.target_afr_x10.to_le_bytes());
+                out[4..6].copy_from_slice(&self.cl.kp_i.to_le_bytes());
+                out[6..8].copy_from_slice(&self.cl.ki_i.to_le_bytes());
+                Some(8)
+            }
             _ => None,
         }
     }
@@ -579,6 +639,45 @@ impl<'a> PageStore for EcuPageStore<'a> {
                 self.dfco.delay_ms = delay;
                 self.dfco.resume_hyst_ms = hyst;
                 Ok(())
+            }
+            PAGE_WUE => {
+                if data.len() < 8 { return Err(PageError::WrongSize); }
+                let mut idx=0usize;
+                let maxp = data[idx]; idx+=1; let minp = data[idx]; idx+=1;
+                let r16s = |d:&[u8], i:&mut usize|->i16 { let v=i16::from_le_bytes([d[*i],d[*i+1]]); *i+=2; v };
+                let start_c = r16s(data,&mut idx); let end_c = r16s(data,&mut idx);
+                if maxp>100 || minp>100 || start_c>=end_c { return Err(PageError::Invalid); }
+                self.wue.max_percent = maxp; self.wue.min_percent = minp; self.wue.start_c = start_c; self.wue.end_c = end_c;
+                Ok(())
+            }
+            PAGE_ASE => {
+                if data.len() < 8 { return Err(PageError::WrongSize); }
+                let mut idx=0usize;
+                let pct = data[idx]; idx+=2; // skip reserved
+                let r32 = |d:&[u8], i:&mut usize|->u32 { let v=u32::from_le_bytes([d[*i],d[*i+1],d[*i+2],d[*i+3]]); *i+=4; v };
+                let taper = r32(data,&mut idx);
+                let lock = u16::from_le_bytes([data[idx], data[idx+1]]) as u32;
+                if pct>100 || taper==0 { return Err(PageError::Invalid); }
+                self.ase.percent = pct; self.ase.taper_time_ms = taper; self.ase.lockout_ms = lock;
+                Ok(())
+            }
+            PAGE_IDLE => {
+                if data.len() < 6 { return Err(PageError::WrongSize); }
+                let en = data[0] != 0; let duty = u16::from_le_bytes([data[1],data[2]]); let freq = u16::from_le_bytes([data[3],data[4]]);
+                if duty > 1000 || freq == 0 { return Err(PageError::Invalid); }
+                self.idle.enable = en; self.idle.duty_x10 = duty; self.idle.freq_hz = freq; Ok(())
+            }
+            PAGE_FAN => {
+                if data.len() < 6 { return Err(PageError::WrongSize); }
+                let en = data[0] != 0; let on = i16::from_le_bytes([data[1],data[2]]); let off = i16::from_le_bytes([data[3],data[4]]);
+                if on <= off { return Err(PageError::Invalid); }
+                self.fan.enable = en; self.fan.on_c = on; self.fan.off_c = off; Ok(())
+            }
+            PAGE_CL => {
+                if data.len() < 8 { return Err(PageError::WrongSize); }
+                let en = data[0] != 0; let target = u16::from_le_bytes([data[2],data[3]]); let kp = u16::from_le_bytes([data[4],data[5]]); let ki = u16::from_le_bytes([data[6],data[7]]);
+                if target < 100 || target > 220 { return Err(PageError::Invalid); }
+                self.cl.enable = en; self.cl.target_afr_x10 = target; self.cl.kp_i = kp; self.cl.ki_i = ki; Ok(())
             }
             PAGE_DIAG => Err(PageError::Invalid),
             PAGE_ANGLES => {

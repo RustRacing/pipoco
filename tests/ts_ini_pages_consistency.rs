@@ -24,6 +24,11 @@ fn ini_page_sizes_match_firmware() {
         fuel: &mut state.ipw_table,
         ign: &mut state.ignition_table,
         sens: &mut state.sensors_cal,
+        idle: &mut state.idle_config,
+        fan: &mut state.fan_config,
+        cl: &mut state.cl_config,
+        wue: &mut state.wue_config,
+        ase: &mut state.ase_config,
         ae: &mut state.ae_config,
         dfco: &mut state.dfco_config,
         limits: &mut state.sensors_limits,
@@ -48,5 +53,10 @@ fn ini_page_sizes_match_firmware() {
     assert_eq!(sizes.get("DiagLog").copied(), Some(diag_log_size));
     assert_eq!(sizes.get("Limits").copied(), Some(limits_size));
     assert_eq!(sizes.get("Angles").copied(), Some(angles_size));
+    // Newly added pages exist with expected sizes
+    assert_eq!(sizes.get("WUE").copied(), store.page_len(ecu_core::ts::pages::PAGE_WUE));
+    assert_eq!(sizes.get("ASE").copied(), store.page_len(ecu_core::ts::pages::PAGE_ASE));
+    assert_eq!(sizes.get("Idle").copied(), store.page_len(ecu_core::ts::pages::PAGE_IDLE));
+    assert_eq!(sizes.get("Fan").copied(), store.page_len(ecu_core::ts::pages::PAGE_FAN));
+    assert_eq!(sizes.get("CL").copied(), store.page_len(ecu_core::ts::pages::PAGE_CL));
 }
-

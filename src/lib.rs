@@ -29,6 +29,7 @@
 #![cfg_attr(not(test), no_std)]
 
 pub mod app;
+pub mod actuators;
 pub mod capture;
 pub mod config;
 pub mod constants;
@@ -103,6 +104,20 @@ pub fn scale_u16(value: u16, multiplier: u8) -> u16 {
     }
 }
 
+/// Apply a signed closed-loop delta in percent to a pulse width.
+/// Positive increases fuel, negative decreases.
+pub fn apply_cl_delta(pw: u16, cl_delta_percent: i16) -> u16 {
+    if cl_delta_percent == 0 { return pw; }
+    if cl_delta_percent > 0 {
+        let m = (100i16 + cl_delta_percent).clamp(0, 200) as u8;
+        scale_u16(pw, m)
+    } else {
+        // Decrease: scale by (100 - |delta|)
+        let m = (100i16 - (-cl_delta_percent)).clamp(0, 200) as u8;
+        scale_u16(pw, m)
+    }
+}
+
 /// Correction multipliers (100 = 1.0x)
 ///
 /// All corrections are represented as integers scaled by 100 to avoid
@@ -165,7 +180,12 @@ pub struct EcuState {
     pub diag_cam: diag::DiagState,
     pub diag_log: diag::DiagLog<16>,
     pub ae_config: enrichment::AeConfig,
+    pub wue_config: enrichment::WueConfig,
+    pub ase_config: enrichment::AseConfig,
     pub dfco_config: dfco::DfcoConfig,
+    pub idle_config: actuators::IdleConfig,
+    pub fan_config: actuators::FanConfig,
+    pub cl_config: actuators::ClConfig,
     pub inj_angle_btdc_x10: [u16; 16],
     pub tdc_per_cyl_x10: [u16; 16],
     pub tooth0_angle_x10: u16,
@@ -199,8 +219,13 @@ impl EcuState {
             diag_tps: diag::DiagState::new(),
             diag_cam: diag::DiagState::new(),
             diag_log: diag::DiagLog::new(),
-            ae_config: enrichment::AeConfig::DEFAULT,
+        ae_config: enrichment::AeConfig::DEFAULT,
+            wue_config: enrichment::WueConfig::DEFAULT,
+            ase_config: enrichment::AseConfig::DEFAULT,
             dfco_config: dfco::DfcoConfig::DEFAULT,
+            idle_config: actuators::IdleConfig::DEFAULT,
+            fan_config: actuators::FanConfig::DEFAULT,
+            cl_config: actuators::ClConfig::DEFAULT,
             inj_angle_btdc_x10: [0; 16],
             tdc_per_cyl_x10: [0; 16],
             tooth0_angle_x10: 0,
@@ -242,6 +267,43 @@ impl EcuState {
         pw = pw.clamp(MIN_PULSE_WIDTH_US, MAX_PULSE_WIDTH_US);
 
         pw
+    }
+
+    /// Calculate fuel and apply additional enrichment percentages (WUE/ASE/AE).
+    /// Percentages are 0..=100 where 0 means no extra fuel, 20 means +20%.
+    pub fn calculate_fuel_with_enrichments(
+        &self,
+        rpm: u16,
+        load: u16,
+        wue_percent: u8,
+        ase_percent: u8,
+        ae_percent: u8,
+        cl_delta_percent: i16,
+    ) -> u16 {
+        let mut pw = self.calculate_fuel(rpm, load);
+        // Apply enrichments multiplicatively: pw *= (100 + pct) / 100
+        let enrich = |val: u16, pct: u8| -> u16 {
+            let mult = (100u16 + pct as u16) as u8; // safe up to 200
+            scale_u16(val, mult)
+        };
+        pw = enrich(pw, wue_percent);
+        pw = enrich(pw, ase_percent);
+        pw = enrich(pw, ae_percent);
+        // Apply closed-loop delta (may increase or decrease)
+        pw = apply_cl_delta(pw, cl_delta_percent);
+        pw.clamp(MIN_PULSE_WIDTH_US, MAX_PULSE_WIDTH_US)
+    }
+
+    /// Deprecated: prefer calculate_fuel_with_enrichments with cl_delta_percent.
+    pub fn calculate_fuel_with_enrichments_no_cl(
+        &self,
+        rpm: u16,
+        load: u16,
+        wue_percent: u8,
+        ase_percent: u8,
+        ae_percent: u8,
+    ) -> u16 {
+        self.calculate_fuel_with_enrichments(rpm, load, wue_percent, ase_percent, ae_percent, 0)
     }
 
     /// Calculate ignition timing with corrections
