@@ -441,6 +441,11 @@ impl<'a> PageStore for EcuPageStore<'a> {
                                 diag::DiagCode::MapRange => 1u8,
                                 diag::DiagCode::TpsRange => 2u8,
                                 diag::DiagCode::CamMissing => 3u8,
+                                diag::DiagCode::LowVoltage => 4u8,
+                                diag::DiagCode::Overvoltage => 5u8,
+                                diag::DiagCode::MapFailureHighLoad => 6u8,
+                                diag::DiagCode::TpsMapPlausibility => 7u8,
+                                diag::DiagCode::KnockDetected => 8u8,
                             };
                             (c, ev.start_us, ev.end_us)
                         }

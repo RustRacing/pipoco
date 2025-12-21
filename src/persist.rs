@@ -20,11 +20,12 @@ pub trait KvStore {
     fn write(&mut self, key: &[u8], data: &[u8]) -> Result<(), KvError>;
 }
 
-/// RAM-backed test KV store for two small blobs
+/// RAM-backed test KV store for small blobs
 #[cfg(any(test, feature = "test-utils"))]
 pub struct RamKv<const N: usize> {
     fuel: Option<[u8; N]>,
     ign: Option<[u8; N]>,
+    ltft: Option<[u8; N]>,
 }
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -33,6 +34,7 @@ impl<const N: usize> RamKv<N> {
         Self {
             fuel: None,
             ign: None,
+            ltft: None,
         }
     }
 }
@@ -51,6 +53,8 @@ impl<const N: usize> KvStore for RamKv<N> {
             self.fuel.as_ref().map(|b| &b[..])
         } else if key == b"ign" {
             self.ign.as_ref().map(|b| &b[..])
+        } else if key == b"ltft" {
+            self.ltft.as_ref().map(|b| &b[..])
         } else {
             None
         };
@@ -75,6 +79,9 @@ impl<const N: usize> KvStore for RamKv<N> {
             Ok(())
         } else if key == b"ign" {
             self.ign = Some(arr);
+            Ok(())
+        } else if key == b"ltft" {
+            self.ltft = Some(arr);
             Ok(())
         } else {
             Err(KvError::Io)

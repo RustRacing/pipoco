@@ -1,7 +1,16 @@
 //! Minimal diagnostics (DTC-like) tracking for sensor range faults and cam status.
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum DiagCode { MapRange, TpsRange, CamMissing }
+pub enum DiagCode {
+    MapRange,
+    TpsRange,
+    CamMissing,
+    LowVoltage,
+    Overvoltage,
+    MapFailureHighLoad,
+    TpsMapPlausibility,
+    KnockDetected,
+}
 
 #[derive(Copy, Clone, Debug)]
 pub struct DiagState {

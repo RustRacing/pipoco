@@ -1,8 +1,9 @@
 pub mod convert;
 pub mod curve;
 pub mod model;
-pub mod thermistor;
+pub mod plausibility;
 pub mod slew;
+pub mod thermistor;
 
 /// Runtime sensor limits and clear timing
 #[derive(Copy, Clone)]

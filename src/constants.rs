@@ -187,3 +187,49 @@ pub mod safety {
     /// But if losses are spread out (ESD events), keep trying
     pub const SYNC_RECOVERY_WINDOW_US: u32 = 5_000_000; // 5 seconds
 }
+
+/// Load failure detection thresholds
+pub mod load_failure {
+    /// RPM threshold above which MAP failure is critical
+    /// At high RPM, running without load information risks engine damage
+    pub const LOAD_FAILURE_RPM_THRESHOLD: u16 = 4000;
+
+    /// RPM limit when in load-failure limp mode
+    pub const LOAD_FAILURE_LIMP_RPM: u16 = 3000;
+
+    /// Time required with good signal before exiting limp (microseconds)
+    pub const LOAD_FAILURE_RECOVERY_US: u32 = 2_000_000; // 2 seconds
+
+    /// Debounce time for sensor failure detection (microseconds)
+    /// Prevents brief glitches from triggering limp mode
+    pub const LOAD_FAILURE_DEBOUNCE_US: u32 = 100_000; // 100ms
+}
+
+/// Voltage monitoring thresholds
+pub mod voltage {
+    /// Critical low voltage (millivolts) - cut fuel to prevent damage
+    /// Below 8V, injectors and coils behave erratically
+    pub const BROWNOUT_CRITICAL_MV: u16 = 8000;
+
+    /// Warning low voltage (millivolts) - enter limp mode
+    /// Below 10V, reduce load on electrical system
+    pub const BROWNOUT_WARNING_MV: u16 = 10000;
+
+    /// Overvoltage threshold (millivolts) - load dump detection
+    /// Above 16.5V indicates alternator load dump or jump start
+    pub const OVERVOLTAGE_MV: u16 = 16500;
+
+    /// Recovery voltage (millivolts) - exit limp mode
+    /// Must be above this for sustained period to exit limp
+    pub const RECOVERY_MV: u16 = 11500;
+
+    /// Time required at recovery voltage before exiting limp (microseconds)
+    pub const RECOVERY_TIME_US: u32 = 2_000_000; // 2 seconds
+
+    /// RPM limit during voltage warning (limp mode)
+    pub const LIMP_RPM_LIMIT: u16 = 3000;
+
+    /// Number of consecutive critical readings before fuel cut
+    /// Prevents single-sample glitches from cutting fuel
+    pub const CRITICAL_DEBOUNCE_COUNT: u8 = 3;
+}
