@@ -1,0 +1,36 @@
+[package]
+name = "pipoco-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+ecu-spec = { path = "../ecu-spec" }
+
+[[bin]]
+name = "ts_proto_dispatch"
+path = "fuzz_targets/ts_proto_dispatch.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "persistence_decoder"
+path = "fuzz_targets/persistence_decoder.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "trigger_decoder"
+path = "fuzz_targets/trigger_decoder.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+members = ["."]

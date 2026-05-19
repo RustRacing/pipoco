@@ -27,7 +27,7 @@ Adjust macros/constants if your wiring differs.
 
 ## 3) TunerStudio Project Setup
 
-- Use `ts/IPW-ECU.ini` as your project INI.
+- Use `tests/assets/IPW-ECU.ini` from the repo as your project INI.
   - Signature: `IPW-ECU V0.1`
   - OUTPC fields are defined and ordered to match firmware.
   - Pages:
@@ -55,7 +55,7 @@ Adjust macros/constants if your wiring differs.
 ## 6) Troubleshooting
 
 - If TS doesn’t connect: confirm USB CDC enumerates and choose the correct COM/tty.
-- If OUTPC fields look wrong: confirm your project uses `ts/IPW-ECU.ini` and that the signature matches.
+- If OUTPC fields look wrong: confirm your project uses `tests/assets/IPW-ECU.ini` and that the signature matches.
 - If Fuel/Ign pages won’t burn: confirm `flash-kv` is enabled and your flash reservation doesn’t overlap your program.
 - If VBATT is zero or bogus: check the `vbatt-vsys` feature matches your wiring on ADC29.
 
@@ -74,4 +74,3 @@ Adjust macros/constants if your wiring differs.
 - Edit sensors calibration (page 3) to match your MAP/TPS and thermistor curves.
 - Use AE/DFCO pages to tune transient enrichment and decel fuel cut.
 - For more robustness, add a proper VBATT channel or enable `vbatt-vsys`.
-

@@ -1,0 +1,14 @@
+[package]
+name = "ecu-control"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "ecu_control"
+path = "src/lib.rs"
+
+[dependencies]
+ecu-domain = { path = "../ecu-domain" }
+
+[features]
+default = []

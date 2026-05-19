@@ -1,0 +1,98 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "FormalConformanceSummary",
+  "description": "Schema for target/formal-evidence/latest/conformance.json emitted by tools/verify_formal.sh.",
+  "type": "object",
+  "required": [
+    "status",
+    "total",
+    "rows"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["pass", "fail"]
+    },
+    "total": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "rows": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "field",
+          "section",
+          "owner",
+          "artifact_path",
+          "reducer_path",
+          "tolerance",
+          "status",
+          "blocker",
+          "conformance"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "field": {
+            "type": "string",
+            "minLength": 1
+          },
+          "section": {
+            "type": "string"
+          },
+          "owner": {
+            "type": "string",
+            "minLength": 1
+          },
+          "artifact_path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "reducer_path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "tolerance": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "type": "string",
+            "enum": ["covered", "adapter-contract"]
+          },
+          "blocker": {
+            "type": "string"
+          },
+          "conformance": {
+            "type": "string",
+            "enum": ["covered", "adapter-contract"]
+          },
+          "contract_refs": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "conformance": {
+                  "const": "adapter-contract"
+                }
+              },
+              "required": ["conformance"]
+            },
+            "then": {
+              "required": ["contract_refs"]
+            }
+          }
+        ]
+      }
+    }
+  }
+}

@@ -193,7 +193,7 @@ fn test_cold_engine_timing_safe() {
     state.init_ignition_table();
 
     // Cold engine should have reduced timing
-    state.ignition_corrections.clt_correction = -5; // Cold
+    state.ignition_corrections_mut().clt_correction = -5; // Cold
 
     // Test at idle
     let timing_idle = state.calculate_ignition_timing(850, 40);
@@ -258,8 +258,8 @@ fn test_corrupted_table_still_safe() {
     let mut state = EcuState::new();
 
     // Simulate corrupted table with extreme values
-    state.ignition_table[8][8] = 100; // 100° BTDC (impossible/dangerous)
-    state.ignition_table[0][0] = -50; // -50° ATDC (very retarded)
+    state.config.ignition_table[8][8] = 100; // 100° BTDC (impossible/dangerous)
+    state.config.ignition_table[0][0] = -50; // -50° ATDC (very retarded)
 
     // Even with corrupted values, calculation should clamp
     let timing1 = state.calculate_ignition_timing(3500, 100);
@@ -281,7 +281,7 @@ fn test_sensor_failure_safe_timing() {
     state.init_ignition_table();
 
     // Simulate sensor failures with extreme values
-    state.battery_voltage_mv = 5000; // Very low (5V)
+    state.set_battery_voltage_mv(5000); // Very low (5V)
 
     let dwell = state.calculate_dwell();
 

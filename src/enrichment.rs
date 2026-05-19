@@ -83,18 +83,29 @@ impl Default for AeState {
 // Warmup Enrichment (WUE): linear percent vs CLT
 #[derive(Copy, Clone)]
 pub struct WueConfig {
-    pub start_c: i16,     // CLT at which enrichment is max
-    pub end_c: i16,       // CLT at which enrichment goes to min (typically 0)
-    pub max_percent: u8,  // enrichment at start_c (e.g., 40%)
-    pub min_percent: u8,  // enrichment at end_c (typically 0%)
+    pub start_c: i16,    // CLT at which enrichment is max
+    pub end_c: i16,      // CLT at which enrichment goes to min (typically 0)
+    pub max_percent: u8, // enrichment at start_c (e.g., 40%)
+    pub min_percent: u8, // enrichment at end_c (typically 0%)
 }
 
 impl WueConfig {
-    pub const DEFAULT: Self = Self { start_c: -20, end_c: 60, max_percent: 40, min_percent: 0 };
+    pub const DEFAULT: Self = Self {
+        start_c: -20,
+        end_c: 60,
+        max_percent: 40,
+        min_percent: 0,
+    };
     pub fn compute_percent(&self, clt_c: i16) -> u8 {
-        if self.start_c >= self.end_c { return 0; }
-        if clt_c <= self.start_c { return self.max_percent; }
-        if clt_c >= self.end_c { return self.min_percent; }
+        if self.start_c >= self.end_c {
+            return 0;
+        }
+        if clt_c <= self.start_c {
+            return self.max_percent;
+        }
+        if clt_c >= self.end_c {
+            return self.min_percent;
+        }
         let span = (self.end_c - self.start_c) as i32;
         let pos = (clt_c - self.start_c) as i32;
         let max = self.max_percent as i32;
@@ -107,12 +118,18 @@ impl WueConfig {
 // AfterStart Enrichment (ASE): trigger on exit from cranking, taper to 0
 #[derive(Copy, Clone)]
 pub struct AseConfig {
-    pub percent: u8,      // initial enrichment percent
+    pub percent: u8, // initial enrichment percent
     pub taper_time_ms: u32,
-    pub lockout_ms: u32,  // minimum time between triggers
+    pub lockout_ms: u32, // minimum time between triggers
 }
 
-impl AseConfig { pub const DEFAULT: Self = Self { percent: 20, taper_time_ms: 5000, lockout_ms: 2000 }; }
+impl AseConfig {
+    pub const DEFAULT: Self = Self {
+        percent: 20,
+        taper_time_ms: 5000,
+        lockout_ms: 2000,
+    };
+}
 
 #[derive(Copy, Clone)]
 pub struct AseState {
@@ -122,7 +139,13 @@ pub struct AseState {
 }
 
 impl AseState {
-    pub const fn new() -> Self { Self { active: false, start_us: 0, last_trigger_us: 0 } }
+    pub const fn new() -> Self {
+        Self {
+            active: false,
+            start_us: 0,
+            last_trigger_us: 0,
+        }
+    }
     pub fn update(&mut self, now_us: u32, just_started: bool, cfg: &AseConfig) -> u8 {
         if just_started {
             let since = now_us.wrapping_sub(self.last_trigger_us);
@@ -132,13 +155,24 @@ impl AseState {
                 self.last_trigger_us = now_us;
             }
         }
-        if !self.active { return 0; }
+        if !self.active {
+            return 0;
+        }
         let elapsed = now_us.wrapping_sub(self.start_us) as u64;
         let dur = (cfg.taper_time_ms as u64) * 1000;
-        if elapsed >= dur { self.active = false; return 0; }
+        if elapsed >= dur {
+            self.active = false;
+            return 0;
+        }
         let remaining = dur - elapsed;
         let pct = (cfg.percent as u64) * remaining / dur;
         pct as u8
+    }
+}
+
+impl Default for AseState {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -180,15 +214,24 @@ mod tests {
 
     #[test]
     fn test_wue_linear_profile() {
-        let w = WueConfig { start_c: -20, end_c: 60, max_percent: 40, min_percent: 0 };
+        let w = WueConfig {
+            start_c: -20,
+            end_c: 60,
+            max_percent: 40,
+            min_percent: 0,
+        };
         assert_eq!(w.compute_percent(-30), 40); // below start
-        assert_eq!(w.compute_percent(60), 0);   // at end
+        assert_eq!(w.compute_percent(60), 0); // at end
         assert!(w.compute_percent(20) > 0 && w.compute_percent(20) < 40);
     }
 
     #[test]
     fn test_ase_trigger_and_taper() {
-        let cfg = AseConfig { percent: 20, taper_time_ms: 1000, lockout_ms: 500 };
+        let cfg = AseConfig {
+            percent: 20,
+            taper_time_ms: 1000,
+            lockout_ms: 500,
+        };
         let mut st = AseState::new();
         // Trigger on just_started
         let p0 = st.update(0, true, &cfg);

@@ -13,7 +13,12 @@ pub struct SlewLimiter {
 
 impl SlewLimiter {
     pub const fn new(max_rate_per_s: i32) -> Self {
-        Self { last_value: 0, last_ts_us: 0, max_rate_per_s, initialized: false }
+        Self {
+            last_value: 0,
+            last_ts_us: 0,
+            max_rate_per_s,
+            initialized: false,
+        }
     }
 
     /// Apply slew limiting to `value` at time `now_us`.
@@ -34,7 +39,13 @@ impl SlewLimiter {
         // Maximum allowed delta = rate * dt
         let max_delta = ((self.max_rate_per_s as i64) * (dt_us as i64) / 1_000_000) as i32;
         let delta = value.saturating_sub(self.last_value);
-        let clamped_delta = if delta > max_delta { max_delta } else if delta < -max_delta { -max_delta } else { delta };
+        let clamped_delta = if delta > max_delta {
+            max_delta
+        } else if delta < -max_delta {
+            -max_delta
+        } else {
+            delta
+        };
         let new_val = self.last_value.saturating_add(clamped_delta);
         self.last_value = new_val;
         self.last_ts_us = now_us;
@@ -53,7 +64,7 @@ mod tests {
         let mut now = 0u32;
         assert_eq!(sl.apply(now, 1000), 1000);
         now += 100_000; // 0.1s -> max delta 10
-        // request big jump: +200 -> expect +10
+                        // request big jump: +200 -> expect +10
         let v = sl.apply(now, 1200);
         assert_eq!(v, 1010);
         now += 900_000; // 0.9s -> max delta 90
@@ -71,4 +82,3 @@ mod tests {
         assert_eq!(v, 55);
     }
 }
-

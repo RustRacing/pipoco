@@ -25,7 +25,11 @@ fn bilinear_vs_corner_within_bounds_fuel() {
     let dx = (v01 as i32 - v00 as i32).unsigned_abs();
     let dy = (v10 as i32 - v00 as i32).unsigned_abs();
     let delta = bil.abs_diff(nn);
-    assert!(delta as u32 <= (dx + dy) / 2 + 8, "delta={delta}, bound={}", (dx + dy)/2);
+    assert!(
+        delta as u32 <= (dx + dy) / 2 + 8,
+        "delta={delta}, bound={}",
+        (dx + dy) / 2
+    );
 }
 
 #[test]
@@ -47,5 +51,9 @@ fn bilinear_vs_corner_within_bounds_ign() {
     let dx = (v01 - v00).unsigned_abs() as u32;
     let dy = (v10 - v00).unsigned_abs() as u32;
     let delta = (bil - nn).unsigned_abs() as u32;
-    assert!(delta <= (dx + dy) / 2 + 1, "delta={delta}, bound={}", (dx + dy)/2);
+    assert!(
+        delta <= (dx + dy) / 2 + 1,
+        "delta={delta}, bound={}",
+        (dx + dy) / 2
+    );
 }

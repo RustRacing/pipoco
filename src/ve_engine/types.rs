@@ -92,8 +92,8 @@ impl AfrTable {
 
         // Set AFR based on load
         for (load_idx, &load) in load_bins.iter().enumerate() {
-            for rpm_idx in 0..16 {
-                values[load_idx][rpm_idx] = if load >= 120 {
+            for cell in &mut values[load_idx] {
+                *cell = if load >= 120 {
                     125 // Rich for power (12.5:1)
                 } else if load >= 60 {
                     147 // Stoich (14.7:1)

@@ -1,0 +1,11 @@
+[package]
+name = "ecu-domain"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "ecu_domain"
+path = "src/lib.rs"
+
+[features]
+default = []

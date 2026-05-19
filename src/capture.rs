@@ -172,6 +172,7 @@ impl CaptureFrame {
     }
 
     /// Create a frame from current engine state
+    #[allow(clippy::too_many_arguments)]
     pub fn from_state(
         timestamp_us: u32,
         rpm: u16,
@@ -187,9 +188,15 @@ impl CaptureFrame {
         let stft_scaled = ((stft_x10 / 10) + 128).clamp(0, 255) as u8;
 
         let mut status = 0u8;
-        if synced { status |= 0x01; }
-        if limp { status |= 0x02; }
-        if knock { status |= 0x04; }
+        if synced {
+            status |= 0x01;
+        }
+        if limp {
+            status |= 0x02;
+        }
+        if knock {
+            status |= 0x04;
+        }
 
         Self {
             timestamp_us,
@@ -372,11 +379,7 @@ impl<const N: usize> TriggeredCapture<N> {
         }
 
         // Calculate actual buffer index
-        let start = if self.count == N {
-            self.head
-        } else {
-            0
-        };
+        let start = if self.count == N { self.head } else { 0 };
         let actual = (start + index) % N;
         Some(&self.buffer[actual])
     }
@@ -471,9 +474,7 @@ mod tests {
 
     #[test]
     fn test_capture_frame_from_state() {
-        let frame = CaptureFrame::from_state(
-            1000, 3000, 800, 50, 12500, 25, true, false, true,
-        );
+        let frame = CaptureFrame::from_state(1000, 3000, 800, 50, 12500, 25, true, false, true);
 
         assert_eq!(frame.timestamp_us, 1000);
         assert_eq!(frame.rpm, 3000);
@@ -659,7 +660,7 @@ mod tests {
 
         // Try to add samples too fast
         capture.sample(CaptureFrame::new(), 0);
-        capture.sample(CaptureFrame::new(), 5_000);  // Too soon
+        capture.sample(CaptureFrame::new(), 5_000); // Too soon
         capture.sample(CaptureFrame::new(), 10_000); // OK
         capture.sample(CaptureFrame::new(), 15_000); // Too soon
         capture.sample(CaptureFrame::new(), 20_000); // OK
@@ -688,7 +689,13 @@ mod tests {
 
         // Add pre-trigger samples with stable RPM
         for i in 0..5u32 {
-            capture.sample(CaptureFrame { rpm: 3000, ..CaptureFrame::new() }, i * 1000);
+            capture.sample(
+                CaptureFrame {
+                    rpm: 3000,
+                    ..CaptureFrame::new()
+                },
+                i * 1000,
+            );
         }
 
         // Trigger
@@ -696,14 +703,35 @@ mod tests {
         assert_eq!(capture.state, CaptureState::Capturing);
 
         // Add exactly 3 post-trigger samples
-        capture.sample(CaptureFrame { rpm: 3000, ..CaptureFrame::new() }, 10_000);
+        capture.sample(
+            CaptureFrame {
+                rpm: 3000,
+                ..CaptureFrame::new()
+            },
+            10_000,
+        );
         assert_eq!(capture.state, CaptureState::Capturing);
 
-        capture.sample(CaptureFrame { rpm: 3000, ..CaptureFrame::new() }, 11_000);
+        capture.sample(
+            CaptureFrame {
+                rpm: 3000,
+                ..CaptureFrame::new()
+            },
+            11_000,
+        );
         assert_eq!(capture.state, CaptureState::Capturing);
 
-        capture.sample(CaptureFrame { rpm: 3000, ..CaptureFrame::new() }, 12_000);
-        assert!(capture.is_complete(), "Should be complete after 3 post-trigger samples");
+        capture.sample(
+            CaptureFrame {
+                rpm: 3000,
+                ..CaptureFrame::new()
+            },
+            12_000,
+        );
+        assert!(
+            capture.is_complete(),
+            "Should be complete after 3 post-trigger samples"
+        );
 
         // Verify sample count (5 pre + 3 post = 8)
         assert_eq!(capture.sample_count(), 8);
@@ -719,11 +747,14 @@ mod tests {
 
         // Add pre-trigger samples with stable RPM, using timestamp to mark which sample
         for i in 0..5u32 {
-            capture.sample(CaptureFrame {
-                rpm: 3000,
-                timestamp_us: (i + 1) * 1000, // Use timestamp to identify samples
-                ..CaptureFrame::new()
-            }, i * 1000);
+            capture.sample(
+                CaptureFrame {
+                    rpm: 3000,
+                    timestamp_us: (i + 1) * 1000, // Use timestamp to identify samples
+                    ..CaptureFrame::new()
+                },
+                i * 1000,
+            );
         }
 
         // Last sample before trigger has timestamp 5000
@@ -731,11 +762,28 @@ mod tests {
 
         // Get the trigger sample
         let trigger_sample = capture.get_trigger_sample().unwrap();
-        assert_eq!(trigger_sample.timestamp_us, 5000, "Trigger sample should be the last pre-trigger sample");
+        assert_eq!(
+            trigger_sample.timestamp_us, 5000,
+            "Trigger sample should be the last pre-trigger sample"
+        );
 
         // Complete the capture
-        capture.sample(CaptureFrame { rpm: 3000, timestamp_us: 6000, ..CaptureFrame::new() }, 10_000);
-        capture.sample(CaptureFrame { rpm: 3000, timestamp_us: 7000, ..CaptureFrame::new() }, 11_000);
+        capture.sample(
+            CaptureFrame {
+                rpm: 3000,
+                timestamp_us: 6000,
+                ..CaptureFrame::new()
+            },
+            10_000,
+        );
+        capture.sample(
+            CaptureFrame {
+                rpm: 3000,
+                timestamp_us: 7000,
+                ..CaptureFrame::new()
+            },
+            11_000,
+        );
 
         assert!(capture.is_complete());
 
@@ -752,16 +800,40 @@ mod tests {
         capture.config.post_trigger_samples = 1;
 
         // Trigger and complete
-        capture.sample(CaptureFrame { rpm: 100, ..CaptureFrame::new() }, 0);
+        capture.sample(
+            CaptureFrame {
+                rpm: 100,
+                ..CaptureFrame::new()
+            },
+            0,
+        );
         capture.trigger(CaptureTrigger::Manual);
-        capture.sample(CaptureFrame { rpm: 200, ..CaptureFrame::new() }, 1000);
+        capture.sample(
+            CaptureFrame {
+                rpm: 200,
+                ..CaptureFrame::new()
+            },
+            1000,
+        );
 
         assert!(capture.is_complete());
         let count_before = capture.sample_count();
 
         // Try to add more samples after complete
-        capture.sample(CaptureFrame { rpm: 300, ..CaptureFrame::new() }, 2000);
-        capture.sample(CaptureFrame { rpm: 400, ..CaptureFrame::new() }, 3000);
+        capture.sample(
+            CaptureFrame {
+                rpm: 300,
+                ..CaptureFrame::new()
+            },
+            2000,
+        );
+        capture.sample(
+            CaptureFrame {
+                rpm: 400,
+                ..CaptureFrame::new()
+            },
+            3000,
+        );
 
         // Count should not change
         assert_eq!(capture.sample_count(), count_before);
@@ -800,12 +872,30 @@ mod tests {
         capture.config.post_trigger_samples = 2;
 
         // Normal samples (1000 RPM, 1ms apart = stable)
-        capture.sample(CaptureFrame { rpm: 3000, ..CaptureFrame::new() }, 0);
-        capture.sample(CaptureFrame { rpm: 3000, ..CaptureFrame::new() }, 1000);
+        capture.sample(
+            CaptureFrame {
+                rpm: 3000,
+                ..CaptureFrame::new()
+            },
+            0,
+        );
+        capture.sample(
+            CaptureFrame {
+                rpm: 3000,
+                ..CaptureFrame::new()
+            },
+            1000,
+        );
         assert!(capture.is_armed());
 
         // Sudden spike (3000 -> 3100 in 1ms = 100,000 RPM/sec)
-        capture.sample(CaptureFrame { rpm: 3100, ..CaptureFrame::new() }, 2000);
+        capture.sample(
+            CaptureFrame {
+                rpm: 3100,
+                ..CaptureFrame::new()
+            },
+            2000,
+        );
 
         // Should trigger
         assert_eq!(capture.state, CaptureState::Capturing);
@@ -831,8 +921,12 @@ mod tests {
             // Should trigger with enabled type
             capture.sample(CaptureFrame::new(), 0);
             capture.trigger(trigger_type);
-            assert_eq!(capture.trigger_reason, Some(trigger_type),
-                "Trigger {:?} should be enabled", trigger_type);
+            assert_eq!(
+                capture.trigger_reason,
+                Some(trigger_type),
+                "Trigger {:?} should be enabled",
+                trigger_type
+            );
 
             // Reset and try different type
             capture.reset();
@@ -842,8 +936,12 @@ mod tests {
                 CaptureTrigger::Manual
             };
             capture.trigger(other_type);
-            assert!(capture.trigger_reason.is_none(),
-                "Trigger {:?} should be disabled when only {:?} is enabled", other_type, trigger_type);
+            assert!(
+                capture.trigger_reason.is_none(),
+                "Trigger {:?} should be disabled when only {:?} is enabled",
+                other_type,
+                trigger_type
+            );
         }
     }
 
@@ -857,11 +955,14 @@ mod tests {
 
         // Add fewer samples than buffer size, stable RPM with distinct timestamps
         for i in 0..3u32 {
-            capture.sample(CaptureFrame {
-                rpm: 3000,
-                timestamp_us: (i + 1) * 1000,
-                ..CaptureFrame::new()
-            }, i * 1000);
+            capture.sample(
+                CaptureFrame {
+                    rpm: 3000,
+                    timestamp_us: (i + 1) * 1000,
+                    ..CaptureFrame::new()
+                },
+                i * 1000,
+            );
         }
 
         assert_eq!(capture.sample_count(), 3);
@@ -870,8 +971,22 @@ mod tests {
         capture.trigger(CaptureTrigger::Manual);
 
         // Add post-trigger samples
-        capture.sample(CaptureFrame { rpm: 3000, timestamp_us: 4000, ..CaptureFrame::new() }, 10_000);
-        capture.sample(CaptureFrame { rpm: 3000, timestamp_us: 5000, ..CaptureFrame::new() }, 11_000);
+        capture.sample(
+            CaptureFrame {
+                rpm: 3000,
+                timestamp_us: 4000,
+                ..CaptureFrame::new()
+            },
+            10_000,
+        );
+        capture.sample(
+            CaptureFrame {
+                rpm: 3000,
+                timestamp_us: 5000,
+                ..CaptureFrame::new()
+            },
+            11_000,
+        );
 
         assert!(capture.is_complete());
         assert_eq!(capture.sample_count(), 5); // 3 pre + 2 post

@@ -5,7 +5,8 @@
 //! any release or hardware deployment.
 
 use ecu_core::hal::TimeSource;
-use ecu_core::{scale_u16, Channel, EcuState, IpwTable, Scheduler, TriggerDecoder};
+use ecu_core::scheduler::{Channel, Scheduler};
+use ecu_core::{scale_u16, EcuState, IpwTable, Micros, TriggerDecoder};
 use std::cell::Cell;
 
 // Mock time source
@@ -42,14 +43,14 @@ fn test_max_fuel_clamp_enforced() {
     // Set extremely high base pulse width
     for row in 0..16 {
         for col in 0..16 {
-            state.ipw_table[row][col] = u16::MAX;
+            state.config.ipw_table[row][col] = u16::MAX;
         }
     }
 
     // Set maximum corrections
-    state.corrections.clt = 255;
-    state.corrections.iat = 255;
-    state.corrections.vbatt = 255;
+    state.corrections_mut().clt = 255;
+    state.corrections_mut().iat = 255;
+    state.corrections_mut().vbatt = 255;
 
     // Calculate at all operating points
     for rpm in [500, 1000, 2000, 4000, 6000, 8000] {
@@ -70,14 +71,14 @@ fn test_min_fuel_clamp_enforced() {
     // Set extremely low base pulse width
     for row in 0..16 {
         for col in 0..16 {
-            state.ipw_table[row][col] = 1; // Minimum possible value
+            state.config.ipw_table[row][col] = 1; // Minimum possible value
         }
     }
 
     // Set minimum corrections (almost zero)
-    state.corrections.clt = 1;
-    state.corrections.iat = 1;
-    state.corrections.vbatt = 1;
+    state.corrections_mut().clt = 1;
+    state.corrections_mut().iat = 1;
+    state.corrections_mut().vbatt = 1;
 
     // Calculate at all operating points
     for rpm in [500, 1000, 2000, 4000, 6000, 8000] {
@@ -96,9 +97,9 @@ fn test_runaway_fuel_protection_table_corruption() {
     let mut state = EcuState::new();
 
     // Simulate table corruption with random high values
-    state.ipw_table[7][7] = u16::MAX;
-    state.ipw_table[0][0] = u16::MAX;
-    state.ipw_table[15][15] = u16::MAX;
+    state.config.ipw_table[7][7] = u16::MAX;
+    state.config.ipw_table[0][0] = u16::MAX;
+    state.config.ipw_table[15][15] = u16::MAX;
 
     // Even with corrupted table, should never exceed max
     let pw1 = state.calculate_fuel(3500, 90); // Middle of table
@@ -115,8 +116,8 @@ fn test_vbatt_correction_low_voltage_limit() {
     let mut state = EcuState::new();
 
     // Low voltage should increase pulse width, but not excessively
-    state.ipw_table[8][5] = 10000; // 10ms base
-    state.corrections.vbatt = 200; // 2.0x correction (compensate for slow injector)
+    state.config.ipw_table[8][5] = 10000; // 10ms base
+    state.corrections_mut().vbatt = 200; // 2.0x correction (compensate for slow injector)
 
     let pw = state.calculate_fuel(3000, 100);
 
@@ -139,12 +140,12 @@ fn test_overflow_protection_in_corrections() {
 #[test]
 fn test_combined_corrections_saturation() {
     let mut state = EcuState::new();
-    state.ipw_table[8][5] = 8000; // 8ms base
+    state.config.ipw_table[8][5] = 8000; // 8ms base
 
     // Multiple high corrections should saturate gracefully
-    state.corrections.clt = 200; // 2.0x
-    state.corrections.iat = 150; // 1.5x
-    state.corrections.vbatt = 120; // 1.2x
+    state.corrections_mut().clt = 200; // 2.0x
+    state.corrections_mut().iat = 150; // 1.5x
+    state.corrections_mut().vbatt = 120; // 1.2x
 
     let pw = state.calculate_fuel(3000, 100);
 
@@ -182,7 +183,7 @@ fn test_loss_of_sync_detection_timeout() {
         !decoder.synced(),
         "Failed to detect sync loss after timeout"
     );
-    assert_eq!(decoder.rpm(), 0, "RPM should be 0 after sync loss");
+    assert_eq!(decoder.rpm().raw(), 0, "RPM should be 0 after sync loss");
 }
 
 #[test]
@@ -202,7 +203,7 @@ fn test_no_premature_sync_on_noise() {
 
     // Should NOT sync on noise
     assert!(!decoder.synced(), "Prematurely synced on noisy signal");
-    assert_eq!(decoder.rpm(), 0, "RPM should be 0 before valid sync");
+    assert_eq!(decoder.rpm().raw(), 0, "RPM should be 0 before valid sync");
 }
 
 #[test]
@@ -240,7 +241,7 @@ fn test_resync_after_loss() {
 
     // Should regain sync
     assert!(decoder.synced(), "Failed to resync after loss");
-    assert!(decoder.rpm() > 0, "RPM should be > 0 after resync");
+    assert!(decoder.rpm().raw() > 0, "RPM should be > 0 after resync");
 }
 
 #[test]
@@ -262,7 +263,7 @@ fn test_false_sync_protection() {
     // This is a weak test - real implementation should require seeing gap twice
     // For now, we just verify RPM is reasonable if it does sync
     if decoder.synced() {
-        let rpm = decoder.rpm();
+        let rpm = decoder.rpm().raw();
         assert!(
             (500..=8000).contains(&rpm),
             "RPM out of reasonable range: {rpm}"
@@ -308,7 +309,7 @@ fn test_table_cell_independence_no_bleeding() {
     // Table is [load_idx][rpm_idx]
 
     // Modify cell at RPM=3000 (idx 5), Load=100 (idx 8)
-    state.ipw_table[8][5] = 15000;
+    state.config.ipw_table[8][5] = 15000;
 
     // Verify neighboring cells are not affected
     let neighbors = [
@@ -344,12 +345,12 @@ fn test_scheduler_overflow_graceful() {
     use ecu_core::constants::scheduler::MAX_EVENTS;
     // Fill scheduler to capacity
     for i in 0..MAX_EVENTS {
-        let success = scheduler.schedule(1000 * i as u32, Channel::INJ1, true);
+        let success = scheduler.schedule(Micros::new(1000 * i as u32), Channel::INJ1, true);
         assert!(success, "Should accept event {i}");
     }
 
     // Try to schedule one more (should fail gracefully, not crash)
-    let success = scheduler.schedule(9000, Channel::INJ1, true);
+    let success = scheduler.schedule(Micros::new(9000), Channel::INJ1, true);
     assert!(!success, "Should reject event when full");
 }
 
@@ -359,7 +360,7 @@ fn test_scheduler_time_wrapping() {
 
     // Schedule event near u32::MAX
     let event_time = u32::MAX - 1000;
-    scheduler.schedule(event_time, Channel::INJ1, true);
+    scheduler.schedule(Micros::new(event_time), Channel::INJ1, true);
 
     // Mock output
     struct MockOutput {
@@ -386,7 +387,7 @@ fn test_scheduler_time_wrapping() {
 
     // Check event at time that wraps around u32
     let now = 100; // Wrapped past u32::MAX
-    scheduler.check_and_execute(now, &mut outputs[..]);
+    scheduler.check_and_execute(Micros::new(now), &mut outputs[..]);
 
     // Event should have executed despite time wrapping
     assert!(output.state.get(), "Event should execute after time wrap");
@@ -401,18 +402,18 @@ fn test_cold_boot_state_initialization() {
     let state = EcuState::new();
 
     // Verify safe initial state
-    assert_eq!(state.rpm, 0);
-    assert!(!state.synced);
-    assert_eq!(state.tooth_count, 0);
-    assert_eq!(state.corrections.clt, 100);
-    assert_eq!(state.corrections.iat, 100);
-    assert_eq!(state.corrections.vbatt, 100);
+    assert_eq!(state.rpm(), 0);
+    assert!(!state.synced());
+    assert_eq!(state.tooth_count(), 0);
+    assert_eq!(state.corrections().clt, 100);
+    assert_eq!(state.corrections().iat, 100);
+    assert_eq!(state.corrections().vbatt, 100);
 
     // Verify table is initialized with safe values
     for row in 0..16 {
         for col in 0..16 {
             assert_eq!(
-                state.ipw_table[row][col], 1000,
+                state.config.ipw_table[row][col], 1000,
                 "Table cell [{row},{col}] not initialized to safe default"
             );
         }
@@ -435,7 +436,7 @@ fn test_trigger_decoder_cold_boot_state() {
 
     // Verify safe initial state
     assert!(!decoder.synced());
-    assert_eq!(decoder.rpm(), 0);
+    assert_eq!(decoder.rpm().raw(), 0);
     assert_eq!(decoder.tooth(), 0);
 }
 
@@ -448,13 +449,13 @@ fn test_static_memory_bounds() {
     let state = EcuState::new();
 
     // Verify table dimensions are correct
-    assert_eq!(state.ipw_table.len(), 16);
-    assert_eq!(state.ipw_table[0].len(), 16);
+    assert_eq!(state.config.ipw_table.len(), 16);
+    assert_eq!(state.config.ipw_table[0].len(), 16);
 
     // Verify we can safely access all cells
     for row in 0..16 {
         for col in 0..16 {
-            let _ = state.ipw_table[row][col];
+            let _ = state.config.ipw_table[row][col];
         }
     }
 }
@@ -537,7 +538,7 @@ fn test_correction_factor_zero() {
     let mut state = EcuState::new();
 
     // Zero correction should result in minimum fuel
-    state.corrections.clt = 0;
+    state.corrections_mut().clt = 0;
 
     let pw = state.calculate_fuel(3000, 60);
 

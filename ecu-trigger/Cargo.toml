@@ -1,0 +1,14 @@
+[package]
+name = "ecu-trigger"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "ecu_trigger"
+path = "src/lib.rs"
+
+[dependencies]
+ecu-domain = { path = "../ecu-domain" }
+
+[dev-dependencies]
+proptest = "1.4"

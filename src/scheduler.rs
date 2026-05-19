@@ -1,10 +1,22 @@
-//! Event scheduler for timed output control
+//! Event scheduler for timed output control.
 //!
-//! Manages a fixed-size queue of timed events for controlling injector and ignition outputs.
+//! This module assumes a single-writer context for all mutable state.
+//! Callers must ensure mutual exclusion between ISR and main-loop access
+//! with `cortex_m::interrupt::free` or an equivalent critical section.
+//!
+//! ISR-facing entry points:
+//! - `schedule`
+//! - `check_and_execute`
+//! - `deactivate_all`
+//!
 //! Uses integer arithmetic and wrapping time comparisons to handle timer overflow.
 
 use crate::constants::scheduler::*;
 use crate::hal::OutputPin;
+use crate::units::Micros;
+#[cfg(debug_assertions)]
+use core::cell::Cell;
+use core::marker::PhantomData;
 
 /// Type-safe channel identifier for outputs
 ///
@@ -46,7 +58,14 @@ pub struct Event {
     time: u32,
     channel: Channel,
     state: bool, // true = high, false = low
-    active: bool,
+    state_kind: EventState,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum EventState {
+    Idle,
+    Armed { channel: Channel, deadline: Micros },
+    Fired { at: Micros },
 }
 
 impl Event {
@@ -56,7 +75,7 @@ impl Event {
             time: 0,
             channel: Channel::new(0),
             state: false,
-            active: false,
+            state_kind: EventState::Idle,
         }
     }
 
@@ -66,13 +85,16 @@ impl Event {
             time,
             channel,
             state,
-            active: true,
+            state_kind: EventState::Armed {
+                channel,
+                deadline: Micros::new(time),
+            },
         }
     }
 
     /// Check if event is active
     pub const fn is_active(&self) -> bool {
-        self.active
+        !matches!(self.state_kind, EventState::Idle)
     }
 
     /// Get event time
@@ -92,7 +114,7 @@ impl Event {
 
     /// Deactivate this event
     fn deactivate(&mut self) {
-        self.active = false;
+        self.state_kind = EventState::Idle;
     }
 }
 
@@ -102,6 +124,21 @@ impl Event {
 /// to correctly handle timer overflow after 71 minutes of runtime.
 pub struct Scheduler {
     events: [Event; MAX_EVENTS],
+    #[cfg(debug_assertions)]
+    reentry_guard: Cell<bool>,
+    _not_sync: PhantomData<*const ()>,
+}
+
+#[cfg(debug_assertions)]
+struct ReentryGuard(*const Cell<bool>);
+
+#[cfg(debug_assertions)]
+impl Drop for ReentryGuard {
+    fn drop(&mut self) {
+        unsafe {
+            (*self.0).set(false);
+        }
+    }
 }
 
 impl Scheduler {
@@ -109,6 +146,9 @@ impl Scheduler {
     pub const fn new() -> Self {
         Self {
             events: [Event::new_inactive(); MAX_EVENTS],
+            #[cfg(debug_assertions)]
+            reentry_guard: Cell::new(false),
+            _not_sync: PhantomData,
         }
     }
 
@@ -124,12 +164,18 @@ impl Scheduler {
     /// # Safety
     /// This function can be called from ISR context. Ensure proper synchronization
     /// if also called from main loop.
-    pub fn schedule(&mut self, time: u32, channel: Channel, state: bool) -> bool {
+    pub fn schedule(&mut self, time: Micros, channel: Channel, state: bool) -> bool {
+        self.schedule_raw(time.raw(), channel, state)
+    }
+
+    fn schedule_raw(&mut self, time: u32, channel: Channel, state: bool) -> bool {
+        #[cfg(debug_assertions)]
+        let _guard = Self::enter_guard(&self.reentry_guard);
         debug_assert!(channel.is_valid(), "Invalid channel: {}", channel.as_u8());
 
         // Find free slot
         for event in &mut self.events {
-            if !event.active {
+            if !event.is_active() {
                 *event = Event::new_active(time, channel, state);
                 return true;
             }
@@ -142,7 +188,7 @@ impl Scheduler {
     /// Schedule a new event using native tick timebase.
     /// Identical semantics to `schedule`, but the time unit is target-specific ticks.
     pub fn schedule_ticks(&mut self, ticks: u32, channel: Channel, state: bool) -> bool {
-        self.schedule(ticks, channel, state)
+        self.schedule_raw(ticks, channel, state)
     }
 
     /// Check for due events and execute them
@@ -156,9 +202,15 @@ impl Scheduler {
     ///
     /// # Safety
     /// This function assumes `outputs` array has at least MAX_CHANNELS elements.
-    pub fn check_and_execute(&mut self, now: u32, outputs: &mut [&mut dyn OutputPin]) {
+    pub fn check_and_execute(&mut self, now: Micros, outputs: &mut [&mut dyn OutputPin]) {
+        self.check_and_execute_raw(now.raw(), outputs)
+    }
+
+    fn check_and_execute_raw(&mut self, now: u32, outputs: &mut [&mut dyn OutputPin]) {
+        #[cfg(debug_assertions)]
+        let _guard = Self::enter_guard(&self.reentry_guard);
         for event in &mut self.events {
-            if event.active {
+            if event.is_active() {
                 // Use wrapping subtraction to handle timer overflow correctly
                 // Event is due if (now - event.time) is a small positive number
                 let elapsed = now.wrapping_sub(event.time);
@@ -177,6 +229,9 @@ impl Scheduler {
                         }
                     }
 
+                    event.state_kind = EventState::Fired {
+                        at: Micros::new(now),
+                    };
                     event.deactivate();
                 }
             }
@@ -185,13 +240,20 @@ impl Scheduler {
 
     /// Tick-based variant of `check_and_execute` using the native timer domain.
     pub fn check_and_execute_ticks(&mut self, now_ticks: u32, outputs: &mut [&mut dyn OutputPin]) {
-        self.check_and_execute(now_ticks, outputs)
+        self.check_and_execute_raw(now_ticks, outputs)
     }
 
     /// Clear all events
     ///
     /// Useful for emergency shutdown or reset.
     pub fn clear(&mut self) {
+        self.deactivate_all();
+    }
+
+    /// Deactivate all scheduled events.
+    pub fn deactivate_all(&mut self) {
+        #[cfg(debug_assertions)]
+        let _guard = Self::enter_guard(&self.reentry_guard);
         for event in &mut self.events {
             event.deactivate();
         }
@@ -216,9 +278,13 @@ impl Scheduler {
     }
 
     /// Deactivate all events for `channel` scheduled at or after `cutoff` (tick/micro domain consistent with schedule calls).
-    pub fn deactivate_channel_after(&mut self, cutoff: u32, channel: Channel) {
+    pub fn deactivate_channel_after(&mut self, cutoff: Micros, channel: Channel) {
+        self.deactivate_channel_after_raw(cutoff.raw(), channel)
+    }
+
+    fn deactivate_channel_after_raw(&mut self, cutoff: u32, channel: Channel) {
         for e in &mut self.events {
-            if e.active && e.channel == channel {
+            if e.is_active() && e.channel == channel {
                 // event is in the future relative to cutoff if (event.time - cutoff) < MAX/2
                 let is_future = e.time.wrapping_sub(cutoff) < (u32::MAX / 2);
                 if is_future {
@@ -231,15 +297,78 @@ impl Scheduler {
     /// Deactivate all events for the given channel, regardless of time.
     pub fn deactivate_channel_all(&mut self, channel: Channel) {
         for e in &mut self.events {
-            if e.active && e.channel == channel {
+            if e.is_active() && e.channel == channel {
                 e.deactivate();
             }
         }
+    }
+
+    #[cfg(debug_assertions)]
+    fn enter_guard(flag: &Cell<bool>) -> ReentryGuard {
+        let was_set = flag.replace(true);
+        debug_assert!(!was_set, "Scheduler re-entrancy detected");
+        ReentryGuard(flag as *const Cell<bool>)
     }
 }
 
 impl Default for Scheduler {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hal::OutputPin;
+
+    struct MockPin {
+        high_count: usize,
+        low_count: usize,
+    }
+
+    impl MockPin {
+        fn new() -> Self {
+            Self {
+                high_count: 0,
+                low_count: 0,
+            }
+        }
+    }
+
+    impl OutputPin for MockPin {
+        fn set_high(&mut self) {
+            self.high_count += 1;
+        }
+
+        fn set_low(&mut self) {
+            self.low_count += 1;
+        }
+    }
+
+    #[test]
+    fn deactivate_all() {
+        let mut scheduler = Scheduler::new();
+        assert!(scheduler.schedule(Micros::new(100), Channel::INJ1, true));
+        assert!(scheduler.schedule(Micros::new(110), Channel::INJ1, false));
+        assert!(scheduler.schedule(Micros::new(120), Channel::INJ2, true));
+        assert!(scheduler.schedule(Micros::new(130), Channel::IGN1, true));
+
+        scheduler.deactivate_all();
+
+        let mut pin0 = MockPin::new();
+        let mut pin1 = MockPin::new();
+        let mut pin2 = MockPin::new();
+        let mut outputs: [&mut dyn OutputPin; 3] = [&mut pin0, &mut pin1, &mut pin2];
+
+        scheduler.check_and_execute(Micros::new(200), &mut outputs);
+
+        assert_eq!(pin0.high_count, 0);
+        assert_eq!(pin0.low_count, 0);
+        assert_eq!(pin1.high_count, 0);
+        assert_eq!(pin1.low_count, 0);
+        assert_eq!(pin2.high_count, 0);
+        assert_eq!(pin2.low_count, 0);
+        assert_eq!(scheduler.active_count(), 0);
     }
 }

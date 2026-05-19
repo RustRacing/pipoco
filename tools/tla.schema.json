@@ -1,0 +1,36 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "TLAEvidence",
+  "description": "Schema for target/formal-evidence/latest/tla.json emitted by tools/verify_formal.sh.",
+  "type": "object",
+  "required": [
+    "module",
+    "states_generated",
+    "distinct_states",
+    "errors",
+    "status"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "module": {
+      "type": "string",
+      "minLength": 1
+    },
+    "states_generated": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "distinct_states": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "errors": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "status": {
+      "type": "string",
+      "enum": ["pass", "fail"]
+    }
+  }
+}

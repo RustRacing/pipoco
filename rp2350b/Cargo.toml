@@ -6,7 +6,13 @@ autobins = false
 
 [dependencies]
 # Core ECU library
-ecu-core = { path = "..", default-features = false }
+ecu-core = { path = "..", default-features = false, features = ["transport-can"] }
+ecu-domain = { path = "../ecu-domain" }
+ecu-calibration = { path = "../ecu-calibration" }
+ecu-io = { path = "../ecu-io" }
+ecu-runtime = { path = "../ecu-runtime" }
+ecu-scheduler = { path = "../ecu-scheduler" }
+ecu-target-common = { path = "../ecu-target-common" }
 
 # RP2350B HAL (using rp235x-hal for RP2350)
 rp235x-hal = { version = "0.2", features = ["critical-section-impl"] }
@@ -23,25 +29,19 @@ embedded-hal = "1.0"
 
 [features]
 ve-demo = []
+# Alternative trigger capture path using GPIO IRQ.
 capture-gpio = []
+# Alternative trigger capture path using PIO.
 capture-pio = []
-
-[profile.dev]
-opt-level = 1
-panic = "abort"
-
-[profile.release]
-opt-level = "z"      # Optimize for size
-lto = true           # Link-time optimization
-codegen-units = 1    # Better optimization
-debug = true         # Keep debug info for probe
-panic = "abort"
+# Standalone example binaries.
+example-bins = []
 
 [build-dependencies]
 
 [[bin]]
 name = "ecu-rp2350b-min"
 path = "src/bin/minimal_ecu.rs"
+required-features = ["example-bins"]
 
 [[bin]]
 name = "ecu-rp2350b-demo"
@@ -56,7 +56,9 @@ required-features = ["capture-pio"]
 [[bin]]
 name = "ts-gauges"
 path = "src/bin/ts_gauges.rs"
+required-features = ["example-bins"]
 
 [[bin]]
 name = "rp2350b-datalogger-sensors-can"
 path = "src/bin/datalogger_sensors_can.rs"
+required-features = ["example-bins"]

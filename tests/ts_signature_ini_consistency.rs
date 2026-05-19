@@ -6,6 +6,7 @@ use ecu_core::ts::proto::{self, Cmd};
 use ecu_core::ts::{OutpcProvider, TunerstudioServer};
 use ecu_core::EcuState;
 use std::fs;
+use std::path::PathBuf;
 
 struct Provider {
     state: *const EcuState,
@@ -13,14 +14,15 @@ struct Provider {
 impl OutpcProvider for Provider {
     fn fill_outpc(&self, out: &mut Outpc) {
         let s = unsafe { &*self.state };
-        out.rpm = s.rpm;
+        out.rpm = s.rpm();
     }
 }
 
 #[test]
 fn ini_signature_matches_server() {
     // Read INI signature line
-    let ini = fs::read_to_string("../ts/IPW-ECU.ini").expect("load ini");
+    let ini_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/assets/IPW-ECU.ini");
+    let ini = fs::read_to_string(&ini_path).expect("load ini");
     let sig_line = ini
         .lines()
         .find(|l| l.trim_start().starts_with("signature"))
@@ -33,8 +35,8 @@ fn ini_signature_matches_server() {
         state: &state as *const _,
     };
     let pages = EcuStatePageStore {
-        fuel: &mut state.ipw_table,
-        ign: &mut state.ignition_table,
+        fuel: &mut state.config.ipw_table,
+        ign: &mut state.config.ignition_table,
     };
     let mut server = TunerstudioServer::new(b"IPW-ECU V0.1", provider, pages);
     let mut req = [0u8; 64];

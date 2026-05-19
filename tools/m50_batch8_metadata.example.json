@@ -1,0 +1,40 @@
+{
+  "schema": "m50-batch8-evidence-v1",
+  "date": "<ISO-8601 UTC timestamp>",
+  "board_revision": "<M50 board revision>",
+  "firmware_build_id": "<firmware build id>",
+  "profile_id": "<M50 batch-8 profile id>",
+  "conditioner_path": "<path to conditioning notes>",
+  "primary_edge": "<rising or falling>",
+  "secondary_edge": "<rising or falling>",
+  "trigger_angle_atdc_deg10": 0,
+  "fixed_timing_mode": "not_yet_certified",
+  "fixed_timing_angle_deg10": null,
+  "certification_hash": null,
+  "operator_notes": "<operator notes for structural review only>",
+  "source_notes": "<source notes for the local hardware run and evidence provenance>",
+  "provenance": {
+    "capture_timestamp": "<ISO-8601 capture timestamp>",
+    "operator_identity": "<operator identity>",
+    "capture_device": "<capture device>",
+    "channel_mapping": {
+      "crank": "<dry-crank CSV crank header>",
+      "cam": "<dry-crank CSV cam header>"
+    },
+    "sample_rate_hz": 1000000,
+    "clock_source": "<capture clock source>",
+    "dry_crank_declared": true,
+    "spark_disabled": true,
+    "injectors_disabled": true,
+    "cranking_rpm_range": "<cranking RPM range>",
+    "battery_voltage": "<battery voltage during capture>",
+    "environment_notes": "<ambient/coolant temperature notes>",
+    "source_notes": "<source notes for the local hardware run and evidence provenance>"
+  },
+  "artifacts": [
+    {
+      "path": "logs/dry_crank_tooth_cam.csv",
+      "kind": "dry_crank_tooth_cam_log"
+    }
+  ]
+}

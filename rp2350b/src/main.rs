@@ -86,9 +86,9 @@ fn main() -> ! {
     let wot_ipw = normal_table.values[12][8]; // High load, high RPM
 
     // Sanity checks (should be between 500-20000 microseconds)
-    assert!(idle_ipw >= 500 && idle_ipw <= 20000);
-    assert!(cruise_ipw >= 500 && cruise_ipw <= 20000);
-    assert!(wot_ipw >= 500 && wot_ipw <= 20000);
+    assert!((500..=20000).contains(&idle_ipw));
+    assert!((500..=20000).contains(&cruise_ipw));
+    assert!((500..=20000).contains(&wot_ipw));
 
     // WOT should have more fuel than cruise, cruise more than idle
     assert!(wot_ipw > cruise_ipw);

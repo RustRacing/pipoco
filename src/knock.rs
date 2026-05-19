@@ -37,12 +37,12 @@ impl KnockConfig {
     /// Default configuration for a 4-cylinder engine
     pub const DEFAULT: Self = Self {
         enable: true,
-        threshold: 100,           // Baseline threshold
-        retard_step_x10: 20,      // 2.0 degrees retard per knock
-        retard_max_x10: 150,      // 15.0 degrees max retard
-        recovery_rate_x10: 10,    // 1.0 degree per second recovery
-        window_start_btdc: 20,    // Start listening at 20° BTDC
-        window_end_btdc: -30,     // Stop at 30° ATDC
+        threshold: 100,        // Baseline threshold
+        retard_step_x10: 20,   // 2.0 degrees retard per knock
+        retard_max_x10: 150,   // 15.0 degrees max retard
+        recovery_rate_x10: 10, // 1.0 degree per second recovery
+        window_start_btdc: 20, // Start listening at 20° BTDC
+        window_end_btdc: -30,  // Stop at 30° ATDC
         min_rpm: 1500,
         min_clt_c: 60,
         debounce_count: 2,
@@ -122,12 +122,7 @@ impl KnockState {
     }
 
     /// Check if knock detection should be enabled
-    pub fn should_enable(
-        &self,
-        config: &KnockConfig,
-        rpm: u16,
-        clt_c: i16,
-    ) -> bool {
+    pub fn should_enable(&self, config: &KnockConfig, rpm: u16, clt_c: i16) -> bool {
         if !config.enable {
             return false;
         }
@@ -377,21 +372,15 @@ impl KnockController {
     ///
     /// # Returns
     /// `true` if knock was detected
-    pub fn process(
-        &mut self,
-        cylinder: u8,
-        level: u16,
-        rpm: u16,
-        clt_c: i16,
-        now_us: u32,
-    ) -> bool {
+    pub fn process(&mut self, cylinder: u8, level: u16, rpm: u16, clt_c: i16, now_us: u32) -> bool {
         self.state.active = self.state.should_enable(&self.config, rpm, clt_c);
 
         if !self.state.active {
             return false;
         }
 
-        self.state.process_sample(cylinder, level, &self.config, now_us)
+        self.state
+            .process_sample(cylinder, level, &self.config, now_us)
     }
 
     /// Update recovery (call periodically)
@@ -481,7 +470,7 @@ mod tests {
     fn test_knock_retard_application() {
         let mut state = KnockState::new();
         let config = KnockConfig {
-            debounce_count: 1, // Instant trigger
+            debounce_count: 1,   // Instant trigger
             retard_step_x10: 20, // 2.0 degrees
             ..KnockConfig::DEFAULT
         };
@@ -500,8 +489,8 @@ mod tests {
         let mut state = KnockState::new();
         let config = KnockConfig {
             debounce_count: 1,
-            retard_step_x10: 50,  // 5.0 degrees
-            retard_max_x10: 100,  // 10.0 degrees max
+            retard_step_x10: 50, // 5.0 degrees
+            retard_max_x10: 100, // 10.0 degrees max
             ..KnockConfig::DEFAULT
         };
 
@@ -519,8 +508,8 @@ mod tests {
         let mut state = KnockState::new();
         let config = KnockConfig {
             debounce_count: 1,
-            retard_step_x10: 50,    // 5.0 degrees
-            recovery_rate_x10: 10,  // 1.0 degree per second
+            retard_step_x10: 50,   // 5.0 degrees
+            recovery_rate_x10: 10, // 1.0 degree per second
             ..KnockConfig::DEFAULT
         };
 
@@ -612,7 +601,6 @@ mod tests {
     #[test]
     fn test_knock_reset() {
         let mut state = KnockState::new();
-        let config = KnockConfig::DEFAULT;
 
         state.cylinders[0].retard_x10 = 50;
         state.cylinders[0].knock_count = 10;

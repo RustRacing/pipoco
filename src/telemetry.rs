@@ -2,7 +2,7 @@
 //!
 //! Tracks count, max, and simple moving average of durations (microseconds).
 
-#[derive(Copy, Clone, Debug, Default)]
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub struct IsrStats {
     pub count: u32,
     pub max_us: u32,

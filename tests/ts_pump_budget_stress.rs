@@ -46,8 +46,8 @@ fn ts_pump_enforces_budget() {
     let mut state = EcuState::new();
     let provider = crate::ts_provider_for(&state);
     let pages = EcuStatePageStore {
-        fuel: &mut state.ipw_table,
-        ign: &mut state.ignition_table,
+        fuel: &mut state.config.ipw_table,
+        ign: &mut state.config.ignition_table,
     };
     let mut store = PersistedPageStore::new(pages, RamKv512::new());
     store.try_load();
@@ -85,7 +85,7 @@ mod test_provider {
     impl OutpcProvider for Provider {
         fn fill_outpc(&self, out: &mut Outpc) {
             let s = unsafe { &*self.state };
-            out.rpm = s.rpm;
+            out.rpm = s.rpm();
         }
     }
 }

@@ -7,13 +7,13 @@
 //!
 //! This enables coordinated control and simplifies safety interventions.
 
-pub mod request;
-pub mod arbiter;
 pub mod actuate;
+pub mod arbiter;
+pub mod request;
 
-pub use request::{TorqueSource, TorqueRequest, TorqueEstimator};
-pub use arbiter::TorqueArbiter;
 pub use actuate::{ActuatorTargets, TorqueConverter};
+pub use arbiter::TorqueArbiter;
+pub use request::{TorqueEstimator, TorqueRequest, TorqueSource};
 
 /// Configuration for the torque model
 #[derive(Debug, Clone, Copy)]
@@ -34,9 +34,9 @@ impl TorqueConfig {
     /// Default configuration for a typical 4-cylinder engine
     pub const DEFAULT: Self = Self {
         enable: true,
-        max_torque_nm_x10: 2000,  // 200 Nm
+        max_torque_nm_x10: 2000, // 200 Nm
         peak_torque_rpm: 4000,
-        min_torque_nm_x10: -500,  // -50 Nm engine braking
+        min_torque_nm_x10: -500,     // -50 Nm engine braking
         idle_torque_reserve_x10: 50, // 5 Nm reserve for idle control
     };
 }
@@ -81,19 +81,11 @@ impl TorqueController {
     ///
     /// # Returns
     /// The arbitrated torque target (Nm x10)
-    pub fn update(
-        &mut self,
-        rpm: u16,
-        map_kpa_x10: u16,
-        iat_c: i16,
-    ) -> i16 {
+    pub fn update(&mut self, rpm: u16, map_kpa_x10: u16, iat_c: i16) -> i16 {
         // Estimate maximum available torque
-        self.max_available_x10 = self.estimator.estimate_max_torque(
-            rpm,
-            map_kpa_x10,
-            iat_c,
-            &self.config,
-        );
+        self.max_available_x10 =
+            self.estimator
+                .estimate_max_torque(rpm, map_kpa_x10, iat_c, &self.config);
 
         // Arbitrate among all requests
         self.target_torque_x10 = self.arbiter.arbitrate(self.max_available_x10);
@@ -103,11 +95,8 @@ impl TorqueController {
 
     /// Get actuator targets for the current torque target
     pub fn get_actuator_targets(&self, rpm: u16) -> ActuatorTargets {
-        self.converter.convert(
-            self.target_torque_x10,
-            self.max_available_x10,
-            rpm,
-        )
+        self.converter
+            .convert(self.target_torque_x10, self.max_available_x10, rpm)
     }
 
     /// Submit a torque request
@@ -117,12 +106,8 @@ impl TorqueController {
 
     /// Submit a driver torque request based on pedal position
     pub fn request_driver(&mut self, pedal_percent: u8, rpm: u16, now_us: u32) {
-        let req = request::driver_torque_request(
-            pedal_percent,
-            rpm,
-            self.max_available_x10,
-            now_us,
-        );
+        let req =
+            request::driver_torque_request(pedal_percent, rpm, self.max_available_x10, now_us);
         self.arbiter.request(req);
     }
 

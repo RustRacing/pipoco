@@ -86,12 +86,7 @@ impl TorqueConverter {
     ///
     /// # Returns
     /// Actuator targets to achieve the requested torque
-    pub fn convert(
-        &self,
-        target_x10: i16,
-        max_x10: i16,
-        _rpm: u16,
-    ) -> ActuatorTargets {
+    pub fn convert(&self, target_x10: i16, max_x10: i16, _rpm: u16) -> ActuatorTargets {
         // Handle edge cases
         if max_x10 <= 0 {
             return ActuatorTargets {
@@ -136,7 +131,7 @@ impl TorqueConverter {
             // ~2% torque reduction per degree of retard
             let timing_capacity = (self.config.max_timing_retard_x10 as i32 * 2) / 10; // % reduction possible
 
-            if reduction_percent as i32 <= timing_capacity {
+            if reduction_percent <= timing_capacity {
                 // Timing alone can handle it
                 // reduction_percent = timing_retard * 2 / 10
                 // timing_retard = reduction_percent * 10 / 2 = reduction_percent * 5
@@ -149,13 +144,11 @@ impl TorqueConverter {
                 targets.timing_reduced = true;
 
                 // Remaining reduction via fuel
-                let remaining = reduction_percent as i32 - timing_capacity;
+                let remaining = reduction_percent - timing_capacity;
 
                 // Fuel multiplier: 100 - remaining, but not below min
-                let fuel_mult = (100 - remaining).clamp(
-                    self.config.min_fuel_mult_x100 as i32,
-                    100,
-                ) as u8;
+                let fuel_mult =
+                    (100 - remaining).clamp(self.config.min_fuel_mult_x100 as i32, 100) as u8;
                 targets.fuel_mult_x100 = fuel_mult;
 
                 // If still not enough, fuel cut
@@ -166,7 +159,7 @@ impl TorqueConverter {
             }
         } else {
             // Strategy: direct fuel reduction
-            let fuel_mult = (100 - reduction_percent as i32).clamp(0, 100) as u8;
+            let fuel_mult = (100 - reduction_percent).clamp(0, 100) as u8;
             targets.fuel_mult_x100 = fuel_mult;
 
             if fuel_mult == 0 {

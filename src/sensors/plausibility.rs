@@ -5,20 +5,15 @@
 //! in normal operation.
 
 /// Plausibility fault type
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PlausibilityFault {
     /// No fault detected
+    #[default]
     None,
     /// TPS high but MAP low - stuck TPS high or MAP stuck low
     TpsHighMapLow,
     /// TPS low but MAP high - stuck TPS low or MAP stuck high
     TpsLowMapHigh,
-}
-
-impl Default for PlausibilityFault {
-    fn default() -> Self {
-        Self::None
-    }
 }
 
 /// Configuration for plausibility checks
@@ -225,8 +220,8 @@ pub struct RateConfig {
 impl RateConfig {
     pub const DEFAULT: Self = Self {
         enable: true,
-        max_tps_rate_per_sec: 500,   // 0-100% in 200ms
-        max_map_rate_per_sec: 2000,  // 200 kPa/s
+        max_tps_rate_per_sec: 500,    // 0-100% in 200ms
+        max_map_rate_per_sec: 2000,   // 200 kPa/s
         min_sample_interval_us: 1000, // 1ms minimum
     };
 }
@@ -301,11 +296,7 @@ impl RateValidator {
         }
 
         // Calculate rate of change
-        let delta = if value > self.last_value {
-            value - self.last_value
-        } else {
-            self.last_value - value
-        };
+        let delta = value.abs_diff(self.last_value);
 
         // Convert to rate per second
         // rate = delta / (elapsed_us / 1_000_000) = delta * 1_000_000 / elapsed_us

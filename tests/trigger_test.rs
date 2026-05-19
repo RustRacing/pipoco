@@ -77,7 +77,7 @@ fn test_rpm_calculation() {
 
     // Check RPM (should be close to 1000)
     // Due to approximation in RPM calc, accept wide range for MVP
-    let rpm = decoder.rpm();
+    let rpm = decoder.rpm().raw();
     assert!((800..=1200).contains(&rpm), "RPM was {rpm}, expected ~1000");
 }
 
@@ -104,7 +104,7 @@ fn test_loss_of_sync() {
 
     // Should lose sync
     assert!(!decoder.synced());
-    assert_eq!(decoder.rpm(), 0);
+    assert_eq!(decoder.rpm().raw(), 0);
 }
 
 #[test]
@@ -146,7 +146,7 @@ fn test_fuel_calculation_with_corrections() {
     let mut state = EcuState::new();
 
     // Apply 1.5x coolant correction
-    state.corrections.clt = 150;
+    state.corrections_mut().clt = 150;
 
     let pw = state.calculate_fuel(3000, 60);
 
@@ -160,7 +160,7 @@ fn test_table_cell_independence() {
 
     // Modify one table cell - table is [load_idx][rpm_idx]
     // 3000 RPM -> idx 5, 60 kPa -> idx 4
-    state.ipw_table[4][5] = 2000;
+    state.config.ipw_table[4][5] = 2000;
 
     // Lookup should return modified value
     let pw = state.calculate_fuel(3000, 60); // Maps to bin [4][5]

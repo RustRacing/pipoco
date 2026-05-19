@@ -3,10 +3,23 @@
 //! Coordinates multiple torque requests and selects the final target.
 //! Uses "min-wins" logic: the most restrictive request wins for safety.
 
-use super::request::{TorqueRequest, TorqueSource, priority};
+use super::request::{priority, TorqueRequest, TorqueSource};
 
 /// Maximum number of torque sources
 pub const MAX_SOURCES: usize = 8;
+
+/// Result of torque arbitration for downstream consumers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TorqueResult {
+    /// Fuel multiplier scaled by 100 (100 = 1.0x).
+    pub fuel_mult_x100: u16,
+}
+
+impl TorqueResult {
+    pub const fn new(fuel_mult_x100: u16) -> Self {
+        Self { fuel_mult_x100 }
+    }
+}
 
 /// Torque arbiter - coordinates multiple torque requests
 #[derive(Debug, Clone, Copy)]
@@ -87,12 +100,13 @@ impl TorqueArbiter {
             }
 
             // For high-priority sources, they always win if active
-            if req.priority >= priority::REV_LIMITER && req.torque_nm_x10 < i16::MAX {
-                if req.priority > highest_priority {
-                    highest_priority = req.priority;
-                    min_torque = req.torque_nm_x10;
-                    winning = Some(req.source);
-                }
+            if req.priority >= priority::REV_LIMITER
+                && req.torque_nm_x10 < i16::MAX
+                && req.priority > highest_priority
+            {
+                highest_priority = req.priority;
+                min_torque = req.torque_nm_x10;
+                winning = Some(req.source);
             }
         }
 
@@ -115,7 +129,7 @@ impl TorqueArbiter {
             any_active = true;
 
             // Clamp request to max available, then apply min-wins
-            let effective_request = if req.torque_nm_x10 >= i16::MAX {
+            let effective_request = if req.torque_nm_x10 == i16::MAX {
                 max_available_x10 // Unlimited request = max available
             } else {
                 req.torque_nm_x10.min(max_available_x10)
@@ -131,10 +145,10 @@ impl TorqueArbiter {
             }
         }
 
-        // If no active requests, default to 0
+        // If no active requests, allow full available torque.
         if !any_active {
-            winning = Some(TorqueSource::Driver);
-            min_torque = 0;
+            winning = None;
+            min_torque = max_available_x10;
         }
 
         self.winning_source = winning;
@@ -183,8 +197,8 @@ impl Default for TorqueArbiter {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::request::*;
+    use super::*;
 
     #[test]
     fn test_arbiter_new() {
@@ -255,7 +269,7 @@ mod tests {
         arbiter.request(rev_limiter_torque_request(true, 0));
         arbiter.request(limp_torque_request(true, 2000, 0));
 
-        let result = arbiter.arbitrate(2000);
+        let _result = arbiter.arbitrate(2000);
         // Limp has higher priority but rev limiter has lower torque
         // In our implementation, limp wins because higher priority
         assert_eq!(arbiter.winning_source, Some(TorqueSource::Limp));
@@ -323,7 +337,8 @@ mod tests {
         let mut arbiter = TorqueArbiter::new();
 
         let result = arbiter.arbitrate(2000);
-        assert_eq!(result, 0); // Default to 0 with no requests
+        assert_eq!(result, 2000); // No requests means no torque limiting
+        assert_eq!(arbiter.winning_source, None);
     }
 
     #[test]

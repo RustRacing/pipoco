@@ -58,7 +58,6 @@ impl CanDevice for MockCan {
 #[test]
 fn can_segmented_table_roundtrip() {
     // No CAN transport; nothing to validate in this configuration
-    assert!(true);
 }
 
 #[cfg(feature = "transport-can")]

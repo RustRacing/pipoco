@@ -64,6 +64,9 @@ pub fn decode_request(buf: &[u8]) -> Option<(Cmd, &[u8])> {
         return None;
     }
     let len = (buf[3] as u16) << 8 | (buf[2] as u16);
+    if len < 3 {
+        return None;
+    }
     let total = 4 + len as usize;
     if buf.len() < total {
         return None;

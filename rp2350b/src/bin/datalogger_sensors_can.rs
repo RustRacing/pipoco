@@ -4,10 +4,11 @@
 use cortex_m_rt::entry;
 use ecu_core::transport::{CanDevice, CanTransport, Message, Transport};
 use panic_halt as _;
+#[allow(unused_imports)]
 use rp235x_hal as hal;
 
-struct DummyCan;
-impl CanDevice for DummyCan {
+struct NullCan;
+impl CanDevice for NullCan {
     type Error = ();
     fn tx_ready(&self) -> bool {
         true
@@ -22,11 +23,11 @@ impl CanDevice for DummyCan {
 
 #[entry]
 fn main() -> ! {
-    // Minimal skeleton for a sensor→CAN datalogger.
+    // Example-only sensor→CAN datalogger.
     // Hook up clocks/UART/CAN (transceiver) per board in future.
 
-    // Minimal CAN transport wiring (replace DummyCan with HAL CAN)
-    let mut can = CanTransport::new(DummyCan);
+    // Minimal CAN transport wiring (replace NullCan with HAL CAN)
+    let mut can = CanTransport::new(NullCan);
 
     // Placeholder loop: periodically send a heartbeat
     loop {

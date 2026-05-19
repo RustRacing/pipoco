@@ -1,0 +1,19 @@
+[package]
+name = "ecu-sim-ffi"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["staticlib", "cdylib", "rlib"]
+path = "src/lib.rs"
+
+[features]
+test-support = []
+
+[dependencies]
+ecu-board-api = { path = "../ecu-board-api" }
+ecu-domain = { path = "../ecu-domain" }
+ecu-io = { path = "../ecu-io" }
+ecu-runtime = { path = "../ecu-runtime" }
+ecu-scheduler = { path = "../ecu-scheduler" }
+ecu-sim = { path = "../ecu-sim" }

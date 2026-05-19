@@ -44,6 +44,7 @@ pub fn convert_all(cfg: AdcConfig, cal: &SensorsCal, raw: RawCounts) -> Outputs 
     let map = VoltageSensor {
         vref_mv: cfg.vref_mv,
         adc_bits: cfg.adc_bits,
+        last_counts: 0,
         curve: map_curve,
     };
     let map_kpa_x10 = map.value_from_counts(raw.map).clamp(0, 65535) as u16;
@@ -100,6 +101,7 @@ pub fn convert_all(cfg: AdcConfig, cal: &SensorsCal, raw: RawCounts) -> Outputs 
         adc_bits: cfg.adc_bits,
         r_known_ohms: R_KNOWN,
         divider: DividerConfig::PullupTop,
+        last_counts: 0,
         curve: clt_curve,
     };
     let iat_model = ResistiveSensor {
@@ -107,6 +109,7 @@ pub fn convert_all(cfg: AdcConfig, cal: &SensorsCal, raw: RawCounts) -> Outputs 
         adc_bits: cfg.adc_bits,
         r_known_ohms: R_KNOWN,
         divider: DividerConfig::PullupTop,
+        last_counts: 0,
         curve: iat_curve,
     };
     let clt_c = clt_model.value_from_counts(raw.clt) as i16;
@@ -128,9 +131,7 @@ pub fn convert_all(cfg: AdcConfig, cal: &SensorsCal, raw: RawCounts) -> Outputs 
         let lam_max = 136i32;
         let mv_clamped = mv.clamp(mv_min, mv_max);
         let lam = lam_min
-            + ((lam_max - lam_min) as i32)
-                * ((mv_clamped as i32 - mv_min as i32))
-                / ((mv_max - mv_min) as i32);
+            + (lam_max - lam_min) * (mv_clamped as i32 - mv_min as i32) / (mv_max - mv_min) as i32;
         lam.clamp(50, 200) as u16
     };
 
@@ -147,23 +148,35 @@ pub fn convert_all(cfg: AdcConfig, cal: &SensorsCal, raw: RawCounts) -> Outputs 
 /// Clamp slew rate for u16 signals (e.g., MAP in kPa×10) based on elapsed time.
 /// max_rate_per_s uses the same unit per second (e.g., kPa×10 per second).
 pub fn clamp_slew_u16(prev: u16, new: u16, max_rate_per_s: u16, dt_us: u32) -> u16 {
-    if dt_us == 0 || prev == new { return new; }
+    if dt_us == 0 || prev == new {
+        return new;
+    }
     let max_delta = ((max_rate_per_s as u32).saturating_mul(dt_us) / 1_000_000) as i32;
     let delta = (new as i32) - (prev as i32);
-    if delta > max_delta { (prev as i32 + max_delta) as u16 }
-    else if delta < -max_delta { (prev as i32 - max_delta) as u16 }
-    else { new }
+    if delta > max_delta {
+        (prev as i32 + max_delta) as u16
+    } else if delta < -max_delta {
+        (prev as i32 - max_delta) as u16
+    } else {
+        new
+    }
 }
 
 /// Clamp slew rate for u8 signals (e.g., TPS percent) based on elapsed time.
 /// max_rate_per_s in %/s.
 pub fn clamp_slew_u8(prev: u8, new: u8, max_rate_per_s: u16, dt_us: u32) -> u8 {
-    if dt_us == 0 || prev == new { return new; }
+    if dt_us == 0 || prev == new {
+        return new;
+    }
     let max_delta = ((max_rate_per_s as u32).saturating_mul(dt_us) / 1_000_000) as i32;
     let delta = (new as i32) - (prev as i32);
-    if delta > max_delta { (prev as i32 + max_delta).clamp(0, 255) as u8 }
-    else if delta < -max_delta { (prev as i32 - max_delta).clamp(0, 255) as u8 }
-    else { new }
+    if delta > max_delta {
+        (prev as i32 + max_delta).clamp(0, 255) as u8
+    } else if delta < -max_delta {
+        (prev as i32 - max_delta).clamp(0, 255) as u8
+    } else {
+        new
+    }
 }
 
 #[cfg(test)]

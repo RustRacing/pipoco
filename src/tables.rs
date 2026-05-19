@@ -23,6 +23,11 @@ use crate::constants::fuel::*;
 #[cfg(feature = "interp-bilinear")]
 use crate::ve_engine::interpolation::{bilinear_interpolate_u16, find_bin_interpolation};
 
+/// Shared lookup contract for pulse-width tables.
+pub trait TableLookup {
+    fn lookup(&self, rpm: u16, load: u16) -> u16;
+}
+
 /// IPW (Injector Pulse Width) table - 16x16 grid
 ///
 /// Stores pre-calculated pulse widths for fast lookup without complex math.
@@ -63,25 +68,26 @@ impl IpwTable {
     /// let pw = table.lookup(3000, 60);  // 3000 RPM, 60 kPa
     /// ```
     pub fn lookup(&self, rpm: u16, load: u16) -> u16 {
-        #[cfg(feature = "interp-bilinear")]
-        {
-            let (rx0, rx1, fx) = find_bin_interpolation(&self.rpm_bins, rpm);
-            let (ly0, ly1, fy) = find_bin_interpolation(&self.load_bins, load);
-            let v00 = self.values[ly0][rx0];
-            let v01 = self.values[ly0][rx1];
-            let v10 = self.values[ly1][rx0];
-            let v11 = self.values[ly1][rx1];
-            bilinear_interpolate_u16(v00, v01, v10, v11, fx, fy)
-        }
-        #[cfg(not(feature = "interp-bilinear"))]
-        {
-            let rpm_idx = self.find_index(&self.rpm_bins, rpm);
-            let load_idx = self.find_index(&self.load_bins, load);
-            self.values[load_idx][rpm_idx]
-        }
+        TableLookup::lookup(self, rpm, load)
     }
 
-    #[cfg(not(feature = "interp-bilinear"))]
+    fn lookup_nearest(&self, rpm: u16, load: u16) -> u16 {
+        let rpm_idx = self.find_index(&self.rpm_bins, rpm);
+        let load_idx = self.find_index(&self.load_bins, load);
+        self.values[load_idx][rpm_idx]
+    }
+
+    #[cfg(feature = "interp-bilinear")]
+    fn lookup_bilinear(&self, rpm: u16, load: u16) -> u16 {
+        let (rx0, rx1, fx) = find_bin_interpolation(&self.rpm_bins, rpm);
+        let (ly0, ly1, fy) = find_bin_interpolation(&self.load_bins, load);
+        let v00 = self.values[ly0][rx0];
+        let v01 = self.values[ly0][rx1];
+        let v10 = self.values[ly1][rx0];
+        let v11 = self.values[ly1][rx1];
+        bilinear_interpolate_u16(v00, v01, v10, v11, fx, fy)
+    }
+
     fn find_index(&self, bins: &[u16; 16], value: u16) -> usize {
         if value < bins[0] {
             return 0;
@@ -93,7 +99,6 @@ impl IpwTable {
         }
         15
     }
-
 }
 
 impl Default for IpwTable {
@@ -102,10 +107,48 @@ impl Default for IpwTable {
     }
 }
 
+impl TableLookup for IpwTable {
+    fn lookup(&self, rpm: u16, load: u16) -> u16 {
+        #[cfg(feature = "interp-bilinear")]
+        {
+            self.lookup_bilinear(rpm, load)
+        }
+        #[cfg(not(feature = "interp-bilinear"))]
+        {
+            self.lookup_nearest(rpm, load)
+        }
+    }
+}
+
+/// Nearest-neighbor IPW lookup wrapper.
+pub struct IpwTableNearest(pub IpwTable);
+
+impl TableLookup for IpwTableNearest {
+    fn lookup(&self, rpm: u16, load: u16) -> u16 {
+        self.0.lookup_nearest(rpm, load)
+    }
+}
+
+/// Bilinear IPW lookup wrapper.
+pub struct IpwTableBilinear(pub IpwTable);
+
+#[cfg(feature = "interp-bilinear")]
+impl TableLookup for IpwTableBilinear {
+    fn lookup(&self, rpm: u16, load: u16) -> u16 {
+        self.0.lookup_bilinear(rpm, load)
+    }
+}
+
+#[cfg(not(feature = "interp-bilinear"))]
+impl TableLookup for IpwTableBilinear {
+    fn lookup(&self, rpm: u16, load: u16) -> u16 {
+        self.0.lookup(rpm, load)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     #[test]
     fn test_lookup_default_values() {

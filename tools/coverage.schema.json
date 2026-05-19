@@ -1,0 +1,49 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CoverageArtifact",
+  "description": "Schema for target/formal-evidence/latest/coverage.json emitted by tools/verify_formal.sh.",
+  "type": "object",
+  "required": [
+    "status",
+    "packages"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["pass", "fail"]
+    },
+    "packages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "package",
+          "line_percent",
+          "threshold",
+          "status"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "package": {
+            "type": "string",
+            "minLength": 1
+          },
+          "line_percent": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "threshold": {
+            "type": "number",
+            "minimum": 0
+          },
+          "status": {
+            "type": "string",
+            "enum": ["pass", "fail"]
+          }
+        }
+      }
+    }
+  }
+}

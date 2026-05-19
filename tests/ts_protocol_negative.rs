@@ -13,10 +13,10 @@ struct Provider {
 impl OutpcProvider for Provider {
     fn fill_outpc(&self, out: &mut Outpc) {
         let s = unsafe { &*self.state };
-        out.rpm = s.rpm;
-        out.tps_percent = s.tps_percent;
-        out.vbatt_mv = s.battery_voltage_mv;
-        out.synced = if s.synced { 1 } else { 0 };
+        out.rpm = s.rpm();
+        out.tps_percent = s.tps_percent();
+        out.vbatt_mv = s.battery_voltage_mv();
+        out.synced = if s.synced() { 1 } else { 0 };
     }
 }
 
@@ -27,8 +27,8 @@ fn bad_crc_is_dropped() {
         state: &state as *const _,
     };
     let pages = EcuStatePageStore {
-        fuel: &mut state.ipw_table,
-        ign: &mut state.ignition_table,
+        fuel: &mut state.config.ipw_table,
+        ign: &mut state.config.ignition_table,
     };
     let mut server = TunerstudioServer::new(b"IPW-ECU V0.1", provider, pages);
 
@@ -49,8 +49,8 @@ fn truncated_frame_is_ignored() {
         state: &state as *const _,
     };
     let pages = EcuStatePageStore {
-        fuel: &mut state.ipw_table,
-        ign: &mut state.ignition_table,
+        fuel: &mut state.config.ipw_table,
+        ign: &mut state.config.ignition_table,
     };
     let mut server = TunerstudioServer::new(b"IPW-ECU V0.1", provider, pages);
 

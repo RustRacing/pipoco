@@ -2,7 +2,7 @@
 //!
 //! Provides concrete implementations of the HAL traits for STM32F4 hardware.
 
-use ecu_core::hal::{OutputPin, ResetController, ResetReason, TimeSource, Watchdog};
+use ecu_core::hal::{TimeSource, Watchdog};
 use stm32f4xx_hal::pac;
 
 /// STM32F4 time source using TIM2
@@ -31,28 +31,6 @@ impl TimeSource for Stm32Time {
     }
 }
 
-/// STM32F4 GPIO output pin wrapper
-///
-/// Wraps an embedded-hal OutputPin implementation for use with the ECU core.
-pub struct Stm32Pin<P> {
-    pub pin: P,
-}
-
-impl<P> OutputPin for Stm32Pin<P>
-where
-    P: embedded_hal::digital::OutputPin,
-{
-    fn set_high(&mut self) {
-        // Ignore result - we assume pin operations always succeed
-        let _ = self.pin.set_high();
-    }
-
-    fn set_low(&mut self) {
-        // Ignore result - we assume pin operations always succeed
-        let _ = self.pin.set_low();
-    }
-}
-
 /// STM32F4 Independent Watchdog
 pub struct Stm32Watchdog {
     iwdg: pac::IWDG,
@@ -74,7 +52,7 @@ impl Watchdog for Stm32Watchdog {
         // Prescaler selection to approximate timeout; use divider 64
         // timeout = (RLR + 1) / (LSI/ prescaler)
         // Assume ~32kHz LSI; for ~250ms: RLR ~ 12500 / 64 ≈ 195
-        self.iwdg.pr.modify(|_, w| unsafe { w.pr().bits(0b011) }); // /32 or /64 depending on part
+        self.iwdg.pr.modify(|_, w| w.pr().bits(0b011)); // /32 or /64 depending on part
 
         let reload: u16 = if timeout_ms <= 100 {
             800
@@ -83,9 +61,7 @@ impl Watchdog for Stm32Watchdog {
         } else {
             4000
         };
-        unsafe {
-            self.iwdg.rlr.write(|w| w.rl().bits(reload));
-        }
+        self.iwdg.rlr.write(|w| w.rl().bits(reload));
 
         // Reload and start
         unsafe {
@@ -103,43 +79,11 @@ impl Watchdog for Stm32Watchdog {
     }
 }
 
-/// STM32F4 Reset reason reader (from RCC CSR flags)
-pub struct Stm32Reset {
-    rcc: pac::RCC,
-}
+impl ecu_io::Watchdog for Stm32Watchdog {
+    type Error = core::convert::Infallible;
 
-impl Stm32Reset {
-    pub fn new(rcc: pac::RCC) -> Self {
-        Self { rcc }
-    }
-}
-
-impl ResetController for Stm32Reset {
-    fn reason(&self) -> ResetReason {
-        let csr = self.rcc.csr.read();
-        if csr.borrstf().bit_is_set() {
-            return ResetReason::BrownOut;
-        }
-        if csr.porrstf().bit_is_set() {
-            return ResetReason::PowerOn;
-        }
-        if csr.sftrstf().bit_is_set() {
-            return ResetReason::Software;
-        }
-        if csr.iwdgrstf().bit_is_set() {
-            return ResetReason::IndependentWatchdog;
-        }
-        if csr.wwdgrstf().bit_is_set() {
-            return ResetReason::WindowWatchdog;
-        }
-        if csr.lpwrstf().bit_is_set() {
-            return ResetReason::LowPower;
-        }
-        ResetReason::Unknown
-    }
-
-    fn clear(&mut self) {
-        // Clear reset flags by setting RMVF
-        self.rcc.csr.modify(|_, w| w.rmvf().set_bit());
+    fn feed(&mut self) -> Result<(), Self::Error> {
+        self.pet();
+        Ok(())
     }
 }

@@ -1,5 +1,27 @@
 [workspace]
-members = [".", "stm32f4", "rp2350b", "rp2040-pico", "ecu-target-common"]
+members = [
+    ".",
+    "ecu-control",
+    "ecu-runtime",
+    "ecu-sim",
+    "ecu-sim-core",
+    "ecu-sim-ffi",
+    "ecu-sim-driver",
+    "ecu-io",
+    "ecu-ts",
+    "ecu-scheduler",
+    "ecu-calibration",
+    "ecu-domain",
+    "ecu-trigger",
+    "ecu-board-api",
+    "ecu-board-profiles",
+    "ecu-atmega2560",
+    "ecu-spec",
+    "stm32f4",
+    "rp2350b",
+    "rp2040-pico",
+    "ecu-target-common",
+]
 resolver = "2"
 
 [package]
@@ -22,25 +44,81 @@ bbqueue = { version = "0.5", optional = true }
 [features]
 default = []
 interp-bilinear = []
+legacy-root-scheduler = []
+sched-simple = ["legacy-root-scheduler"]
+management-experimental = []
 transport-bbqueue = ["bbqueue"]
 transport-can = []
 transport-can-fd = []
-sched-simple = []
+sched-angle-disable = []
+simulation = []
 
-# For testing only - enables test helpers
+# For testing only - enables test helpers and non-production paths.
 test-utils = []
 
 [dev-dependencies]
 # Enable test-utils feature when running tests
-# This allows integration tests to use create_test_pair()
+# This allows integration tests to use create_test_pair() and board adapter persistence tests.
+ecu-calibration = { path = "./ecu-calibration" }
+ecu-domain = { path = "./ecu-domain" }
+ecu-io = { path = "./ecu-io" }
+ecu-runtime = { path = "./ecu-runtime" }
+ecu-sim = { path = "./ecu-sim" }
+ecu-spec = { path = "./ecu-spec" }
 ecu-target-common = { path = "./ecu-target-common" }
+ecu-rp2040-pico = { path = "./rp2040-pico" }
+ecu-rp2350b = { path = "./rp2350b" }
 
 [[test]]
 name = "transport_integration"
 required-features = ["transport-bbqueue"]
+
+[[test]]
+name = "concurrent_access_smoke"
+required-features = ["legacy-root-scheduler"]
+
+[[test]]
+name = "ecu_integration_batch_tests"
+required-features = ["legacy-root-scheduler"]
+
+[[test]]
+name = "ported_tests"
+required-features = ["legacy-root-scheduler"]
+
+[[test]]
+name = "safety_tests"
+required-features = ["legacy-root-scheduler"]
+
+[[test]]
+name = "scheduler_cutoff"
+required-features = ["legacy-root-scheduler"]
+
+[[test]]
+name = "scheduler_drain"
+required-features = ["legacy-root-scheduler"]
+
+[[test]]
+name = "simulated_scenarios_test"
+required-features = ["legacy-root-scheduler"]
+
+[[test]]
+name = "sync_loss_cancels_events"
+required-features = ["legacy-root-scheduler"]
 
 [profile.release]
 opt-level = "z"      # Optimize for size
 lto = true           # Link-time optimization
 codegen-units = 1    # Better optimization
 strip = true         # Strip symbols
+debug = true         # Keep debug info for embedded flashing
+panic = "abort"
+
+[profile.audit]
+inherits = "release"
+strip = false        # Keep symbols for cargo bloat / size inspection
+lto = false          # Preserve symbol boundaries for analysis
+debug = true
+
+[profile.dev]
+opt-level = 1
+panic = "abort"

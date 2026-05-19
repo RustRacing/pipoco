@@ -1,0 +1,13 @@
+[package]
+name = "ecu-sim-core"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "ecu_sim_core"
+path = "src/lib.rs"
+
+[dependencies]
+
+[dev-dependencies]
+proptest = "1.4"

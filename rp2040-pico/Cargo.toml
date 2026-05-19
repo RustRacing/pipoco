@@ -3,37 +3,34 @@ name = "ecu-rp2040-pico"
 version = "0.1.0"
 edition = "2021"
 autobins = false
+build = "build.rs"
 
 [dependencies]
 ecu-core = { path = "..", default-features = false }
+ecu-calibration = { path = "../ecu-calibration" }
+ecu-domain = { path = "../ecu-domain" }
+ecu-io = { path = "../ecu-io" }
+ecu-runtime = { path = "../ecu-runtime" }
+ecu-scheduler = { path = "../ecu-scheduler" }
 ecu-target-common = { path = "../ecu-target-common" }
-rp2040-hal = { version = "0.9", features = ["rt"] }
-embedded-hal = "1.0"
+rp2040-hal = { version = "0.9", features = ["rt", "critical-section-impl"] }
+embedded-hal = "0.2"
 usb-device = "0.2"
-usbd-serial = "0.1"
+usbd-serial = "0.1.1"
 cortex-m = "0.7"
 cortex-m-rt = "0.7"
 panic-halt = "0.2"
+# panic-never = "0.1" # BLOCKED: causes linker failure on this toolchain (see US-FM0290 blocker in tools/TOOLING.md)
 pio-proc = "0.2"
 pio = "0.2"
 embedded-storage = "0.3"
 # optional backends; we keep storage abstract and feature-gated
 sequential-storage = { version = "0.3", optional = true }
 
-[profile.dev]
-opt-level = 1
-panic = "abort"
-
-[profile.release]
-opt-level = "z"
-lto = true
-codegen-units = 1
-debug = true
-panic = "abort"
-
 [[bin]]
 name = "ts-gauges"
 path = "src/bin/ts_gauges.rs"
+required-features = ["example-bins"]
 
 [[bin]]
 name = "ts-ecu"
@@ -42,6 +39,7 @@ path = "src/bin/ts_ecu.rs"
 [[bin]]
 name = "pio_capture_example"
 path = "src/bin/pio_capture_example.rs"
+required-features = ["example-bins", "capture-pio"]
 
 [features]
 default = []
@@ -51,6 +49,8 @@ flash-kv = ["sequential-storage"]
 capture-pio = []
 # Optional cam input via GPIO IRQ
 capture-cam = []
+# Standalone example and host-side binaries.
+example-bins = []
 # ADC29 usage selection
 # If enabled, ADC29 is VSYS/3 and we compute VBATT from it. If disabled, ADC29 is IAT thermistor.
 vbatt-vsys = []

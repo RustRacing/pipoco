@@ -5,6 +5,33 @@ pub mod plausibility;
 pub mod slew;
 pub mod thermistor;
 
+pub use model::{ResistiveSensor as ThermistorSensor, VoltageSensor as CurveSensor};
+
+/// Quality of a sensor reading.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum Quality {
+    Good,
+    Degraded,
+    Fault,
+}
+
+/// Sensor read failures.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum SensorError {
+    OutOfRange,
+    Stale,
+    NotReady,
+}
+
+/// Generic sensor contract.
+pub trait Sensor {
+    type Reading;
+
+    fn read(&mut self) -> Result<Self::Reading, SensorError>;
+
+    fn quality(&self) -> Quality;
+}
+
 /// Runtime sensor limits and clear timing
 #[derive(Copy, Clone)]
 pub struct SensorsLimits {

@@ -1,6 +1,7 @@
 # ECU VE Engine for Raspberry Pi RP2350B
 
 This example demonstrates the **VE Engine** running on the Raspberry Pi RP2350B microcontroller.
+It is an example/bring-up target, not a supported production ECU path.
 
 ## Hardware Specifications
 
@@ -63,8 +64,9 @@ cargo run --release --features ve-demo --bin ecu-rp2350b-demo
 # Minimal ECU target (safe outputs + scheduler loop)
 cargo run --release --bin ecu-rp2350b-min
 
-# Datalogger (sensors → CAN skeleton)
+# Datalogger example (sensors → CAN no-op transport)
 cargo run --release --bin rp2350b-datalogger-sensors-can
+```
 
 ### Trigger Wiring Options
 
@@ -74,12 +76,27 @@ cargo run --release --bin rp2350b-datalogger-sensors-can
 - In code, `setup_trigger_irq(...)` configures rising-edge detection and unmasks the pin; ISR clears the flag and pushes a timestamp via `Rp2350Time::micros()`.
 
 2) PIO-based Capture — feature `capture-pio`
-- An isolated skeleton lives at `src/bin/pio_capture_example.rs`.
+- An isolated example lives at `src/bin/pio_capture_example.rs`.
 - Build with: `cargo run --release --features capture-pio --bin rp2350-pio-capture-example`.
 - Intended flow: PIO samples the trigger line and raises IRQ/DMA on edges; in the IRQ, read TIMER0 microseconds and push to the ring buffer.
 
 Both options feed `TriggerDecoder::tooth_edge_with_timestamp(ts)` through the minimal ECU loop.
-```
+
+## Supported Feature Profiles
+
+- These are the supported named slices for this target; the cross-target
+  inventory lives in `changes/runtime-architecture-migration/inventory.md`.
+- `capture-gpio` enables the GPIO IRQ trigger-capture path in `src/bin/minimal_ecu.rs`.
+- `capture-pio` enables the standalone PIO capture example.
+- `ve-demo` gates the VE demo binary in `src/main.rs`.
+- `example-bins` gates the standalone example binaries.
+
+## Validation Commands
+
+- `cargo check -p ecu-rp2350b --release --target thumbv8m.main-none-eabihf --features "ve-demo capture-gpio" --bin ecu-rp2350b-demo`
+- `cargo check -p ecu-rp2350b --release --target thumbv8m.main-none-eabihf --features capture-pio --bin rp2350-pio-capture-example`
+- `cargo check -p ecu-rp2350b --release --target thumbv8m.main-none-eabihf --features example-bins --bin ts-gauges`
+- `cargo check -p ecu-rp2350b --release --target thumbv8m.main-none-eabihf --features "ve-demo capture-gpio capture-pio" --bin ecu-rp2350b-demo` should fail.
 
 Or use standard tools:
 ```bash
@@ -155,16 +172,24 @@ macro_rules! IGN2_GPIO { () => { gpio3 } }
 macro_rules! TRIGGER_GPIO { () => { gpio4 } }
 ```
 
-These macros map directly to `pins.gpioX` fields when creating outputs, keeping the rest of the code unchanged. For sequential setups with more outputs, switch to `EcuApp::new_with_config` and provide a channel map and modes (Batch/Sequential, Wasted/Sequential).
+These macros map directly to `pins.gpioX` fields when creating outputs. The
+minimal target now uses the split runtime/scheduler path:
+`BoardAdapter` + `ScheduledActionExecutor` + `ScheduledOutputs4`.
+Embedded-hal 1.0 pins are wrapped with `Hal1ScheduledOut`.
+
+The current minimal binary uses deterministic bring-up sensor values until real
+ADC/sensor plumbing is added. It is intended to prove the split scheduler output
+path compiles on the RP2350 target, not to define final production sensor IO.
 
 ### Channel Mapping and Modes
 
-- Use `OutputChannels` to assign logical injector/ignition channels to GPIO pins.
-- Example (V8): indices 0..7 = injectors, 8..15 = coils. Arrange your `outputs` slice in the same order so the scheduler toggles the expected pins.
-- Choose modes via `EcuConfig`:
-  - `InjectionMode::{Batch, Sequential}`
-  - `IgnitionMode::{Wasted, Sequential}`
-  - `firing_order: &[u8]` like `&[1,8,4,3,6,5,7,2]` (no trailing zeros needed).
+- The split runtime currently emits injector and ignition channel 1 in the
+  minimal bring-up path, so `ScheduledOutputs4` maps those to the second
+  injector and ignition pins.
+- Wider channel maps and sequential modes remain follow-up work for the split
+  board adapter path.
+- Wider channel examples should use the split target-common/scheduler path, not
+  root `EcuApp` or `OutputChannels`.
 
 ## Real-World Integration
 

@@ -6,6 +6,18 @@ Cargo.lock
 # Debug files
 *.pdb
 
+# Python
+__pycache__/
+*.py[cod]
+
+# Local/generated tool artifacts
+/.codex
+/.session_id
+/.session_meta.json
+/_apalache-out/
+/states/
+/verus
+
 # IDE
 .vscode/
 .idea/
@@ -13,6 +25,15 @@ Cargo.lock
 *.swo
 *~
 
+# Local AI notes
+.hermes-harness/
+aidocs/
+
 # OS
 .DS_Store
 Thumbs.db
+
+# cargo-fuzz
+fuzz/artifacts/
+fuzz/corpus/
+fuzz/coverage/

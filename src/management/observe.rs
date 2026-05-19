@@ -44,18 +44,6 @@ pub struct Observation {
     pub quality: Quality,
 }
 
-// Ensure Copy is derived for all components
-const _: () = {
-    fn assert_copy<T: Copy>() {}
-    fn assert_all() {
-        assert_copy::<SensorType>();
-        assert_copy::<ObservationSource>();
-        assert_copy::<ObservationValue>();
-        assert_copy::<Quality>();
-        assert_copy::<Observation>();
-    }
-};
-
 impl Observation {
     /// Create new observation
     pub fn new(

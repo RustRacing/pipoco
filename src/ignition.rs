@@ -18,6 +18,7 @@
 //! - High voltage = shorter dwell (builds energy faster)
 
 use crate::constants::ignition::*;
+use crate::tables::TableLookup;
 #[cfg(feature = "interp-bilinear")]
 use crate::ve_engine::interpolation::{bilinear_interpolate_i16, find_bin_interpolation};
 
@@ -50,22 +51,25 @@ impl IgnitionTable {
     /// # Returns
     /// Timing in degrees BTDC (positive = advance, negative = retard)
     pub fn lookup(&self, rpm: u16, load: u16) -> i16 {
-        #[cfg(feature = "interp-bilinear")]
-        {
-            let (rx0, rx1, fx) = find_bin_interpolation(&self.rpm_bins, rpm);
-            let (ly0, ly1, fy) = find_bin_interpolation(&self.load_bins, load);
-            let v00 = self.values[ly0][rx0];
-            let v01 = self.values[ly0][rx1];
-            let v10 = self.values[ly1][rx0];
-            let v11 = self.values[ly1][rx1];
-            bilinear_interpolate_i16(v00, v01, v10, v11, fx, fy)
-        }
-        #[cfg(not(feature = "interp-bilinear"))]
-        {
-            let rpm_idx = self.find_index(&self.rpm_bins, rpm);
-            let load_idx = self.find_index(&self.load_bins, load);
-            self.values[load_idx][rpm_idx]
-        }
+        TableLookup::lookup(self, rpm, load) as i16
+    }
+
+    #[cfg(not(feature = "interp-bilinear"))]
+    fn lookup_nearest(&self, rpm: u16, load: u16) -> i16 {
+        let rpm_idx = self.find_index(&self.rpm_bins, rpm);
+        let load_idx = self.find_index(&self.load_bins, load);
+        self.values[load_idx][rpm_idx]
+    }
+
+    #[cfg(feature = "interp-bilinear")]
+    fn lookup_bilinear(&self, rpm: u16, load: u16) -> i16 {
+        let (rx0, rx1, fx) = find_bin_interpolation(&self.rpm_bins, rpm);
+        let (ly0, ly1, fy) = find_bin_interpolation(&self.load_bins, load);
+        let v00 = self.values[ly0][rx0];
+        let v01 = self.values[ly0][rx1];
+        let v10 = self.values[ly1][rx0];
+        let v11 = self.values[ly1][rx1];
+        bilinear_interpolate_i16(v00, v01, v10, v11, fx, fy)
     }
 
     #[cfg(not(feature = "interp-bilinear"))]
@@ -85,6 +89,23 @@ impl IgnitionTable {
 impl Default for IgnitionTable {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl TableLookup for IgnitionTable {
+    fn lookup(&self, rpm: u16, load: u16) -> u16 {
+        let value = {
+            #[cfg(feature = "interp-bilinear")]
+            {
+                self.lookup_bilinear(rpm, load)
+            }
+            #[cfg(not(feature = "interp-bilinear"))]
+            {
+                self.lookup_nearest(rpm, load)
+            }
+        };
+
+        value as u16
     }
 }
 
@@ -234,6 +255,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(unused_mut)]
     fn test_ignition_table_lookup() {
         let mut table = IgnitionTable::new();
         // Default everywhere

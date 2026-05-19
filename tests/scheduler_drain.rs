@@ -1,9 +1,18 @@
-use ecu_core::scheduler::{Scheduler, Channel};
 use ecu_core::hal::OutputPin;
+use ecu_core::scheduler::{Channel, Scheduler};
 
 #[derive(Default)]
-struct MockPin { pub log: Vec<bool> }
-impl OutputPin for MockPin { fn set_high(&mut self) { self.log.push(true) } fn set_low(&mut self) { self.log.push(false) } }
+struct MockPin {
+    pub log: Vec<bool>,
+}
+impl OutputPin for MockPin {
+    fn set_high(&mut self) {
+        self.log.push(true)
+    }
+    fn set_low(&mut self) {
+        self.log.push(false)
+    }
+}
 
 #[test]
 fn scheduler_drains_in_order_without_jitter() {
@@ -18,7 +27,12 @@ fn scheduler_drains_in_order_without_jitter() {
     }
     // Prepare outputs
     let mut pin = MockPin::default();
-    let mut outs: [&mut dyn OutputPin; 4] = [&mut pin, &mut MockPin::default(), &mut MockPin::default(), &mut MockPin::default()];
+    let mut outs: [&mut dyn OutputPin; 4] = [
+        &mut pin,
+        &mut MockPin::default(),
+        &mut MockPin::default(),
+        &mut MockPin::default(),
+    ];
     // Step time and drain
     let mut now = 0u32;
     while now < 1000 {
@@ -33,4 +47,3 @@ fn scheduler_drains_in_order_without_jitter() {
     assert_eq!(on_count, 10);
     assert_eq!(off_count, 10);
 }
-

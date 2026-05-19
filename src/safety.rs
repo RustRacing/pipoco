@@ -234,20 +234,30 @@ pub struct CrankingGate {
 }
 
 impl CrankingGate {
-    pub const fn new() -> Self { Self { cranking: false } }
+    pub const fn new() -> Self {
+        Self { cranking: false }
+    }
     /// Update internal state based on current RPM and return `true` if cranking.
     pub fn update(&mut self, rpm: u16) -> bool {
         if self.cranking {
             // stay cranking until safely above exit threshold
-            if rpm >= CRANKING_EXIT_RPM { self.cranking = false; }
-        } else if rpm < CRANKING_RPM_THRESHOLD { self.cranking = true; }
+            if rpm >= CRANKING_EXIT_RPM {
+                self.cranking = false;
+            }
+        } else if rpm < CRANKING_RPM_THRESHOLD {
+            self.cranking = true;
+        }
         self.cranking
     }
-    pub fn is_cranking(&self) -> bool { self.cranking }
+    pub fn is_cranking(&self) -> bool {
+        self.cranking
+    }
 }
 
 impl Default for CrankingGate {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// Output latch and helpers for fail-safe states
@@ -291,9 +301,10 @@ pub fn apply_safe_state(outputs: &mut [&mut dyn crate::hal::OutputPin]) {
 use crate::constants::voltage::*;
 
 /// Power supply state based on voltage monitoring
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PowerState {
     /// Normal operation (voltage OK)
+    #[default]
     Normal,
     /// Warning: Low voltage, limp mode active
     Warning,
@@ -301,12 +312,6 @@ pub enum PowerState {
     Critical,
     /// Overvoltage detected (load dump)
     Overvoltage,
-}
-
-impl Default for PowerState {
-    fn default() -> Self {
-        Self::Normal
-    }
 }
 
 /// Voltage monitor for brown-out detection and limp mode

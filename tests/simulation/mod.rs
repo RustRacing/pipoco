@@ -54,13 +54,13 @@
 use ecu_core::hal::TimeSource;
 use ecu_core::{EcuState, TriggerDecoder};
 
-// Re-export submodules
-pub mod engine;
-pub mod outputs;
+mod ecu_app_harness;
+mod engine;
+mod outputs;
 pub mod scenarios;
 pub mod sensors;
 pub mod time;
-pub mod trigger;
+mod trigger;
 
 pub use engine::EngineSimulator;
 pub use outputs::OutputCapture;
@@ -284,7 +284,7 @@ impl Simulator {
 
                 // Update ECU with current sensor values if synced
                 if decoder.synced() {
-                    let rpm = decoder.rpm();
+                    let rpm = decoder.rpm().raw();
                     let load = self.sensors.map_kpa();
 
                     // Calculate fuel

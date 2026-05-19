@@ -1,6 +1,7 @@
 /// Tests ported from RusEFI and Speeduino
 /// Adapted to work with our simplified IPW-based architecture
-use ecu_core::{hal::TimeSource, scale_u16, Channel, EcuState, IpwTable, TriggerDecoder};
+use ecu_core::scheduler::Channel;
+use ecu_core::{hal::TimeSource, scale_u16, EcuState, IpwTable, TriggerDecoder};
 use std::cell::Cell;
 
 // Mock time source for testing with interior mutability
@@ -40,7 +41,7 @@ fn test_no_premature_sync() {
     }
 
     assert!(!decoder.synced(), "Should not sync with only 10 teeth");
-    assert_eq!(decoder.rpm(), 0, "RPM should be 0 before sync");
+    assert_eq!(decoder.rpm().raw(), 0, "RPM should be 0 before sync");
 }
 
 /// Ported from RusEFI: test_trigger_decoder.cpp
@@ -111,7 +112,7 @@ fn test_rpm_at_various_speeds() {
             .set_time(tooth_period_us * 57 + tooth_period_us * 2);
         decoder.tooth_edge();
 
-        let measured_rpm = decoder.rpm();
+        let measured_rpm = decoder.rpm().raw();
         let tolerance = target_rpm as f32 * 0.25; // 25% tolerance for MVP approximation
         let mr = measured_rpm as i32;
         let tr = target_rpm;
@@ -164,9 +165,9 @@ fn test_multiple_corrections() {
     let mut state = EcuState::new();
 
     // Apply multiple corrections
-    state.corrections.clt = 120; // 1.2x for cold
-    state.corrections.iat = 110; // 1.1x for cold air
-    state.corrections.vbatt = 95; // 0.95x for low voltage
+    state.corrections_mut().clt = 120; // 1.2x for cold
+    state.corrections_mut().iat = 110; // 1.1x for cold air
+    state.corrections_mut().vbatt = 95; // 0.95x for low voltage
 
     let pw = state.calculate_fuel(3000, 60);
 
@@ -182,11 +183,11 @@ fn test_table_cell_independence() {
 
     // Modify several cells - remember table is [load_idx][rpm_idx]
     // RPM 500 -> idx 0, Load 20 -> idx 0
-    state.ipw_table[0][0] = 500; // Low RPM, low load
-                                 // RPM 8000 -> idx 15, Load 170 -> idx 15
-    state.ipw_table[15][15] = 3000; // High RPM, high load
-                                    // RPM 3500 -> idx 6, Load 100 -> idx 8
-    state.ipw_table[8][6] = 1500; // Middle
+    state.config.ipw_table[0][0] = 500; // Low RPM, low load
+                                        // RPM 8000 -> idx 15, Load 170 -> idx 15
+    state.config.ipw_table[15][15] = 3000; // High RPM, high load
+                                           // RPM 3500 -> idx 6, Load 100 -> idx 8
+    state.config.ipw_table[8][6] = 1500; // Middle
 
     // Verify each lookup returns correct value
     let pw1 = state.calculate_fuel(500, 20); // Should hit [0][0]
@@ -204,16 +205,16 @@ fn test_extreme_corrections() {
     let mut state = EcuState::new();
 
     // Extreme low correction
-    state.corrections.clt = 1; // 0.01x (almost zero)
+    state.corrections_mut().clt = 1; // 0.01x (almost zero)
     let pw_low = state.calculate_fuel(3000, 60);
     assert_eq!(pw_low, 500, "Should clamp to minimum");
 
     // Extreme high correction - need high base value to exceed max
     // 3000 RPM -> idx 5, 60 kPa -> idx 4, table is [load_idx][rpm_idx]
-    state.ipw_table[4][5] = 15000;
-    state.corrections.clt = 255;
-    state.corrections.iat = 255;
-    state.corrections.vbatt = 255;
+    state.config.ipw_table[4][5] = 15000;
+    state.corrections_mut().clt = 255;
+    state.corrections_mut().iat = 255;
+    state.corrections_mut().vbatt = 255;
     let pw_high = state.calculate_fuel(3000, 60);
     assert_eq!(pw_high, 20000, "Should clamp to maximum");
 }
@@ -271,7 +272,7 @@ fn test_sync_loss_on_stall() {
 
     // Should have lost sync due to timeout
     assert!(!decoder.synced(), "Should lose sync after timeout");
-    assert_eq!(decoder.rpm(), 0, "RPM should be 0 after sync loss");
+    assert_eq!(decoder.rpm().raw(), 0, "RPM should be 0 after sync loss");
 }
 
 /// Test linear table initialization helper

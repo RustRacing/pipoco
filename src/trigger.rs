@@ -1,4 +1,14 @@
-//! Trigger wheel decoder for 60-2 pattern
+//! Trigger wheel decoder for 60-2 pattern.
+//!
+//! ISR entry points:
+//! - `tooth_edge`
+//! - `tooth_edge_with_timestamp`
+//!
+//! The `rpm`, `synced`, and `angle_x10_base` fields are main-loop-only reads
+//! and must be protected with `cortex_m::interrupt::free` or an equivalent
+//! critical section when accessed outside the ISR context.
+//!
+//! The decoder is not re-entrant.
 //!
 //! This module decodes signals from a 60-2 trigger wheel (60 teeth with 2 missing).
 //! The missing tooth gap is used for synchronization and position reference.
@@ -20,6 +30,10 @@
 use crate::constants::rpm::*;
 use crate::constants::trigger::*;
 use crate::hal::TimeSource;
+use crate::units::{DegX10, Micros, Rpm};
+#[cfg(debug_assertions)]
+use core::cell::Cell;
+use core::marker::PhantomData;
 
 /// Raw trigger timing data for management engine
 ///
@@ -52,6 +66,14 @@ pub struct TriggerTiming {
 
     /// Timestamp when this data was captured (microseconds)
     pub timestamp_us: u32,
+}
+
+/// Decoder sync state during the staged migration away from a boolean flag.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum SyncState {
+    Unsynced,
+    Provisional,
+    Locked { cam_ref: bool },
 }
 
 impl TriggerTiming {
@@ -117,13 +139,28 @@ pub struct TriggerDecoder<T: TimeSource> {
     last_period: u32,
     last_gap_period: u32, // Period of last missing tooth gap
     tooth_count: u8,
-    synced: bool,
+    sync: SyncState,
     rpm: u16,                   // Approximate for table lookup
     timing_data: TriggerTiming, // Raw data for management engine
     // Angle/time tracking (Phase 2)
     rev_us_est: u32,           // Estimated revolution period (us)
     angle_x10_base: u16,       // Angle at last update (deg*10, 0..3599)
     last_angle_update_us: u32, // Timestamp of last angle base update
+    #[cfg(debug_assertions)]
+    reentry_guard: Cell<bool>,
+    _not_sync: PhantomData<*const ()>,
+}
+
+#[cfg(debug_assertions)]
+struct ReentryGuard(*const Cell<bool>);
+
+#[cfg(debug_assertions)]
+impl Drop for ReentryGuard {
+    fn drop(&mut self) {
+        unsafe {
+            (*self.0).set(false);
+        }
+    }
 }
 
 impl<T: TimeSource> TriggerDecoder<T> {
@@ -135,12 +172,15 @@ impl<T: TimeSource> TriggerDecoder<T> {
             last_period: 0,
             last_gap_period: 0,
             tooth_count: 0,
-            synced: false,
+            sync: SyncState::Unsynced,
             rpm: 0,
             timing_data: TriggerTiming::new(),
             rev_us_est: 0,
             angle_x10_base: 0,
             last_angle_update_us: 0,
+            #[cfg(debug_assertions)]
+            reentry_guard: Cell::new(false),
+            _not_sync: PhantomData,
         }
     }
 
@@ -149,19 +189,29 @@ impl<T: TimeSource> TriggerDecoder<T> {
     /// This function must be called for every rising edge of the trigger signal.
     /// It detects the missing tooth gap, maintains sync, and calculates RPM.
     pub fn tooth_edge(&mut self) {
+        #[cfg(debug_assertions)]
+        let _guard = Self::enter_guard(&self.reentry_guard);
         let now = self.time_source.micros();
-        self.tooth_edge_with_timestamp(now);
+        self.tooth_edge_with_timestamp_inner(now);
     }
 
     /// Variant of `tooth_edge` that accepts a captured timestamp.
     /// Use this with hardware input-capture to avoid reading the timer here.
     pub fn tooth_edge_with_timestamp(&mut self, now: u32) {
+        #[cfg(debug_assertions)]
+        let _guard = Self::enter_guard(&self.reentry_guard);
+        self.tooth_edge_with_timestamp_inner(now);
+    }
+
+    fn tooth_edge_with_timestamp_inner(&mut self, now: u32) {
         // Use wrapping subtraction to handle timer overflow
         let period = now.wrapping_sub(self.last_tooth_time);
 
         // Check for loss of sync due to timeout
-        if self.synced && period > SYNC_TIMEOUT_US {
-            self.synced = false;
+        if matches!(self.sync, SyncState::Locked { .. } | SyncState::Provisional)
+            && period > SYNC_TIMEOUT_US
+        {
+            self.sync = SyncState::Unsynced;
             self.rpm = 0;
             self.tooth_count = 0;
             self.timing_data.synced = false;
@@ -183,7 +233,7 @@ impl<T: TimeSource> TriggerDecoder<T> {
         if self.last_period > MIN_VALID_PERIOD_US && period > threshold && period < max_valid_gap {
             // Found missing tooth gap - sync!
             self.tooth_count = 1;
-            self.synced = true;
+            self.sync = SyncState::Provisional;
             self.last_gap_period = period;
 
             // Calculate approximate RPM for table lookup (fast)
@@ -202,8 +252,11 @@ impl<T: TimeSource> TriggerDecoder<T> {
             self.update_rev_estimate(rev);
             self.angle_x10_base = 0;
             self.last_angle_update_us = now;
-        } else if self.synced {
+        } else if matches!(self.sync, SyncState::Locked { .. } | SyncState::Provisional) {
             // Normal tooth - increment count
+            if matches!(self.sync, SyncState::Provisional) {
+                self.sync = SyncState::Locked { cam_ref: false };
+            }
             self.tooth_count += 1;
             if self.tooth_count > TEETH_PER_REV {
                 self.tooth_count = 1;
@@ -224,8 +277,8 @@ impl<T: TimeSource> TriggerDecoder<T> {
     }
 
     /// Get current RPM
-    pub fn rpm(&self) -> u16 {
-        self.rpm
+    pub fn rpm(&self) -> Rpm {
+        Rpm::new(self.rpm)
     }
 
     /// Check if decoder is synced
@@ -234,7 +287,7 @@ impl<T: TimeSource> TriggerDecoder<T> {
     /// - Decoder has never seen a missing tooth gap
     /// - No tooth seen for SYNC_TIMEOUT_US microseconds
     pub fn synced(&self) -> bool {
-        self.synced
+        matches!(self.sync, SyncState::Locked { .. } | SyncState::Provisional)
     }
 
     /// Get current tooth number (1-58)
@@ -268,15 +321,20 @@ impl<T: TimeSource> TriggerDecoder<T> {
     /// let accel = timing.acceleration_rpm_per_sec(&previous_timing);
     ///
     /// // In injection module (local):
-    /// let approx_rpm = decoder.rpm();  // Fast, good enough for table lookup
+    /// let approx_rpm = decoder.rpm().raw();  // Fast, good enough for table lookup
     /// ```
     pub fn timing_data(&self) -> TriggerTiming {
         self.timing_data
     }
 
     /// Estimated revolution period in microseconds (single 360°)
+    pub fn period_us(&self) -> Micros {
+        Micros::new(self.rev_us_est)
+    }
+
+    /// Backward-compatible raw period accessor for internal code during migration.
     pub fn rev_period_us(&self) -> u32 {
-        self.rev_us_est
+        self.period_us().raw()
     }
 
     fn update_rev_estimate(&mut self, new_rev_us: u32) {
@@ -312,13 +370,18 @@ impl<T: TimeSource> TriggerDecoder<T> {
     }
 
     /// Current crank angle (deg*10, 0..3599) based on last sync and time elapsed
-    pub fn current_angle_x10(&self, now: u32) -> u16 {
+    pub fn angle_x10(&self, now: u32) -> DegX10 {
         if self.rev_us_est == 0 {
-            return 0;
+            return DegX10::new(0);
         }
         let dt = now.wrapping_sub(self.last_angle_update_us) as u64;
         let delta = (dt * 3600u64) / (self.rev_us_est as u64);
-        ((self.angle_x10_base as u64 + delta) % 3600) as u16
+        DegX10::new(((self.angle_x10_base as u64 + delta) % 3600) as i16)
+    }
+
+    /// Backward-compatible raw angle accessor for internal code during migration.
+    pub fn current_angle_x10(&self, now: u32) -> u16 {
+        self.angle_x10(now).raw() as u16
     }
 
     /// Compute an absolute timestamp (microseconds) when the crank reaches `target_angle_x10`.
@@ -349,10 +412,20 @@ impl<T: TimeSource> TriggerDecoder<T> {
 
     /// Force loss of sync (for testing or error recovery)
     pub fn reset_sync(&mut self) {
-        self.synced = false;
+        self.sync = SyncState::Unsynced;
         self.rpm = 0;
         self.tooth_count = 0;
         self.timing_data.synced = false;
+        self.rev_us_est = 0;
+        self.angle_x10_base = 0;
+        self.last_angle_update_us = 0;
+    }
+
+    #[cfg(debug_assertions)]
+    fn enter_guard(flag: &Cell<bool>) -> ReentryGuard {
+        let was_set = flag.replace(true);
+        debug_assert!(!was_set, "TriggerDecoder re-entrancy detected");
+        ReentryGuard(flag as *const Cell<bool>)
     }
 }
 
@@ -478,18 +551,31 @@ mod tests {
 
     #[test]
     fn test_timing_data_updated() {
-        struct MockTime { time: Cell<u32> }
-        impl MockTime {
-            fn new(t: u32) -> Self { Self { time: Cell::new(t) } }
-            fn set(&self, t: u32) { self.time.set(t); }
+        struct MockTime {
+            time: Cell<u32>,
         }
-        impl TimeSource for MockTime { fn micros(&self) -> u32 { self.time.get() } }
+        impl MockTime {
+            fn new(t: u32) -> Self {
+                Self { time: Cell::new(t) }
+            }
+            fn set(&self, t: u32) {
+                self.time.set(t);
+            }
+        }
+        impl TimeSource for MockTime {
+            fn micros(&self) -> u32 {
+                self.time.get()
+            }
+        }
 
         let time = MockTime::new(0);
         let mut decoder = TriggerDecoder::new(time);
 
         // Simulate sync
-        for i in 0..57 { decoder.time_source().set(i * 1000); decoder.tooth_edge(); }
+        for i in 0..57 {
+            decoder.time_source().set(i * 1000);
+            decoder.tooth_edge();
+        }
         decoder.time_source().set(57 * 1000);
         decoder.tooth_edge();
         decoder.time_source().set(59 * 1000);
@@ -502,23 +588,30 @@ mod tests {
         assert_eq!(timing.tooth_period_us, 1000);
         assert_eq!(timing.tooth_position, 1);
         let exact = timing.exact_rpm();
-        let approx = decoder.rpm();
-        assert!(exact > approx, "Exact ({exact}) should be > approx ({approx})");
+        let approx = decoder.rpm().raw();
+        assert!(
+            exact > approx,
+            "Exact ({exact}) should be > approx ({approx})"
+        );
     }
 
     #[test]
     fn test_angle_tracking_and_target_time() {
         struct MockTime(Cell<u32>);
-        impl TimeSource for MockTime { fn micros(&self) -> u32 { self.0.get() } }
+        impl TimeSource for MockTime {
+            fn micros(&self) -> u32 {
+                self.0.get()
+            }
+        }
         let ts = MockTime(Cell::new(0));
         let mut dec = TriggerDecoder::new(ts);
 
         dec.tooth_edge_with_timestamp(1000);
         dec.tooth_edge_with_timestamp(3000);
         assert!(dec.synced());
-        assert_eq!(dec.rev_period_us(), 58_000);
-        assert_eq!(dec.current_angle_x10(3000), 0);
-        assert_eq!(dec.current_angle_x10(3000 + 29_000), 1800);
+        assert_eq!(dec.period_us().raw(), 58_000);
+        assert_eq!(dec.angle_x10(3000).raw(), 0);
+        assert_eq!(dec.angle_x10(3000 + 29_000).raw(), 1800);
         let t = dec.time_for_target_angle(3000, 900, 3600).unwrap();
         assert_eq!(t, 3000 + 14_500);
         let t2 = dec.time_for_target_angle(3000, 4500, 7200).unwrap();
@@ -528,19 +621,26 @@ mod tests {
     #[test]
     fn test_target_time_wraps_next_cycle() {
         struct MockTime(Cell<u32>);
-        impl TimeSource for MockTime { fn micros(&self) -> u32 { self.0.get() } }
+        impl TimeSource for MockTime {
+            fn micros(&self) -> u32 {
+                self.0.get()
+            }
+        }
         let ts = MockTime(Cell::new(0));
         let mut dec = TriggerDecoder::new(ts);
         // Sync with gap: 1000->3000 us, rev = 58_000 us
         dec.tooth_edge_with_timestamp(1000);
         dec.tooth_edge_with_timestamp(3000);
-        assert_eq!(dec.rev_period_us(), 58_000);
+        assert_eq!(dec.period_us().raw(), 58_000);
         // Advance time to near end of 360°: choose now so current angle ≈ 3590 (deg*10)
         // angle delta = dt * 3600 / rev => dt ≈ 3589/3600 * 58_000 ≈ 57_849 us
         let now = 3000 + 57_840;
         let t = dec.time_for_target_angle(now, 50, 3600).unwrap(); // target 5.0°
-        // Expected small forward offset: delta = (3600 - (3590 - 50)) = 60 => 60/3600 of rev = 966 us
-        assert!(t > now && t <= now + 2_000, "wrap to next cycle within ~1ms window");
+                                                                   // Expected small forward offset: delta = (3600 - (3590 - 50)) = 60 => 60/3600 of rev = 966 us
+        assert!(
+            t > now && t <= now + 2_000,
+            "wrap to next cycle within ~1ms window"
+        );
     }
 
     // Removed constant assertions that are always true (clippy)

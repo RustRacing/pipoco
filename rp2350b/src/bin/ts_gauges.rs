@@ -9,9 +9,10 @@ use ecu_core::{
     EcuState,
 };
 use panic_halt as _;
+use rp235x_hal as _;
 
-struct DummySerial;
-impl SerialPort for DummySerial {
+struct NullSerial;
+impl SerialPort for NullSerial {
     fn read(&mut self, _buf: &mut [u8]) -> usize {
         0
     }
@@ -26,34 +27,34 @@ struct Provider {
 impl OutpcProvider for Provider {
     fn fill_outpc(&self, out: &mut Outpc) {
         let s = unsafe { &*self.state };
-        out.rpm = s.rpm;
-        out.tps_percent = s.tps_percent as u8;
-        out.vbatt_mv = s.battery_voltage_mv;
-        out.map_kpa_x10 = 1000;
+        out.rpm = s.rpm();
+        out.tps_percent = s.tps_percent();
+        out.vbatt_mv = s.battery_voltage_mv();
+        out.map_kpa_x10 = s.map_kpa_x10();
         out.clt_c = 20;
         out.iat_c = 25;
         out.lambda_x100 = 100;
-        out.pw_us = 1000;
-        out.dwell_us = 3000;
+        out.pw_us = s.calculate_fuel(s.rpm(), s.map_kpa_x10() / 10);
+        out.dwell_us = s.calculate_dwell() as u16;
         out.advance_x10 = 150;
-        out.synced = if s.synced { 1 } else { 0 };
+        out.synced = if s.synced() { 1 } else { 0 };
     }
 }
 
+static mut STATE: EcuState = EcuState::new();
+
 #[entry]
 fn main() -> ! {
-    static mut STATE: EcuState = EcuState::new();
-    let state = unsafe { &mut STATE };
-    let provider = Provider {
-        state: state as *const EcuState,
-    };
+    let state_ptr = &raw mut STATE;
+    let provider = Provider { state: state_ptr };
+    let state = unsafe { &mut *state_ptr };
     let store = EcuStatePageStore {
-        fuel: &mut state.ipw_table,
-        ign: &mut state.ignition_table,
+        fuel: &mut state.config.ipw_table,
+        ign: &mut state.config.ignition_table,
     };
     let mut server = TunerstudioServer::new(b"IPW-ECU V0.1", provider, store);
 
-    let mut serial = DummySerial;
+    let mut serial = NullSerial;
     let mut asm = FrameAssembler::new();
     let mut inbuf = [0u8; 512];
     let mut out = [0u8; 512];

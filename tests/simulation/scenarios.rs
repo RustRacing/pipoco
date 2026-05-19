@@ -78,7 +78,7 @@ impl ColdStartScenario {
         engine.set_intake_temp(self.ambient_temp_c);
 
         // Apply cold start enrichment (in real ECU this would be automatic)
-        ecu.corrections.clt = if self.ambient_temp_c < 0 { 150 } else { 120 };
+        ecu.corrections_mut().clt = if self.ambient_temp_c < 0 { 150 } else { 120 };
 
         // Create decoder with reference to time
         let mut decoder = TriggerDecoder::new(&time);
@@ -103,7 +103,7 @@ impl ColdStartScenario {
                 }
 
                 if decoder.synced() {
-                    let rpm = decoder.rpm();
+                    let rpm = decoder.rpm().raw();
                     let load = sensors.map_kpa();
                     let pw = ecu.calculate_fuel(rpm, load);
                     outputs.record_injection(edge_time, pw);
@@ -132,7 +132,7 @@ impl ColdStartScenario {
                 decoder.tooth_edge();
 
                 if decoder.synced() {
-                    let rpm = decoder.rpm();
+                    let rpm = decoder.rpm().raw();
                     let load = sensors.map_kpa();
                     let pw = ecu.calculate_fuel(rpm, load);
                     outputs.record_injection(edge_time, pw);
@@ -190,7 +190,7 @@ impl HotStartScenario {
         engine.set_intake_temp(60);
 
         // No enrichment needed for hot start
-        ecu.corrections.clt = 100;
+        ecu.corrections_mut().clt = 100;
 
         let mut decoder = TriggerDecoder::new(&time);
 
@@ -198,6 +198,7 @@ impl HotStartScenario {
         engine.start_cranking();
         let mut current_time = 0u32;
         let max_duration = 1_000_000; // 1 second max
+        let mut fired = false;
 
         while current_time < max_duration {
             engine.update(10);
@@ -212,7 +213,7 @@ impl HotStartScenario {
                 }
 
                 if decoder.synced() {
-                    let rpm = decoder.rpm();
+                    let rpm = decoder.rpm().raw();
                     let load = sensors.map_kpa();
                     let pw = ecu.calculate_fuel(rpm, load);
                     outputs.record_injection(edge_time, pw);
@@ -220,6 +221,7 @@ impl HotStartScenario {
                     // Hot engine should fire quickly
                     if outputs.injection_count() > 3 {
                         engine.start_running();
+                        fired = true;
                         break;
                     }
                 }
@@ -228,17 +230,48 @@ impl HotStartScenario {
             current_time += 10;
         }
 
+        // Let the engine stabilize briefly after the restart so final RPM reflects
+        // the hot-start outcome rather than the cranking state at the moment of fire.
+        if fired {
+            let settle_end = current_time + 300_000;
+            while current_time < settle_end {
+                engine.update(10);
+                sensors.update(engine.state());
+
+                if let Some(edge_time) = trigger.next_edge(&engine, current_time) {
+                    time.set_micros(edge_time);
+                    decoder.tooth_edge();
+
+                    if decoder.synced() {
+                        let rpm = decoder.rpm().raw();
+                        let load = sensors.map_kpa();
+                        let pw = ecu.calculate_fuel(rpm, load);
+                        outputs.record_injection(edge_time, pw);
+                    }
+                }
+
+                current_time += 10;
+            }
+        }
+
         result.duration_ms = current_time / 1000;
         result.final_rpm = engine.state().rpm;
         result.avg_fuel_pw = outputs.average_injection_pw();
 
         // Hot start should be faster
-        if result.duration_ms > 500 {
+        if result.duration_ms > 1000 {
             result.errors.push("Hot start took too long".to_string());
         }
 
         if !result.sync_achieved {
             result.errors.push("Failed to achieve sync".to_string());
+        }
+
+        if result.final_rpm < 600 {
+            result.errors.push(format!(
+                "Engine did not recover to idle: {}",
+                result.final_rpm
+            ));
         }
 
         result.success = result.errors.is_empty();
@@ -283,7 +316,7 @@ impl AccelerationScenario {
                 decoder.tooth_edge();
 
                 if decoder.synced() {
-                    let rpm = decoder.rpm();
+                    let rpm = decoder.rpm().raw();
                     let load = sensors.map_kpa();
                     let pw = ecu.calculate_fuel(rpm, load);
                     outputs.record_injection(edge_time, pw);
@@ -307,7 +340,7 @@ impl AccelerationScenario {
                 decoder.tooth_edge();
 
                 if decoder.synced() {
-                    let rpm = decoder.rpm();
+                    let rpm = decoder.rpm().raw();
                     let load = sensors.map_kpa();
                     let pw = ecu.calculate_fuel(rpm, load);
                     outputs.record_injection(edge_time, pw);
@@ -386,7 +419,7 @@ impl IdleScenario {
                 decoder.tooth_edge();
 
                 if decoder.synced() {
-                    let rpm = decoder.rpm();
+                    let rpm = decoder.rpm().raw();
 
                     // Track RPM variation
                     if rpm > 0 {

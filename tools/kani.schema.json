@@ -1,0 +1,47 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "KaniEvidence",
+  "description": "Schema for target/formal-evidence/latest/kani.json emitted by tools/verify_formal.sh.",
+  "type": "object",
+  "required": [
+    "tool",
+    "version",
+    "status",
+    "required_harnesses"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "tool": {
+      "type": "string",
+      "const": "kani"
+    },
+    "version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "type": "string",
+      "enum": ["pass", "fail"]
+    },
+    "required_harnesses": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1
+    },
+    "verified_harness_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "failure_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "total_harnesses": {
+      "type": "integer",
+      "minimum": 0
+    }
+  }
+}

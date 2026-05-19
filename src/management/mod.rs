@@ -9,6 +9,10 @@
 //! - **Act**: Command dispatch to execution modules
 //!
 //! The architecture is transport-agnostic, memory-scalable, and highly modular.
+//!
+//! Status: experimental subsystem. It is not wired into the main ECU runtime
+//! path and should be treated as a separate control architecture until that
+//! changes explicitly.
 
 pub mod act;
 pub mod decide;

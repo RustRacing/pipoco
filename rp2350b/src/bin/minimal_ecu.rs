@@ -1,4 +1,4 @@
-//! Minimal ECU target for RP2350B using ecu-core
+//! Minimal ECU target for RP2350B using the split runtime/scheduler path.
 //!
 //! Sets up clocks, basic time source, safe outputs, and a scheduler loop.
 //! Trigger input capture and real ISR wiring are left as follow-ups.
@@ -6,28 +6,43 @@
 #![no_std]
 #![no_main]
 
+use core::cell::RefCell;
+use cortex_m::interrupt::Mutex;
 use cortex_m_rt::entry;
 use hal::pac;
 use panic_halt as _;
 use rp235x_hal as hal;
 
-use ecu_core::{CaptureBuffer, EcuApp};
+use ecu_core::CaptureBuffer;
+use ecu_domain::{Kpa10, Micros};
+use ecu_io::Watchdog;
+use ecu_scheduler::TransitionDrainBuffer;
+use ecu_target_common::{
+    adapter::{BoardAdapter, BoardEvent},
+    bringup::bringup_fuel_model,
+    control_inputs::{split_control_inputs_from, WarmBringupControlSignals},
+    noop::{NoopCapture, NoopStore, NoopTransport},
+    outputs::{Hal1ScheduledOut, ScheduledActionExecutor, ScheduledOutputs4},
+    sensor_sample::FixedLoadSensor,
+    split_tick::run_split_scheduled_tick,
+    trigger_adapter::{apply_trigger_timestamp, SplitTriggerAdapter},
+};
+use embedded_hal::digital::OutputPin as _;
 #[path = "../pinmap.rs"]
 mod pinmap;
 use pinmap::PinMap;
 
-// Local HAL glue for ecu-core traits
+// Local HAL glue for the split board adapter.
 mod hal_impl {
-    use ecu_core::hal::{
-        OutputPin as EcuOutputPin, ResetController, ResetReason, TimeSource, Watchdog,
-    };
+    use ecu_core::hal::{ResetController, ResetReason, TimeSource};
+    use ecu_io::Watchdog;
     use hal::pac;
     use rp235x_hal as hal;
 
     #[derive(Copy, Clone)]
     pub struct Rp2350Time;
-    impl TimeSource for Rp2350Time {
-        fn micros(&self) -> u32 {
+    impl Rp2350Time {
+        pub fn micros() -> u32 {
             // Read 32-bit microsecond counter (low word). Wraps naturally.
             unsafe {
                 let timer = &*pac::TIMER0::ptr();
@@ -35,19 +50,9 @@ mod hal_impl {
             }
         }
     }
-
-    pub struct Rp2350Pin<P> {
-        pub pin: P,
-    }
-    impl<P> EcuOutputPin for Rp2350Pin<P>
-    where
-        P: embedded_hal::digital::OutputPin,
-    {
-        fn set_high(&mut self) {
-            let _ = self.pin.set_high();
-        }
-        fn set_low(&mut self) {
-            let _ = self.pin.set_low();
+    impl TimeSource for Rp2350Time {
+        fn micros(&self) -> u32 {
+            Self::micros()
         }
     }
 
@@ -60,11 +65,11 @@ mod hal_impl {
         }
     }
     impl Watchdog for Rp2350Watchdog {
-        fn start(&mut self, _ms: u32) {
+        type Error = core::convert::Infallible;
+
+        fn feed(&mut self) -> Result<(), Self::Error> {
             self.wd.feed();
-        }
-        fn pet(&mut self) {
-            self.wd.feed();
+            Ok(())
         }
     }
 
@@ -81,8 +86,7 @@ mod hal_impl {
         fn clear(&mut self) {}
     }
 }
-use ecu_core::hal::{OutputPin, TimeSource, Watchdog};
-use hal_impl::{Rp2350Pin, Rp2350Reset, Rp2350Time, Rp2350Watchdog};
+use hal_impl::{Rp2350Reset, Rp2350Time, Rp2350Watchdog};
 
 // Pin mapping (Arduino-style). Change these to remap pins.
 // Valid tokens: gpio0..gpio29 (bank0). Adjust for your board wiring.
@@ -107,30 +111,29 @@ macro_rules! IGN2_GPIO {
     };
 } // Ignition 2 default
 
-// App runtime and capture buffer
-static mut APP: Option<EcuApp<Rp2350Time>> = None;
-static mut CAPTURE: CaptureBuffer<64> = CaptureBuffer::new();
+// Capture buffer wrapped in no_std-safe critical section access.
+static CAPTURE: Mutex<RefCell<CaptureBuffer<64>>> = Mutex::new(RefCell::new(CaptureBuffer::new()));
 
 #[inline]
 fn capture_push(ts: u32) {
-    cortex_m::interrupt::free(|_| unsafe {
-        CAPTURE.push(ts);
+    cortex_m::interrupt::free(|cs| {
+        CAPTURE.borrow(cs).borrow_mut().push(ts);
     });
 }
 fn capture_pop() -> Option<u32> {
-    cortex_m::interrupt::free(|_| unsafe { CAPTURE.try_pop() })
+    cortex_m::interrupt::free(|cs| CAPTURE.borrow(cs).borrow_mut().try_pop())
 }
 
 #[entry]
 fn main() -> ! {
     let mut pac = pac::Peripherals::take().unwrap();
-    let core = cortex_m::Peripherals::take().unwrap();
+    let _core = cortex_m::Peripherals::take().unwrap();
 
     // Use HAL watchdog handle for clock init
     let mut hw_wd = hal::Watchdog::new(pac.WATCHDOG);
 
     // Clocks: 12MHz XOSC → system PLL → 150MHz
-    let clocks = hal::clocks::init_clocks_and_plls(
+    let _clocks = hal::clocks::init_clocks_and_plls(
         12_000_000,
         pac.XOSC,
         pac.CLOCKS,
@@ -142,10 +145,10 @@ fn main() -> ! {
     .ok()
     .unwrap();
 
-    // Wrap watchdog per ecu-core trait
+    // Wrap watchdog per ecu-io trait.
     let mut wd = Rp2350Watchdog::new(hw_wd);
-    wd.start(250);
-    let mut _rst = Rp2350Reset::new();
+    let _ = wd.feed();
+    let _rst = Rp2350Reset::new();
 
     // GPIO init: use GPIO0..GPIO3 for INJ1, INJ2, IGN1, IGN2 (adjust per board)
     let sio = hal::Sio::new(pac.SIO);
@@ -157,58 +160,66 @@ fn main() -> ! {
     );
 
     // Pin mapping (adjust in pinmap.rs if using GPIO IRQ)
-    const PIN_MAP: PinMap = PinMap::defaults();
+    let _pin_map = PinMap::defaults();
 
-    let inj1_hw = INJ1_GPIO!(pins).into_push_pull_output();
-    let inj2_hw = INJ2_GPIO!(pins).into_push_pull_output();
-    let ign1_hw = IGN1_GPIO!(pins).into_push_pull_output();
-    let ign2_hw = IGN2_GPIO!(pins).into_push_pull_output();
+    let mut inj1 = INJ1_GPIO!(pins).into_push_pull_output();
+    let mut inj2 = INJ2_GPIO!(pins).into_push_pull_output();
+    let mut ign1 = IGN1_GPIO!(pins).into_push_pull_output();
+    let mut ign2 = IGN2_GPIO!(pins).into_push_pull_output();
+    let _ = inj1.set_low();
+    let _ = inj2.set_low();
+    let _ = ign1.set_low();
+    let _ = ign2.set_low();
 
-    let mut inj1 = Rp2350Pin { pin: inj1_hw };
-    let mut inj2 = Rp2350Pin { pin: inj2_hw };
-    let mut ign1 = Rp2350Pin { pin: ign1_hw };
-    let mut ign2 = Rp2350Pin { pin: ign2_hw };
-    inj1.set_low();
-    inj2.set_low();
-    ign1.set_low();
-    ign2.set_low();
-
-    // Initialize app runtime
-    cortex_m::interrupt::free(|_| unsafe {
-        APP = Some(EcuApp::new(Rp2350Time));
-    });
+    let mut outputs = ScheduledOutputs4::new(
+        Hal1ScheduledOut::new(inj1),
+        Hal1ScheduledOut::new(inj2),
+        Hal1ScheduledOut::new(ign1),
+        Hal1ScheduledOut::new(ign2),
+    );
+    let mut drain = TransitionDrainBuffer::<8>::new();
+    let mut adapter = BoardAdapter::new(
+        FixedLoadSensor::new(Rp2350Time, Kpa10::new(700)),
+        NoopCapture,
+        ScheduledActionExecutor::<8>::new(),
+        wd,
+        NoopTransport,
+        NoopStore,
+    );
+    adapter.configure_fuel_model(bringup_fuel_model());
+    let mut control_signals = WarmBringupControlSignals;
+    let mut trigger_adapter = SplitTriggerAdapter::new(Rp2350Time);
 
     // Optional: wire GPIO IRQ for trigger edges (feature-gated)
     #[cfg(feature = "capture-gpio")]
     {
         use rp235x_hal::pac::NVIC;
-        setup_trigger_irq(&mut pac, PIN_MAP.trigger);
+        setup_trigger_irq(&mut pac, _pin_map.trigger);
         unsafe { NVIC::unmask(pac::Interrupt::IO_IRQ_BANK0) };
     }
 
-    // Minimal main loop: poll trigger capture, execute scheduler, pet watchdog
+    // Minimal main loop: poll deterministic bring-up sensors, feed captured
+    // trigger edges into the split runtime, and apply due scheduled outputs.
     loop {
-        // Feed captured edges and drive outputs
         while let Some(ts) = capture_pop() {
-            unsafe {
-                if let Some(ref mut a) = APP {
-                    a.on_timestamp(ts);
-                }
-            }
+            let at_us = Micros::new(ts);
+            let _ = apply_trigger_timestamp(&mut adapter, &mut trigger_adapter, ts);
+            let _ = adapter.apply_event(BoardEvent::CamEdge {
+                at_us,
+                cam_seen: true,
+            });
         }
+        let _ = adapter.poll_sensor();
 
-        let now = unsafe { APP.as_ref().map(|a| a.now()).unwrap_or(0) };
-
-        let mut outs: [&mut dyn ecu_core::hal::OutputPin; 4] =
-            [&mut inj1, &mut inj2, &mut ign1, &mut ign2];
-        cortex_m::interrupt::free(|_| unsafe {
-            if let Some(ref mut a) = APP {
-                a.drive_outputs(now, &mut outs)
-            }
-        });
-
-        // Optional: pet watchdog
-        wd.pet();
+        let now = Micros::new(Rp2350Time::micros());
+        let _ = run_split_scheduled_tick(
+            &mut adapter,
+            now,
+            split_control_inputs_from(&mut control_signals, now, trigger_adapter.rpm())
+                .unwrap_or_else(|never| match never {}),
+            &mut outputs,
+            &mut drain,
+        );
 
         // Very coarse idle delay (spins). Replace with WFI
         cortex_m::asm::wfi();
@@ -219,7 +230,7 @@ fn main() -> ! {
 #[allow(dead_code)]
 fn on_trigger_edge() {
     // Timestamp immediately from hardware counter
-    let ts = Rp2350Time.micros();
+    let ts = Rp2350Time::micros();
     capture_push(ts);
 }
 
@@ -256,7 +267,7 @@ mod irq {
             iobank.intr.write(|w| w.bits(mask));
         }
 
-        let ts = Rp2350Time.micros();
+        let ts = Rp2350Time::micros();
         capture_push(ts);
     }
 }

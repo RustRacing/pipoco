@@ -22,64 +22,91 @@
 #![no_std]
 #![no_main]
 
+#[cfg(feature = "ts-usb")]
 use cortex_m::interrupt::free as critical_section;
 use cortex_m_rt::entry;
+use ecu_core::hal::{TimeSource, Watchdog};
+use ecu_domain::{Kpa10, Micros};
+use ecu_scheduler::TransitionDrainBuffer;
+use ecu_target_common::{
+    adapter::{BoardAdapter, BoardEvent},
+    bringup::bringup_fuel_model,
+    control_inputs::{split_control_inputs_from, WarmBringupControlSignals},
+    noop::{NoopCapture, NoopStore, NoopTransport},
+    outputs::{ScheduledActionExecutor, ScheduledOutputs4},
+    sensor_sample::FixedLoadSensor,
+    split_tick::run_split_scheduled_tick,
+    trigger_adapter::{apply_trigger_timestamp, SplitTriggerAdapter},
+};
 use panic_halt as _;
+#[cfg(all(feature = "capture-tim", feature = "capture-gpio"))]
+compile_error!("features `capture-tim` and `capture-gpio` are mutually exclusive");
+#[cfg(all(feature = "capture-gpio", not(feature = "capture-tim")))]
+use stm32f4xx_hal::gpio::{Edge, ExtiPin};
+#[cfg(any(
+    all(feature = "capture-tim", not(feature = "capture-gpio")),
+    all(feature = "capture-gpio", not(feature = "capture-tim"))
+))]
+use stm32f4xx_hal::pac::interrupt;
 use stm32f4xx_hal::{pac, prelude::*};
 
 mod hal_impl;
-use ecu_core::constants::fuel::DEFAULT_LOAD_KPA;
-use ecu_core::constants::timing::*;
-use ecu_core::safety::{apply_safe_state, should_allow_injection, update_flood_clear, OutputLatch};
-use ecu_core::{CaptureBuffer, EcuApp};
 use hal_impl::Stm32Time;
-use hal_impl::{Stm32Reset, Stm32Watchdog};
+use hal_impl::Stm32Watchdog;
 #[cfg(feature = "ts-usb")]
 mod ts_support {
     #![allow(dead_code)]
+    use core::cell::RefCell;
+    #[cfg(feature = "flash-kv")]
     use ecu_core::persist::{KvError, KvStore};
     use ecu_core::ts::outpc::Outpc;
-    use ecu_core::ts::pages::EcuPageStore;
     use ecu_core::ts::OutpcProvider;
     use ecu_core::EcuState;
+    #[cfg(feature = "flash-kv")]
+    use ecu_target_common::kv::layout::{
+        ANGLES_PAGE_LEN, FUEL_PAGE_LEN, IGN_PAGE_LEN, PAGE_HEADER_LEN,
+    };
     use ecu_target_common::ts::service::TsService;
     use ecu_target_common::ts::store::PersistedEcuPageStore;
+    #[cfg(feature = "flash-kv")]
     use stm32f4xx_hal::pac;
 
     // Minimal RAM KV (512-byte pages) for bring-up
+    use cortex_m::interrupt::Mutex;
+    #[cfg(not(feature = "flash-kv"))]
     use ecu_target_common::kv::ram::RamKv512;
 
-    // Optional: Flash KV placeholder (per-session RAM mirror; TODO: real flash)
+    // Optional: Flash KV bring-up backend (per-session RAM mirror; TODO: real flash)
     #[cfg(feature = "flash-kv")]
     pub struct FlashKv;
+    #[cfg(feature = "flash-kv")]
+    #[derive(Copy, Clone)]
+    struct KvHeader {
+        ok: bool,
+        seq: u16,
+        fuel_len: u16,
+        ign_len: u16,
+        angles_len: u16,
+        fuel_crc: u16,
+        ign_crc: u16,
+        angles_crc: u16,
+    }
     #[cfg(feature = "flash-kv")]
     impl FlashKv {
         pub const fn new() -> Self {
             Self
         }
-    }
-    #[cfg(feature = "flash-kv")]
-    impl KvStore for FlashKv {
-        const LEN_FUEL: usize = 512;
-        const LEN_IGN: usize = 512;
-        const LEN_ANGLES: usize = 68;
-        const HDR_SZ: usize = 64;
+
+        const LEN_FUEL: usize = FUEL_PAGE_LEN;
+        const LEN_IGN: usize = IGN_PAGE_LEN;
+        const LEN_ANGLES: usize = ANGLES_PAGE_LEN;
+        const HDR_SZ: usize = PAGE_HEADER_LEN;
         const FUEL_OFF: usize = Self::HDR_SZ;
         const IGN_OFF: usize = Self::HDR_SZ + Self::LEN_FUEL;
         const ANGLES_OFF: usize = Self::HDR_SZ + Self::LEN_FUEL + Self::LEN_IGN;
-
-        #[derive(Copy, Clone)]
-        struct KvHeader {
-            ok: bool,
-            seq: u16,
-            fuel_len: u16,
-            ign_len: u16,
-            angles_len: u16,
-            fuel_crc: u16,
-            ign_crc: u16,
-            angles_crc: u16,
-        }
-
+    }
+    #[cfg(feature = "flash-kv")]
+    impl KvStore for FlashKv {
         fn read(&mut self, key: &[u8], out: &mut [u8]) -> Result<usize, KvError> {
             const BASE_A: u32 = 0x080C0000; // Sector 10
             const BASE_B: u32 = 0x080E0000; // Sector 11
@@ -89,11 +116,29 @@ mod ts_support {
                 let p = base as *const u8;
                 let magic = core::ptr::read_volatile(p as *const u32);
                 if magic != MAGIC {
-                    return KvHeader { ok: false, seq: 0, fuel_len: 0, ign_len: 0, angles_len: 0, fuel_crc: 0, ign_crc: 0, angles_crc: 0 };
+                    return KvHeader {
+                        ok: false,
+                        seq: 0,
+                        fuel_len: 0,
+                        ign_len: 0,
+                        angles_len: 0,
+                        fuel_crc: 0,
+                        ign_crc: 0,
+                        angles_crc: 0,
+                    };
                 }
                 let valid = core::ptr::read_volatile(p.add(6) as *const u16);
                 if valid != 0 {
-                    return KvHeader { ok: false, seq: 0, fuel_len: 0, ign_len: 0, angles_len: 0, fuel_crc: 0, ign_crc: 0, angles_crc: 0 };
+                    return KvHeader {
+                        ok: false,
+                        seq: 0,
+                        fuel_len: 0,
+                        ign_len: 0,
+                        angles_len: 0,
+                        fuel_crc: 0,
+                        ign_crc: 0,
+                        angles_crc: 0,
+                    };
                 }
                 KvHeader {
                     ok: true,
@@ -180,15 +225,10 @@ mod ts_support {
             let mut fuel = [0u8; Self::LEN_FUEL];
             let mut ign = [0u8; Self::LEN_IGN];
             let mut angles = [0u8; Self::LEN_ANGLES];
-            let mut seq_a = None;
-            let mut seq_b = None;
             let _ = self.read(b"fuel", &mut fuel); // ignore NotFound
             let _ = self.read(b"ign", &mut ign);
             let _ = self.read(b"angles", &mut angles);
-            unsafe {
-                seq_a = read_seq(BASE_A);
-                seq_b = read_seq(BASE_B);
-            }
+            let (seq_a, seq_b) = unsafe { (read_seq(BASE_A), read_seq(BASE_B)) };
             let cur_seq = match (seq_a, seq_b) {
                 (Some(a), Some(b)) => {
                     if b.wrapping_sub(a) < 0x8000 {
@@ -203,15 +243,21 @@ mod ts_support {
             };
             match key {
                 b"fuel" => {
-                    if data.len() != Self::LEN_FUEL { return Err(KvError::Io); }
+                    if data.len() != Self::LEN_FUEL {
+                        return Err(KvError::Io);
+                    }
                     fuel.copy_from_slice(data);
                 }
                 b"ign" => {
-                    if data.len() != Self::LEN_IGN { return Err(KvError::Io); }
+                    if data.len() != Self::LEN_IGN {
+                        return Err(KvError::Io);
+                    }
                     ign.copy_from_slice(data);
                 }
                 b"angles" => {
-                    if data.len() != Self::LEN_ANGLES { return Err(KvError::Io); }
+                    if data.len() != Self::LEN_ANGLES {
+                        return Err(KvError::Io);
+                    }
                     angles.copy_from_slice(data);
                 }
                 _ => return Err(KvError::Io),
@@ -253,18 +299,18 @@ mod ts_support {
             cortex_m::interrupt::free(|_| unsafe {
                 let flash = &*pac::FLASH::ptr();
                 // Select target sector as the opposite of current valid
-                let target = match (seq_a.is_some(), seq_b.is_some()) {
-                    (true, false) => (SECTOR_B, BASE_B),
-                    (false, true) => (SECTOR_A, BASE_A),
-                    (false, false) => (SECTOR_A, BASE_A),
-                    (true, true) => {
+                let target = match (seq_a, seq_b) {
+                    (Some(a), Some(b)) => {
                         // choose other than the newest
-                        if seq_b.unwrap().wrapping_sub(seq_a.unwrap()) < 0x8000 {
+                        if b.wrapping_sub(a) < 0x8000 {
                             (SECTOR_A, BASE_A)
                         } else {
                             (SECTOR_B, BASE_B)
                         }
                     }
+                    (Some(_), None) => (SECTOR_B, BASE_B),
+                    (None, Some(_)) => (SECTOR_A, BASE_A),
+                    (None, None) => (SECTOR_A, BASE_A),
                 };
                 let (target_sector, target_base) = target;
 
@@ -285,10 +331,8 @@ mod ts_support {
                 flash.cr.modify(|_, w| w.ser().clear_bit());
 
                 // Program half-words (16-bit) with PSIZE=01 and PG=1
-                flash
-                    .cr
-                    .modify(|_, w| unsafe { w.psize().bits(0b01) }.pg().set_bit());
-                let mut prog_half = |addr: u32, val: u16| {
+                flash.cr.modify(|_, w| w.psize().bits(0b01).pg().set_bit());
+                let prog_half = |addr: u32, val: u16| {
                     core::ptr::write_volatile(addr as *mut u16, val);
                     while flash.sr.read().bsy().bit_is_set() {}
                 };
@@ -348,23 +392,24 @@ mod ts_support {
     impl OutpcProvider for Provider {
         fn fill_outpc(&self, out: &mut Outpc) {
             let s = unsafe { &*self.state };
-            // Live sensors from our simple sampler
-            let sens = unsafe { &SENS };
-            out.rpm = s.rpm;
-            out.map_kpa_x10 = sens.map_kpa_x10;
-            out.tps_percent = sens.tps_percent;
-            out.clt_c = sens.clt_c;
-            out.iat_c = sens.iat_c;
-            out.vbatt_mv = sens.vbatt_mv;
-            out.lambda_x100 = 100;
-            out.pw_us = s.calculate_fuel(2000, 100);
-            out.dwell_us = 3000;
-            out.advance_x10 = 150;
-            out.synced = if s.synced { 1 } else { 0 };
+            cortex_m::interrupt::free(|cs| {
+                let sens = SENS.borrow(cs).borrow();
+                out.rpm = s.rpm();
+                out.map_kpa_x10 = sens.map_kpa_x10;
+                out.tps_percent = sens.tps_percent;
+                out.clt_c = sens.clt_c;
+                out.iat_c = sens.iat_c;
+                out.vbatt_mv = sens.vbatt_mv;
+                out.lambda_x100 = 100;
+                out.pw_us = s.calculate_fuel(s.rpm(), sens.map_kpa_x10 / 10);
+                out.dwell_us = s.calculate_dwell() as u16;
+                out.advance_x10 = 150;
+                out.synced = if s.synced() { 1 } else { 0 };
+            });
         }
     }
 
-    // Minimal sensor sampler (placeholder for ADC-backed implementation)
+    // Simple bring-up sensor sampler (ADC-backed implementation can replace this)
     #[derive(Copy, Clone)]
     pub struct Sensors {
         pub map_kpa_x10: u16,
@@ -395,7 +440,7 @@ mod ts_support {
                 let base = 1000i32 + ((now_us / 250_000) as i32 % 21) - 10; // 90..110 kPa
                 self.map_kpa_x10 = base.clamp(0, 65535) as u16;
                 // Mirror battery from state
-                self.vbatt_mv = state.battery_voltage_mv;
+                self.vbatt_mv = state.battery_voltage_mv();
                 // Hold temperatures constant for now
                 self.clt_c = 20;
                 self.iat_c = 25;
@@ -404,10 +449,10 @@ mod ts_support {
     }
 
     // Global sensors (TS feature scope)
-    pub static mut SENS: Sensors = Sensors::new();
+    pub static SENS: Mutex<RefCell<Sensors>> = Mutex::new(RefCell::new(Sensors::new()));
 
-    pub type Service<'a> = TsService<Provider, PersistedEcuPageStore<'a, StoreKv>>;
-    pub fn new_service<'a>(state: &'a mut EcuState) -> Service<'a> {
+    pub type Service = TsService<Provider, PersistedEcuPageStore<StoreKv>>;
+    pub fn new_service(state: &mut EcuState) -> Service {
         let provider = Provider {
             state: state as *const _,
         };
@@ -440,26 +485,17 @@ macro_rules! IGN2_PIN {
     };
 }
 
-// Global state (interrupt accessible)
-static mut APP: Option<EcuApp<Stm32Time>> = None;
 ecu_target_common::capture_ring!(CAPTURE, 128);
-
-// Output pin states (stored separately to avoid complex lifetime issues in main loop)
-static mut INJ1_STATE: bool = false;
-static mut INJ2_STATE: bool = false;
-static mut IGN1_STATE: bool = false;
-static mut IGN2_STATE: bool = false;
-
-// Error tracking
-static mut SCHEDULER_FULL_COUNT: u32 = 0;
 
 #[entry]
 fn main() -> ! {
-    let dp = pac::Peripherals::take().unwrap();
+    #[allow(unused_mut)]
+    let mut dp = pac::Peripherals::take().unwrap();
 
     // Setup clocks (168MHz)
     let rcc = dp.RCC.constrain();
     // Configure system clock; for USB we need a valid 48MHz USB clock derived from PLL
+    #[allow(unused_variables)]
     let clocks = rcc.cfgr.sysclk(168.MHz()).require_pll48clk().freeze();
 
     // Setup timer for microsecond counter
@@ -479,12 +515,13 @@ fn main() -> ! {
     // Create time source (zero-sized type, just uses TIM2 pointer)
     let time_source = Stm32Time;
 
+    #[allow(unused_variables)]
     let gpioa = dp.GPIOA.split();
 
-    #[cfg(feature = "capture-tim")]
+    #[cfg(all(feature = "capture-tim", not(feature = "capture-gpio")))]
     {
         // PA0 as TIM2_CH1 (AF1)
-        let _trigger_pin = gpioa.pa0.into_alternate();
+        let _trigger_pin = gpioa.pa0.into_alternate::<1>();
         // Configure TIM2 CH1 input capture on rising edge with CC1 interrupt
         dp.TIM2.ccmr1_input().modify(|_, w| w.cc1s().ti1());
         dp.TIM2.ccer.modify(|_, w| {
@@ -497,131 +534,142 @@ fn main() -> ! {
         }
     }
 
-    #[cfg(feature = "capture-gpio")]
+    #[cfg(all(feature = "capture-gpio", not(feature = "capture-tim")))]
     {
         // PA0 as input with EXTI0 on rising edge
-        let _trigger_pin = gpioa.pa0.into_pull_up_input();
-        dp.SYSCFG.exticr[0].modify(|_, w| unsafe { w.exti0().bits(0) });
-        dp.EXTI.imr.modify(|_, w| w.mr0().set_bit());
-        dp.EXTI.rtsr.modify(|_, w| w.tr0().set_bit());
+        let mut trigger_pin = gpioa.pa0.into_pull_up_input();
+        let mut syscfg = dp.SYSCFG.constrain();
+        trigger_pin.make_interrupt_source(&mut syscfg);
+        trigger_pin.trigger_on_edge(&mut dp.EXTI, Edge::Rising);
+        trigger_pin.enable_interrupt(&mut dp.EXTI);
         unsafe {
             cortex_m::peripheral::NVIC::unmask(pac::Interrupt::EXTI0);
         }
     }
 
-    // Initialize app runtime
-    critical_section(|_cs| unsafe {
-        APP = Some(EcuApp::new(time_source));
-    });
+    #[cfg(feature = "ts-usb")]
+    let ts_state = cortex_m::singleton!(: ecu_core::EcuState = ecu_core::EcuState::new())
+        .expect("STM32 TS EcuState singleton already taken");
 
     // Start independent watchdog (~250ms) and clear reset flags (best-effort)
     let mut iwdg = Stm32Watchdog::new(dp.IWDG);
     iwdg.start(250);
-    let mut rst = Stm32Reset::new(dp.RCC);
-    rst.clear();
 
     // Enable timer IRQ only in capture-tim path (done above)
 
     // Setup output pins for injectors/coils
     let gpiob = dp.GPIOB.split();
     // Use macros above to obtain output pins; edit macros to remap
-    let inj1 = INJ1_PIN!(gpiob);
-    let inj2 = INJ2_PIN!(gpiob);
-    let ign1 = IGN1_PIN!(gpiob);
-    let ign2 = IGN2_PIN!(gpiob);
+    let mut inj1 = INJ1_PIN!(gpiob);
+    let mut inj2 = INJ2_PIN!(gpiob);
+    let mut ign1 = IGN1_PIN!(gpiob);
+    let mut ign2 = IGN2_PIN!(gpiob);
 
-    // Force safe state on boot and wrap via shared Outputs4
-    let _ = inj1.set_low();
-    let _ = inj2.set_low();
-    let _ = ign1.set_low();
-    let _ = ign2.set_low();
-    let mut outs4 = ecu_target_common::outputs::Outputs4::new(inj1, inj2, ign1, ign2);
+    // Force safe state on boot and wrap via split scheduled outputs.
+    inj1.set_low();
+    inj2.set_low();
+    ign1.set_low();
+    ign2.set_low();
+    let mut outputs = ScheduledOutputs4::new(inj1, inj2, ign1, ign2);
+    let mut drain = TransitionDrainBuffer::<8>::new();
+    let mut adapter = BoardAdapter::new(
+        FixedLoadSensor::new(Stm32Time, Kpa10::new(700)),
+        NoopCapture,
+        ScheduledActionExecutor::<8>::new(),
+        iwdg,
+        NoopTransport,
+        NoopStore,
+    );
+    adapter.configure_fuel_model(bringup_fuel_model());
+    let mut control_signals = WarmBringupControlSignals;
+    let mut trigger_adapter = SplitTriggerAdapter::new(Stm32Time);
 
     // Optional: TunerStudio USB hardware bring-up (feature-gated)
     #[cfg(feature = "ts-usb-hw")]
     let (mut maybe_ts, mut maybe_cdc) = {
         use ecu_target_common::ts::usb_cdc::CdcSerial;
         use stm32f4xx_hal::otg_fs::{UsbBusType, USB};
+        use usb_device::class_prelude::UsbBusAllocator;
         use usb_device::prelude::*;
+        use usbd_serial::USB_CLASS_CDC;
+        static mut EP_MEMORY: [u32; 1024] = [0; 1024];
+        static mut USB_ALLOC: Option<UsbBusAllocator<UsbBusType>> = None;
         // Configure USB pins PA11/PA12 to AF10
-        let usb_dm = gpioa.pa11.into_alternate();
-        let usb_dp = gpioa.pa12.into_alternate();
-        // Allocate USB bus
-        static mut USB_ALLOC: Option<usb_device::bus::UsbBusAllocator<UsbBusType>> = None;
-        let mut cdc_opt: Option<CdcSerial<UsbBusType>> = None;
-        unsafe {
-            let usb = USB {
-                usb_global: dp.OTG_FS_GLOBAL,
-                usb_device: dp.OTG_FS_DEVICE,
-                usb_pwrclk: dp.OTG_FS_PWRCLK,
-                pin_dm: usb_dm,
-                pin_dp: usb_dp,
-            };
-            USB_ALLOC = Some(UsbBusType::new(usb, &clocks));
+        let usb = USB::new(
+            (dp.OTG_FS_GLOBAL, dp.OTG_FS_DEVICE, dp.OTG_FS_PWRCLK),
+            (gpioa.pa11, gpioa.pa12),
+            &clocks,
+        );
+        let cdc_opt = unsafe {
+            USB_ALLOC = Some(UsbBusType::new(usb, &mut EP_MEMORY));
             let bus = USB_ALLOC.as_ref().unwrap();
             let serial = usbd_serial::SerialPort::new(bus);
             let dev = UsbDeviceBuilder::new(bus, UsbVidPid(0x1d50, 0x6130))
-                .manufacturer("IPW")
-                .product("TS-ECU")
-                .serial_number("STM32F4-TS")
                 .device_class(USB_CLASS_CDC)
+                .strings(&[StringDescriptors::default()
+                    .manufacturer("IPW")
+                    .product("TS-ECU")
+                    .serial_number("STM32F4-TS")])
+                .unwrap()
                 .build();
-            cdc_opt = Some(CdcSerial { serial, dev });
-        }
-        let svc = critical_section(|_| unsafe {
-            if let Some(ref mut a) = APP {
-                ts_support::new_service(&mut a.state)
-            } else {
-                ts_support::new_service(&mut EcuApp::new(Stm32Time).state)
-            }
-        });
+            Some(CdcSerial { serial, dev })
+        };
+        let svc = ts_support::new_service(ts_state);
         (Some(svc), cdc_opt)
     };
 
-    // Main loop - check scheduled events and update pin states
+    // Main loop - feed capture into the split runtime and apply due scheduled outputs.
     loop {
-        // Update sensors for TS (placeholder or ADC sampling if enabled)
+        // Update sensors for TS (ADC sampling on bring-up hardware if enabled)
         #[cfg(feature = "ts-usb")]
         {
             use ts_support::SENS;
             let now = Stm32Time.micros();
-            unsafe {
-                if let Some(ref a) = APP {
-                    SENS.update(now, &a.state);
-                }
-            }
+            critical_section(|cs| {
+                SENS.borrow(cs).borrow_mut().update(now, ts_state);
+            });
         }
 
-        ecu_target_common::tick_once!(
-            APP,
-            capture_pop,
-            critical_section(|_| unsafe { APP.as_ref().map(|a| a.now()).unwrap_or(0) }),
-            outs4.as_pins(),
-            {
-                #[cfg(feature = "ts-usb-hw")]
-                {
-                    if let (Some(ref mut svc), Some(ref mut cdc)) = (&mut maybe_ts, &mut maybe_cdc)
-                    {
-                        svc.pump_with_budget(cdc, 4);
-                    }
-                }
-            },
-            iwdg.pet()
+        while let Some(ts) = capture_pop() {
+            let at_us = Micros::new(ts);
+            let _ = apply_trigger_timestamp(&mut adapter, &mut trigger_adapter, ts);
+            let _ = adapter.apply_event(BoardEvent::CamEdge {
+                at_us,
+                cam_seen: true,
+            });
+        }
+        let _ = adapter.poll_sensor();
+
+        let now = Micros::new(time_source.micros());
+        let _ = run_split_scheduled_tick(
+            &mut adapter,
+            now,
+            split_control_inputs_from(&mut control_signals, now, trigger_adapter.rpm())
+                .unwrap_or_else(|never| match never {}),
+            &mut outputs,
+            &mut drain,
         );
+
+        #[cfg(feature = "ts-usb-hw")]
+        {
+            if let (Some(ref mut svc), Some(ref mut cdc)) = (&mut maybe_ts, &mut maybe_cdc) {
+                svc.pump_with_budget(cdc, 4);
+            }
+        }
     }
 }
 
 /// TIM2 interrupt handler
 /// - Captures timestamps on CH1 rising edges and pushes into ring buffer
 /// - Schedules events when decoder is updated (minimal extra work here)
-#[cfg(feature = "capture-tim")]
+#[cfg(all(feature = "capture-tim", not(feature = "capture-gpio")))]
 #[cortex_m_rt::interrupt]
 fn TIM2() {
     unsafe {
         // If capture occurred on CH1
         let tim2 = &(*pac::TIM2::ptr());
         if tim2.sr.read().cc1if().bit_is_set() {
-            let captured = tim2.ccr1.read().ccr().bits();
+            let captured = tim2.ccr1().read().ccr().bits();
             // Clear CC1IF by reading SR then CCR1 (done) and writing 0 to it
             tim2.sr.modify(|_, w| w.cc1if().clear());
             // Push timestamp for main loop processing
@@ -630,7 +678,7 @@ fn TIM2() {
     }
 }
 
-#[cfg(feature = "capture-gpio")]
+#[cfg(all(feature = "capture-gpio", not(feature = "capture-tim")))]
 #[cortex_m_rt::interrupt]
 fn EXTI0() {
     unsafe {

@@ -1,6 +1,6 @@
 //! Pin mapping for RP2350B target
 //! Adjust these values to remap outputs and trigger pin numbers.
-
+#[allow(dead_code)]
 pub struct PinMap {
     pub inj1: u8,
     pub inj2: u8,

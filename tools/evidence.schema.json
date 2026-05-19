@@ -1,0 +1,197 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "FormalEvidenceSummary",
+  "description": "Schema for target/formal-evidence/latest/summary.json emitted by tools/verify_formal.sh.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "generated_at_utc",
+    "git_head",
+    "dirty_worktree",
+    "overall_status",
+    "tools",
+    "commands",
+    "gates"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "minimum": 2
+    },
+    "generated_at_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "git_head": {
+      "type": "string",
+      "minLength": 1
+    },
+    "dirty_worktree": {
+      "type": "boolean"
+    },
+    "overall_status": {
+      "type": "string",
+      "enum": [
+        "pass",
+        "fail"
+      ]
+    },
+    "tools": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "version",
+          "path"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "version": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "commands": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "command",
+          "cwd",
+          "exit_code",
+          "duration_ms",
+          "stdout_tail_path",
+          "stderr_tail_path"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "exit_code": {
+            "type": "integer"
+          },
+          "duration_ms": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "stdout_tail_path": {
+            "type": "string"
+          },
+          "stderr_tail_path": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "gates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "status",
+          "artifact_paths",
+          "metrics"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pass",
+              "fail",
+              "blocked"
+            ]
+          },
+          "artifact_paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "metrics": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "metrics_summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "conformance": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "total_rows": { "type": "integer", "minimum": 0 },
+            "covered_rows": { "type": "integer", "minimum": 0 },
+            "adapter_contract_rows": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "coverage": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "package": { "type": "string" },
+              "line_percent": { "type": "number" }
+            }
+          }
+        },
+        "benchmarks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "benchmark": { "type": "string" },
+              "p95_ns_op": { "type": "number" },
+              "regression_pct": { "type": "number" }
+            }
+          }
+        },
+        "tlc": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "states_generated": { "type": "integer", "minimum": 0 },
+            "distinct_states": { "type": "integer", "minimum": 0 },
+            "errors": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "kani": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "total_harnesses": { "type": "integer", "minimum": 0 },
+            "verified": { "type": "integer", "minimum": 0 },
+            "failed": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "verus": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "verified": { "type": "integer", "minimum": 0 },
+            "errors": { "type": "integer", "minimum": 0 }
+          }
+        }
+      }
+    }
+  }
+}

@@ -77,14 +77,14 @@ impl Default for TorqueRequest {
 
 /// Priority levels for torque sources
 pub mod priority {
-    pub const DRIVER: u8 = 50;       // Normal driver request
-    pub const IDLE: u8 = 40;         // Below driver
-    pub const EXTERNAL: u8 = 60;     // Cruise control, etc.
-    pub const TRACTION: u8 = 100;    // Safety override
+    pub const DRIVER: u8 = 50; // Normal driver request
+    pub const IDLE: u8 = 40; // Below driver
+    pub const EXTERNAL: u8 = 60; // Cruise control, etc.
+    pub const TRACTION: u8 = 100; // Safety override
     pub const REV_LIMITER: u8 = 200; // Near-absolute
-    pub const KNOCK: u8 = 180;       // High priority safety
-    pub const LIMP: u8 = 250;        // Highest priority
-    pub const ANTI_STALL: u8 = 30;   // Low priority assist
+    pub const KNOCK: u8 = 180; // High priority safety
+    pub const LIMP: u8 = 250; // Highest priority
+    pub const ANTI_STALL: u8 = 30; // Low priority assist
 }
 
 /// Torque estimation from engine conditions
@@ -132,11 +132,9 @@ impl TorqueEstimator {
         let iat_factor = self.iat_torque_factor(iat_c);
 
         // Calculate max torque
-        let max_torque = (config.max_torque_nm_x10 as i32
-            * map_factor
-            * rpm_factor as i32
-            * iat_factor as i32)
-            / 1_000_000; // Scale back (100 * 100 * 100)
+        let max_torque =
+            (config.max_torque_nm_x10 as i32 * map_factor * rpm_factor as i32 * iat_factor as i32)
+                / 1_000_000; // Scale back (100 * 100 * 100)
 
         self.last_max_x10 = max_torque.clamp(0, config.max_torque_nm_x10 as i32) as i16;
         self.last_max_x10
@@ -222,12 +220,7 @@ pub fn idle_torque_request(
     let torque = (rpm_error * reserve_x10 as i32) / 100;
     let torque = torque.clamp(-reserve_x10 as i32, reserve_x10 as i32);
 
-    TorqueRequest::active(
-        TorqueSource::Idle,
-        torque as i16,
-        priority::IDLE,
-        now_us,
-    )
+    TorqueRequest::active(TorqueSource::Idle, torque as i16, priority::IDLE, now_us)
 }
 
 /// Generate a rev limiter torque request
@@ -486,11 +479,16 @@ mod tests {
 
     #[test]
     fn test_priority_ordering() {
-        assert!(priority::LIMP > priority::REV_LIMITER);
-        assert!(priority::REV_LIMITER > priority::KNOCK);
-        assert!(priority::KNOCK > priority::TRACTION);
-        assert!(priority::EXTERNAL > priority::DRIVER);
-        assert!(priority::DRIVER > priority::IDLE);
+        let ordered = [
+            priority::IDLE,
+            priority::DRIVER,
+            priority::EXTERNAL,
+            priority::TRACTION,
+            priority::KNOCK,
+            priority::REV_LIMITER,
+            priority::LIMP,
+        ];
+        assert!(ordered.windows(2).all(|w| w[0] < w[1]));
     }
 
     // --- Anti-stall tests ---
@@ -506,7 +504,10 @@ mod tests {
     fn test_anti_stall_request_active_below_threshold() {
         let req = anti_stall_torque_request(600, 800, 50, 0);
         assert!(req.active);
-        assert!(req.torque_nm_x10 > 0, "Should provide positive assist torque");
+        assert!(
+            req.torque_nm_x10 > 0,
+            "Should provide positive assist torque"
+        );
     }
 
     #[test]
@@ -516,8 +517,10 @@ mod tests {
         // At 75% of stall RPM (closer to threshold), should get less assist
         let partial_assist = anti_stall_torque_request(600, 800, 100, 0);
 
-        assert!(full_assist.torque_nm_x10 >= partial_assist.torque_nm_x10,
-            "Assist should increase as RPM drops");
+        assert!(
+            full_assist.torque_nm_x10 >= partial_assist.torque_nm_x10,
+            "Assist should increase as RPM drops"
+        );
     }
 
     // --- Traction control tests ---

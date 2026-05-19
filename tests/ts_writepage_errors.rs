@@ -14,8 +14,8 @@ struct Provider {
 impl OutpcProvider for Provider {
     fn fill_outpc(&self, out: &mut Outpc) {
         let s = unsafe { &*self.state };
-        out.rpm = s.rpm;
-        out.synced = if s.synced { 1 } else { 0 };
+        out.rpm = s.rpm();
+        out.synced = if s.synced() { 1 } else { 0 };
     }
 }
 
@@ -26,8 +26,8 @@ fn write_wrong_sizes_return_err() {
         state: &state as *const _,
     };
     let store = EcuStatePageStore {
-        fuel: &mut state.ipw_table,
-        ign: &mut state.ignition_table,
+        fuel: &mut state.config.ipw_table,
+        ign: &mut state.config.ignition_table,
     };
     let mut server = TunerstudioServer::new(b"IPW-ECU V0.1", provider, store);
 

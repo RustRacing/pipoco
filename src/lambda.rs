@@ -41,9 +41,9 @@ pub struct LambdaConfig {
 impl LambdaConfig {
     pub const DEFAULT: Self = Self {
         enable: true,
-        target_afr_x10: 147, // Stoichiometric
-        kp_x100: 50,         // 0.50 proportional gain
-        ki_x100: 10,         // 0.10 integral gain
+        target_afr_x10: 147,    // Stoichiometric
+        kp_x100: 50,            // 0.50 proportional gain
+        ki_x100: 10,            // 0.10 integral gain
         authority_max_x10: 200, // ±20%
         narrowband_threshold_mv: 450,
         deadband_mv: 20,
@@ -61,18 +61,13 @@ impl Default for LambdaConfig {
 }
 
 /// O2 sensor type
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum O2SensorType {
     /// Narrowband (0-1V, rich/lean only)
+    #[default]
     Narrowband,
     /// Wideband (0-5V = 10-20 AFR typical)
     Wideband,
-}
-
-impl Default for O2SensorType {
-    fn default() -> Self {
-        Self::Narrowband
-    }
 }
 
 /// Lambda controller state
@@ -213,10 +208,8 @@ impl LambdaState {
         let correction = p_term + (self.integral / 10);
 
         // Apply authority limits
-        self.stft_x10 = (correction as i16).clamp(
-            -config.authority_max_x10,
-            config.authority_max_x10,
-        );
+        self.stft_x10 =
+            (correction as i16).clamp(-config.authority_max_x10, config.authority_max_x10);
 
         self.stft_x10
     }
@@ -580,6 +573,7 @@ impl LtftState {
     ///
     /// # Returns
     /// `true` if learning should occur this cycle
+    #[allow(clippy::too_many_arguments)]
     pub fn should_learn(
         &mut self,
         rpm: u16,
@@ -691,9 +685,9 @@ impl LtftManager {
         now_us: u32,
     ) -> i16 {
         // Check if we should learn
-        let should_learn = self.state.should_learn(
-            rpm, load, clt_c, stft, lambda_active, &self.config, now_us
-        );
+        let should_learn =
+            self.state
+                .should_learn(rpm, load, clt_c, stft, lambda_active, &self.config, now_us);
 
         if should_learn {
             self.table.learn(
@@ -1014,7 +1008,11 @@ mod tests {
 
         // Should have converged close to STFT
         let learned = table.cells[1][1].trim_x10;
-        assert!(learned > 40 && learned < 60, "Expected ~50, got {}", learned);
+        assert!(
+            learned > 40 && learned < 60,
+            "Expected ~50, got {}",
+            learned
+        );
     }
 
     #[test]

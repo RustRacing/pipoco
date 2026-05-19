@@ -4,12 +4,13 @@
 use cortex_m_rt::entry;
 use panic_halt as _;
 
-use hal::clocks::{init_clocks_and_plls, Clock};
+use hal::clocks::init_clocks_and_plls;
 use hal::usb::UsbBus;
 use hal::{pac, sio::Sio, watchdog::Watchdog};
 use rp2040_hal as hal;
 use usb_device::{bus::UsbBusAllocator, prelude::*};
 use usbd_serial::SerialPort as UsbdSerial;
+use usbd_serial::USB_CLASS_CDC;
 
 use ecu_core::ts::outpc::Outpc;
 use ecu_core::{
@@ -26,17 +27,11 @@ struct Cdc<'a, B: usb_device::bus::UsbBus> {
 impl<'a, B: usb_device::bus::UsbBus> SerialPort for Cdc<'a, B> {
     fn read(&mut self, buf: &mut [u8]) -> usize {
         let _ = self.dev.poll(&mut [&mut self.serial]);
-        match self.serial.read(buf) {
-            Ok(n) => n,
-            Err(_) => 0,
-        }
+        self.serial.read(buf).unwrap_or_default()
     }
     fn write(&mut self, buf: &[u8]) -> usize {
         let _ = self.dev.poll(&mut [&mut self.serial]);
-        match self.serial.write(buf) {
-            Ok(n) => n,
-            Err(_) => 0,
-        }
+        self.serial.write(buf).unwrap_or_default()
     }
 }
 
@@ -46,24 +41,24 @@ struct Provider {
 impl OutpcProvider for Provider {
     fn fill_outpc(&self, out: &mut Outpc) {
         let s = unsafe { &*self.state };
-        out.rpm = s.rpm;
+        out.rpm = s.rpm();
         out.map_kpa_x10 = 1000;
-        out.tps_percent = s.tps_percent as u8;
+        out.tps_percent = s.tps_percent();
         out.clt_c = 20;
         out.iat_c = 25;
-        out.vbatt_mv = s.battery_voltage_mv;
+        out.vbatt_mv = s.battery_voltage_mv();
         out.lambda_x100 = 100;
         out.pw_us = 1000;
         out.dwell_us = 3000;
         out.advance_x10 = 150;
-        out.synced = if s.synced { 1 } else { 0 };
+        out.synced = if s.synced() { 1 } else { 0 };
     }
 }
 
 #[entry]
 fn main() -> ! {
     let mut pac = pac::Peripherals::take().unwrap();
-    let core = pac::CorePeripherals::take().unwrap();
+    let _core = pac::CorePeripherals::take().unwrap();
     let mut watchdog = Watchdog::new(pac.WATCHDOG);
 
     // External crystal at 12 MHz on Pico
@@ -79,7 +74,7 @@ fn main() -> ! {
     .ok()
     .unwrap();
 
-    let sio = Sio::new(pac.SIO);
+    let _sio = Sio::new(pac.SIO);
 
     // USB bus
     let usb_bus: UsbBusAllocator<UsbBus> = UsbBusAllocator::new(UsbBus::new(
@@ -100,14 +95,14 @@ fn main() -> ! {
     let mut cdc = Cdc { serial, dev };
 
     // ECU and TS server
-    static mut STATE: EcuState = EcuState::new();
-    let state = unsafe { &mut STATE };
+    let state = cortex_m::singleton!(: EcuState = EcuState::new())
+        .expect("EcuState singleton already taken");
     let provider = Provider {
         state: state as *const EcuState,
     };
     let store = EcuStatePageStore {
-        fuel: &mut state.ipw_table,
-        ign: &mut state.ignition_table,
+        fuel: &mut state.config.ipw_table,
+        ign: &mut state.config.ignition_table,
     };
     let mut server = TunerstudioServer::new(b"IPW-ECU V0.1", provider, store);
 

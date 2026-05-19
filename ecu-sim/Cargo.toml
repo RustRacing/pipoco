@@ -1,0 +1,16 @@
+[package]
+name = "ecu-sim"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+ecu-domain = { path = "../ecu-domain" }
+ecu-io = { path = "../ecu-io" }
+ecu-runtime = { path = "../ecu-runtime" }
+ecu-scheduler = { path = "../ecu-scheduler" }
+
+[dev-dependencies]
+smallvec = "1.13"

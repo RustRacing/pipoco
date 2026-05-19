@@ -7,8 +7,8 @@ use stm32f4xx_hal::{pac, prelude::*};
 
 use ecu_core::transport::{CanDevice, CanTransport, Message, Transport};
 
-struct DummyCan;
-impl CanDevice for DummyCan {
+struct NullCan;
+impl CanDevice for NullCan {
     type Error = ();
     fn tx_ready(&self) -> bool {
         true
@@ -27,8 +27,8 @@ fn main() -> ! {
     let rcc = dp.RCC.constrain();
     let _clocks = rcc.cfgr.sysclk(168.MHz()).freeze();
 
-    // Minimal CAN transport wiring (DummyCan for compile-time demo)
-    let mut can = CanTransport::new(DummyCan);
+    // Example-only CAN transport wiring (replace NullCan with HAL CAN)
+    let mut can = CanTransport::new(NullCan);
 
     // Periodically send heartbeat
     loop {

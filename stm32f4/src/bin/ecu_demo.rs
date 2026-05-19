@@ -2,12 +2,9 @@
 #![no_main]
 
 use cortex_m_rt::entry;
-use ecu_core::EcuApp;
+use ecu_runtime::EngineRuntime;
 use panic_halt as _;
 use stm32f4xx_hal::{pac, prelude::*};
-#[path = "../hal_impl.rs"]
-mod hal_impl;
-use hal_impl::Stm32Time;
 
 #[entry]
 fn main() -> ! {
@@ -22,8 +19,9 @@ fn main() -> ! {
     dp.TIM2.arr.write(|w| w.arr().bits(u32::MAX));
     dp.TIM2.cr1.modify(|_, w| w.cen().set_bit());
 
-    // Initialize EcuApp (no capture wired in demo)
-    let mut _app = EcuApp::new(Stm32Time);
+    // Initialize the split runtime placeholder. Scheduled outputs are handled
+    // by the main board path, not the legacy root EcuApp scheduler.
+    let mut _runtime = EngineRuntime::new();
 
     loop {
         cortex_m::asm::wfi();

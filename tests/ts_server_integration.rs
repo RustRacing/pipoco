@@ -46,10 +46,10 @@ struct Provider {
 impl OutpcProvider for Provider {
     fn fill_outpc(&self, out: &mut Outpc) {
         let s = unsafe { &*self.state };
-        out.rpm = s.rpm;
-        out.tps_percent = s.tps_percent;
-        out.vbatt_mv = s.battery_voltage_mv;
-        out.synced = if s.synced { 1 } else { 0 };
+        out.rpm = s.rpm();
+        out.tps_percent = s.tps_percent();
+        out.vbatt_mv = s.battery_voltage_mv();
+        out.synced = if s.synced() { 1 } else { 0 };
     }
 }
 
@@ -57,10 +57,10 @@ impl OutpcProvider for Provider {
 fn ts_sig_outpc_read_write_burn_roundtrip() {
     // Initial state
     let mut state = EcuState::new();
-    state.rpm = 1500;
-    state.tps_percent = 12;
-    state.battery_voltage_mv = 12800;
-    state.synced = true;
+    state.set_rpm(1500);
+    state.set_tps_percent(12);
+    state.set_battery_voltage_mv(12800);
+    state.set_synced(true);
 
     // Shared KV and persisted page store
     let kv: SharedKv = SharedKv::new();
@@ -75,8 +75,8 @@ fn ts_sig_outpc_read_write_burn_roundtrip() {
     {
         let store = PersistedPageStore::new(
             EcuStatePageStore {
-                fuel: &mut state.ipw_table,
-                ign: &mut state.ignition_table,
+                fuel: &mut state.config.ipw_table,
+                ign: &mut state.config.ignition_table,
             },
             kv.clone(),
         );
@@ -104,14 +104,14 @@ fn ts_sig_outpc_read_write_burn_roundtrip() {
     }
 
     // Now we can inspect state (borrow released)
-    assert_eq!(state.ipw_table[0][0], 0x1234);
+    assert_eq!(state.config.ipw_table[0][0], 0x1234);
 
     // === READ PAGE (FUEL) in a new server instance ===
     {
         let store = PersistedPageStore::new(
             EcuStatePageStore {
-                fuel: &mut state.ipw_table,
-                ign: &mut state.ignition_table,
+                fuel: &mut state.config.ipw_table,
+                ign: &mut state.config.ignition_table,
             },
             kv.clone(),
         );
@@ -129,8 +129,8 @@ fn ts_sig_outpc_read_write_burn_roundtrip() {
     {
         let store = PersistedPageStore::new(
             EcuStatePageStore {
-                fuel: &mut state.ipw_table,
-                ign: &mut state.ignition_table,
+                fuel: &mut state.config.ipw_table,
+                ign: &mut state.config.ignition_table,
             },
             kv.clone(),
         );
@@ -143,17 +143,17 @@ fn ts_sig_outpc_read_write_burn_roundtrip() {
     }
 
     // Simulate reset: clear state tables then reload from KV via a fresh store
-    state.ipw_table[0][0] = 0;
+    state.config.ipw_table[0][0] = 0;
     let mut reload_store = PersistedPageStore::new(
         EcuStatePageStore {
-            fuel: &mut state.ipw_table,
-            ign: &mut state.ignition_table,
+            fuel: &mut state.config.ipw_table,
+            ign: &mut state.config.ignition_table,
         },
         kv.clone(),
     );
     reload_store.try_load();
     assert_eq!(
-        state.ipw_table[0][0], 0x1234,
+        state.config.ipw_table[0][0], 0x1234,
         "fuel should reload from KV after burn"
     );
 
@@ -161,8 +161,8 @@ fn ts_sig_outpc_read_write_burn_roundtrip() {
     {
         let store = PersistedPageStore::new(
             EcuStatePageStore {
-                fuel: &mut state.ipw_table,
-                ign: &mut state.ignition_table,
+                fuel: &mut state.config.ipw_table,
+                ign: &mut state.config.ignition_table,
             },
             kv.clone(),
         );
@@ -175,5 +175,5 @@ fn ts_sig_outpc_read_write_burn_roundtrip() {
         let len = proto::encode_reply(Cmd::WritePage, &ign_buf, &mut req).unwrap();
         let _ = server.handle(&req[..len], &mut out).expect("write ign");
     }
-    assert_eq!(state.ignition_table[0][0], -5);
+    assert_eq!(state.config.ignition_table[0][0], -5);
 }

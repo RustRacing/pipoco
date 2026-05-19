@@ -1,0 +1,62 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "BenchmarksArtifact",
+  "description": "Schema for target/formal-evidence/latest/benchmarks.json emitted by tools/verify_formal.sh.",
+  "type": "object",
+  "required": [
+    "status",
+    "benchmarks"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["pass", "fail"]
+    },
+    "benchmarks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "benchmark",
+          "metric",
+          "baseline_p95_ns_op",
+          "current_p95_ns_op",
+          "regression_pct",
+          "threshold_pct",
+          "status"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "benchmark": {
+            "type": "string",
+            "minLength": 1
+          },
+          "metric": {
+            "type": "string",
+            "minLength": 1
+          },
+          "baseline_p95_ns_op": {
+            "type": "number",
+            "minimum": 0
+          },
+          "current_p95_ns_op": {
+            "type": "number",
+            "minimum": 0
+          },
+          "regression_pct": {
+            "type": "number"
+          },
+          "threshold_pct": {
+            "type": "number",
+            "minimum": 0
+          },
+          "status": {
+            "type": "string",
+            "enum": ["pass", "fail"]
+          }
+        }
+      }
+    }
+  }
+}

@@ -10,7 +10,8 @@
 //! To customize the reserved region, adjust KV_OFFSET below or provide a
 //! board-specific configuration.
 
-use ecu_core::persist::{KvStore, KvError};
+use ecu_core::persist::{KvError, KvStore};
+use ecu_target_common::kv::layout::{ANGLES_PAGE_LEN, FUEL_PAGE_LEN, IGN_PAGE_LEN};
 
 // RP2040 XIP flash base
 const XIP_BASE: u32 = 0x1000_0000;
@@ -23,9 +24,9 @@ const PAGE_SIZE: usize = 256;
 const MAGIC: u32 = 0x4950574B; // 'IPWK'
 const VERSION: u16 = 2;
 
-const LEN_FUEL: usize = 512;
-const LEN_IGN: usize = 512;
-const LEN_ANGLES: usize = 68;
+const LEN_FUEL: usize = FUEL_PAGE_LEN;
+const LEN_IGN: usize = IGN_PAGE_LEN;
+const LEN_ANGLES: usize = ANGLES_PAGE_LEN;
 
 #[repr(C, packed)]
 struct Header {
@@ -44,25 +45,62 @@ fn crc16_ccitt(mut crc: u16, data: &[u8]) -> u16 {
     for &b in data {
         crc ^= (b as u16) << 8;
         for _ in 0..8 {
-            if (crc & 0x8000) != 0 { crc = (crc << 1) ^ 0x1021; } else { crc <<= 1; }
+            if (crc & 0x8000) != 0 {
+                crc = (crc << 1) ^ 0x1021;
+            } else {
+                crc <<= 1;
+            }
         }
     }
     crc
 }
 
-fn kv_base_ptr() -> *const u8 { (XIP_BASE + KV_OFFSET) as *const u8 }
-fn kv_base_off() -> u32 { KV_OFFSET }
+fn kv_base_ptr() -> *const u8 {
+    (XIP_BASE + KV_OFFSET) as *const u8
+}
+fn kv_base_off() -> u32 {
+    KV_OFFSET
+}
 
-pub struct FlashKv;
+pub struct FlashKv {
+    /// Pointer to the EcuState singleton.
+    /// # Safety Invariant: This pointer must be non-null and must point to the
+    /// EcuState singleton that outlives FlashKv. FlashKv only reads `synced`
+    /// and `rpm` from this pointer.
+    state: *const ecu_core::EcuState,
+}
 
 impl FlashKv {
-    pub const fn new() -> Self { Self }
+    /// Construct FlashKv with a direct pointer to EcuState.
+    ///
+    /// # Safety Invariant
+    /// - The `state` pointer must point to the EcuState singleton that outlives FlashKv.
+    /// - FlashKv only reads `synced` and `rpm` to determine engine-running.
+    /// - Mutable page access remains owned by `PersistedEcuPageStore`.
+    pub const fn new_with_state(state: &ecu_core::EcuState) -> Self {
+        Self { state }
+    }
+
+    /// Returns true if the engine is running (synced and rpm > 0).
+    /// This is the only site that dereferences the state pointer.
+    fn engine_running(&self) -> bool {
+        let state = self.state;
+        if state.is_null() {
+            return false;
+        }
+        // SAFETY: state is guaranteed non-null and valid for the lifetime of the
+        // EcuState singleton. We only read synced/rpm fields.
+        let state = unsafe { &*state };
+        state.synced() && state.rpm() > 0
+    }
 
     fn read_header(&self) -> Option<Header> {
         unsafe {
             let hdr_ptr = kv_base_ptr() as *const Header;
             let hdr = core::ptr::read_volatile(hdr_ptr);
-            if hdr.magic != MAGIC || hdr.version != VERSION { return None; }
+            if hdr.magic != MAGIC || hdr.version != VERSION {
+                return None;
+            }
             Some(hdr)
         }
     }
@@ -71,12 +109,17 @@ impl FlashKv {
         unsafe {
             let src = kv_base_ptr().add(offset);
             let dst = out.as_mut_ptr();
-            for i in 0..out.len() { let b = core::ptr::read_volatile(src.add(i)); core::ptr::write_volatile(dst.add(i), b); }
+            for i in 0..out.len() {
+                let b = core::ptr::read_volatile(src.add(i));
+                core::ptr::write_volatile(dst.add(i), b);
+            }
         }
     }
 
     unsafe fn flash_erase(addr_off: u32, len: usize) {
-        use rp2040_hal::rom_data::{flash_exit_xip, flash_range_erase, flash_enter_cmd_xip, flash_flush_cache};
+        use rp2040_hal::rom_data::{
+            flash_enter_cmd_xip, flash_exit_xip, flash_flush_cache, flash_range_erase,
+        };
         flash_exit_xip();
         // erase in 4K sectors
         let mut rem = len;
@@ -91,7 +134,9 @@ impl FlashKv {
     }
 
     unsafe fn flash_program(addr_off: u32, data: &[u8]) {
-        use rp2040_hal::rom_data::{flash_exit_xip, flash_range_program, flash_enter_cmd_xip, flash_flush_cache};
+        use rp2040_hal::rom_data::{
+            flash_enter_cmd_xip, flash_exit_xip, flash_flush_cache, flash_range_program,
+        };
         flash_exit_xip();
         // program in 256-byte chunks
         let mut off = 0usize;
@@ -111,30 +156,44 @@ impl KvStore for FlashKv {
         let hdr = self.read_header().ok_or(KvError::NotFound)?;
         match key {
             b"fuel" => {
-                if out.len() < LEN_FUEL { return Err(KvError::Io); }
+                if out.len() < LEN_FUEL {
+                    return Err(KvError::Io);
+                }
                 let off = core::mem::size_of::<Header>();
                 let mut tmp = [0u8; LEN_FUEL];
                 Self::read_block(off, &mut tmp);
-                if crc16_ccitt(0xFFFF, &tmp) != hdr.fuel_crc { return Err(KvError::Io); }
+                if crc16_ccitt(0xFFFF, &tmp) != hdr.fuel_crc {
+                    return Err(KvError::Io);
+                }
                 out[..LEN_FUEL].copy_from_slice(&tmp);
                 Ok(LEN_FUEL)
             }
             b"ign" => {
-                if out.len() < LEN_IGN { return Err(KvError::Io); }
+                if out.len() < LEN_IGN {
+                    return Err(KvError::Io);
+                }
                 let off = core::mem::size_of::<Header>() + LEN_FUEL;
                 let mut tmp = [0u8; LEN_IGN];
                 Self::read_block(off, &mut tmp);
-                if crc16_ccitt(0xFFFF, &tmp) != hdr.ign_crc { return Err(KvError::Io); }
+                if crc16_ccitt(0xFFFF, &tmp) != hdr.ign_crc {
+                    return Err(KvError::Io);
+                }
                 out[..LEN_IGN].copy_from_slice(&tmp);
                 Ok(LEN_IGN)
             }
             b"angles" => {
-                if hdr.angles_len as usize != LEN_ANGLES { return Err(KvError::NotFound); }
-                if out.len() < LEN_ANGLES { return Err(KvError::Io); }
+                if hdr.angles_len as usize != LEN_ANGLES {
+                    return Err(KvError::NotFound);
+                }
+                if out.len() < LEN_ANGLES {
+                    return Err(KvError::Io);
+                }
                 let off = core::mem::size_of::<Header>() + LEN_FUEL + LEN_IGN;
                 let mut tmp = [0u8; LEN_ANGLES];
                 Self::read_block(off, &mut tmp);
-                if crc16_ccitt(0xFFFF, &tmp) != hdr.angles_crc { return Err(KvError::Io); }
+                if crc16_ccitt(0xFFFF, &tmp) != hdr.angles_crc {
+                    return Err(KvError::Io);
+                }
                 out[..LEN_ANGLES].copy_from_slice(&tmp);
                 Ok(LEN_ANGLES)
             }
@@ -143,6 +202,9 @@ impl KvStore for FlashKv {
     }
 
     fn write(&mut self, key: &[u8], data: &[u8]) -> Result<(), KvError> {
+        if self.engine_running() {
+            return Err(KvError::EngineRunning);
+        }
         // Read current values (or zero) into staging buffers
         let mut fuel = [0u8; LEN_FUEL];
         let mut ign = [0u8; LEN_IGN];
@@ -151,9 +213,24 @@ impl KvStore for FlashKv {
         let _ = self.read(b"ign", &mut ign);
         let _ = self.read(b"angles", &mut angles);
         match key {
-            b"fuel" => { if data.len()!=LEN_FUEL { return Err(KvError::Io) } fuel.copy_from_slice(data); }
-            b"ign" => { if data.len()!=LEN_IGN { return Err(KvError::Io) } ign.copy_from_slice(data); }
-            b"angles" => { if data.len()!=LEN_ANGLES { return Err(KvError::Io) } angles.copy_from_slice(data); }
+            b"fuel" => {
+                if data.len() != LEN_FUEL {
+                    return Err(KvError::Io);
+                }
+                fuel.copy_from_slice(data);
+            }
+            b"ign" => {
+                if data.len() != LEN_IGN {
+                    return Err(KvError::Io);
+                }
+                ign.copy_from_slice(data);
+            }
+            b"angles" => {
+                if data.len() != LEN_ANGLES {
+                    return Err(KvError::Io);
+                }
+                angles.copy_from_slice(data);
+            }
             _ => return Err(KvError::NotFound),
         }
 
@@ -173,7 +250,8 @@ impl KvStore for FlashKv {
         // Serialize into a sector-sized buffer
         let mut sector = [0xFFu8; SECTOR_SIZE];
         let mut off = 0;
-        let hdr_bytes: &[u8; core::mem::size_of::<Header>()] = unsafe { core::mem::transmute(&hdr) };
+        let hdr_bytes: &[u8; core::mem::size_of::<Header>()] =
+            unsafe { core::mem::transmute(&hdr) };
         sector[..hdr_bytes.len()].copy_from_slice(hdr_bytes);
         off += hdr_bytes.len();
         sector[off..off + LEN_FUEL].copy_from_slice(&fuel);
