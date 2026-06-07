@@ -3,178 +3,24 @@
 
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
-INIT = REPO_ROOT / "tools" / "init_m50_batch8_evidence.py"
 CHECKER = REPO_ROOT / "tools" / "check_m50_batch8_evidence.py"
-DEFAULT_DRY_CRANK_CSV = (
-    "target/formal-evidence/latest/m50-batch8/logs/dry_crank_tooth_cam.csv"
-)
-METADATA_DRY_CRANK_ARTIFACT_PATH = "logs/dry_crank_tooth_cam.csv"
-EXPECTED_SCHEMA = "m50-batch8-evidence-v1"
-REVIEWABLE_DRY_CRANK_CSV = """\
-# sample_rate_hz=1000000 clock_source=logic-analyzer
-# crank_edge_polarity=rising cam_phase=tooth_1
-time_us,crank_tooth_edge,cam_phase_state
-0,0,0
-100,rising,1
-"""
-CERTIFICATION_HASH_FIELDS = (
-    "schema",
-    "date",
-    "board_revision",
-    "firmware_build_id",
-    "profile_id",
-    "conditioner_path",
-    "primary_edge",
-    "secondary_edge",
-    "trigger_angle_atdc_deg10",
-    "fixed_timing_mode",
-    "fixed_timing_angle_deg10",
-    "operator_notes",
-    "source_notes",
-    "provenance",
-)
 
 
-def write_json(path: Path, data: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+DRY_CRANK_CSV = "time_us,crank_tooth_edge,cam_phase_state\n" + "\n".join(
+    f"{idx * 100},rising,{1 if idx == 60 else 0}" for idx in range(116)
+) + "\n"
 
 
-def write_text(path: Path, text: str = "") -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8")
-
-
-def write_reviewable_dry_crank_csv(evidence_dir: Path) -> Path:
-    dry_crank = evidence_dir / METADATA_DRY_CRANK_ARTIFACT_PATH
-    write_text(dry_crank, REVIEWABLE_DRY_CRANK_CSV)
-    return dry_crank
-
-
-def file_sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
-def certification_hash(metadata: dict, artifacts: list[dict[str, str]]) -> str:
-    payload = {
-        "metadata": {
-            field: metadata.get(field)
-            for field in CERTIFICATION_HASH_FIELDS
-        },
-        "artifacts": sorted(
-            artifacts,
-            key=lambda entry: (entry["kind"], entry["path"], entry["sha256"]),
-        ),
-    }
-    return hashlib.sha256(
-        json.dumps(
-            payload,
-            ensure_ascii=True,
-            separators=(",", ":"),
-            sort_keys=True,
-        ).encode("utf-8")
-    ).hexdigest()
-
-
-def make_certified_metadata(evidence_dir: Path, **overrides) -> dict:
-    dry_crank = write_reviewable_dry_crank_csv(evidence_dir)
-    fixed_timing_path = evidence_dir / "validation" / "fixed_timing_validation.csv"
-    write_text(fixed_timing_path, "fixed timing validation fixture\n")
-    artifacts = [
-        {
-            "path": METADATA_DRY_CRANK_ARTIFACT_PATH,
-            "kind": "dry_crank_tooth_cam_log",
-            "sha256": file_sha256(dry_crank),
-        },
-        {
-            "path": "validation/fixed_timing_validation.csv",
-            "kind": "fixed_timing_validation_artifact",
-            "sha256": file_sha256(fixed_timing_path),
-        },
-    ]
-    metadata = make_metadata(
-        fixed_timing_mode="certified",
-        fixed_timing_angle_deg10=100,
-        artifacts=artifacts,
-    )
-    metadata["certification_hash"] = certification_hash(metadata, artifacts)
-    metadata.update(overrides)
-    return metadata
-
-
-def make_provenance(**overrides) -> dict:
-    provenance = {
-        "capture_timestamp": "2026-05-18T12:01:00Z",
-        "operator_identity": "test operator",
-        "capture_device": "logic analyzer fixture",
-        "channel_mapping": {
-            "crank": "crank_tooth_edge",
-            "cam": "cam_phase_state",
-        },
-        "sample_rate_hz": 1_000_000,
-        "clock_source": "logic-analyzer internal clock",
-        "dry_crank_declared": True,
-        "spark_disabled": True,
-        "injectors_disabled": True,
-        "cranking_rpm_range": "180-220 rpm",
-        "battery_voltage": "12.1 V during crank",
-        "environment_notes": "ambient 22 C, coolant 20 C",
-        "source_notes": "synthetic review fixture provenance",
-    }
-    provenance.update(overrides)
-    return provenance
-
-
-def make_metadata(*, artifacts: list[dict] | None = None, **overrides) -> dict:
-    metadata = {
-        "schema": EXPECTED_SCHEMA,
-        "date": "2026-05-18T12:00:00Z",
-        "board_revision": "M50 batch-8 board rev A",
-        "firmware_build_id": "fw-build-2026-05-18",
-        "profile_id": "m50-batch-8-review",
-        "conditioner_path": "docs/conditioning/m50-batch8.md",
-        "primary_edge": "rising",
-        "secondary_edge": "falling",
-        "trigger_angle_atdc_deg10": 120,
-        "fixed_timing_mode": "not_yet_certified",
-        "fixed_timing_angle_deg10": None,
-        "operator_notes": "synthetic review fixture",
-        "source_notes": "synthetic review fixture",
-        "provenance": make_provenance(),
-        "artifacts": artifacts
-        if artifacts is not None
-        else [
-            {
-                "path": METADATA_DRY_CRANK_ARTIFACT_PATH,
-                "kind": "dry_crank_tooth_cam_log",
-            }
-        ],
-    }
-    metadata.update(overrides)
-    return metadata
-
-
-def run_checker(evidence_dir: Path) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [sys.executable, str(CHECKER), str(evidence_dir)],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
-
-def run_checker_cli(*args: str) -> subprocess.CompletedProcess[str]:
+def run_checker(*args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, str(CHECKER), *args],
         cwd=REPO_ROOT,
@@ -184,1208 +30,1188 @@ def run_checker_cli(*args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def run_init(evidence_dir: Path) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [sys.executable, str(INIT), str(evidence_dir)],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
+def first_run_ready_metadata(**overrides) -> dict:
+    data = metadata(**overrides)
+    data["sensor_calibrations"]["tps"]["calibration_status"] = "bench_verified"
+    data["sensor_calibrations"]["clt"]["calibration_status"] = "bench_verified"
+    data["sensor_calibrations"]["iat"]["calibration_status"] = "bench_verified"
+    data["sensor_calibrations"]["clt"]["temp_c_points"] = [-20, 20, 80]
+    data["sensor_calibrations"]["clt"]["resistance_ohm_points"] = [14000, 2500, 300]
+    data["sensor_calibrations"]["iat"]["temp_c_points"] = [-20, 20, 80]
+    data["sensor_calibrations"]["iat"]["resistance_ohm_points"] = [14000, 2500, 300]
+    return data
+
+
+def write_json(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def file_hash(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def attach_certified_fixed_timing(evidence: Path, data: dict, angle_deg10: int = 100) -> dict:
+    dry = evidence / "logs/dry_crank_tooth_cam.csv"
+    fixed = evidence / "validation/fixed.csv"
+    write_text(
+        fixed,
+        "rpm,commanded_timing_deg10,observed_timing_deg10\n"
+        f"900,{angle_deg10},{angle_deg10}\n",
     )
+    data["fixed_timing_mode"] = "certified"
+    data["fixed_timing_angle_deg10"] = angle_deg10
+    data["certification_hash"] = file_hash(fixed)
+    data["artifacts"] = [
+        {
+            "path": "logs/dry_crank_tooth_cam.csv",
+            "kind": "dry_crank_tooth_cam_log",
+            "sha256": file_hash(dry),
+        },
+        {
+            "path": "validation/fixed.csv",
+            "kind": "fixed_timing_validation_artifact",
+            "sha256": file_hash(fixed),
+        },
+    ]
+    return data
+
+
+def metadata(**overrides) -> dict:
+    data = {
+        "schema": "m50-batch8-evidence-v1",
+        "date": "2026-05-18T12:00:00Z",
+        "board_revision": "batch-8",
+        "firmware_build_id": "fw",
+        "profile_id": "m50",
+        "first_run_load_source": "map_speed_density",
+        "conditioner_path": "notes",
+        "primary_edge": "rising",
+        "secondary_edge": "falling",
+        "trigger_angle_atdc_deg10": 120,
+        "fixed_timing_mode": "not_yet_certified",
+        "fixed_timing_angle_deg10": None,
+        "operator_notes": "review fixture",
+        "source_notes": "review fixture",
+        "sensor_io_map": {
+            "crank": {
+                "input_path": "DIN_CRANK",
+                "signal_conditioning": "fixture crank conditioner",
+                "source": "fixture board routing",
+            },
+            "cam": {
+                "input_path": "DIN_CAM",
+                "signal_conditioning": "fixture cam conditioner",
+                "source": "fixture board routing",
+            },
+            "map": {
+                "input_path": "ADC0",
+                "signal_conditioning": "fixture MAP divider/filter",
+                "source": "fixture board routing",
+            },
+            "tps": {
+                "input_path": "ADC1",
+                "signal_conditioning": "fixture TPS direct analog",
+                "source": "fixture board routing",
+            },
+            "clt": {
+                "input_path": "ADC2",
+                "signal_conditioning": "fixture CLT pullup",
+                "source": "fixture board routing",
+            },
+            "iat": {
+                "input_path": "ADC3",
+                "signal_conditioning": "fixture IAT pullup",
+                "source": "fixture board routing",
+            },
+            "vbatt": {
+                "input_path": "ADC4",
+                "signal_conditioning": "fixture VBatt divider",
+                "source": "fixture board routing",
+            },
+            "maf": {
+                "input_path": "ADC5",
+                "signal_conditioning": "fixture HFM input",
+                "source": "fixture board routing",
+            },
+            "baro": {
+                "input_path": "ADC7",
+                "signal_conditioning": "fixture baro analog input",
+                "source": "fixture board routing",
+            },
+            "lambda": {
+                "input_path": "ADC6",
+                "signal_conditioning": "fixture wideband analog input",
+                "source": "fixture board routing",
+            },
+            "knock_front": {
+                "input_path": "KNOCK0",
+                "signal_conditioning": "fixture knock front-end channel 0",
+                "source": "fixture board routing",
+            },
+            "knock_rear": {
+                "input_path": "KNOCK1",
+                "signal_conditioning": "fixture knock front-end channel 1",
+                "source": "fixture board routing",
+            },
+            "vss": {
+                "input_path": "DIN0",
+                "signal_conditioning": "fixture VSS digital input",
+                "source": "fixture board routing",
+            },
+        },
+        "sensor_calibrations": {
+            "adc": {
+                "vref_mv": 3300,
+                "adc_bits": 12,
+                "source": "fixture ADC reference measurement",
+            },
+            "map": {
+                "model": "mpxh6400ac6u",
+                "model_source": "fixture MAP part marking",
+                "voltage_scale_numerator": 33,
+                "voltage_scale_denominator": 50,
+                "scale_source": "fixture MAP divider measurement",
+                "installation_confirmed": True,
+            },
+            "tps": {
+                "closed_counts": 120,
+                "open_counts": 3900,
+                "calibration_status": "not_yet_certified",
+                "calibration_source": "fixture TPS sweep",
+            },
+            "clt": {
+                "curve_source": "fixture CLT curve source",
+                "bias_ohms": 2490,
+                "bias_source": "fixture CLT pullup measurement",
+                "calibration_status": "not_yet_certified",
+                "temp_c_points": [],
+                "resistance_ohm_points": [],
+            },
+            "iat": {
+                "curve_source": "fixture IAT curve source",
+                "bias_ohms": 2490,
+                "bias_source": "fixture IAT pullup measurement",
+                "calibration_status": "not_yet_certified",
+                "temp_c_points": [],
+                "resistance_ohm_points": [],
+            },
+            "maf": {
+                "curve_source": "fixture HFM source",
+                "runtime_load_status": "not_supported",
+                "mv_points": [],
+                "flow_x100_points": [],
+            },
+            "baro": {
+                "source": "startup_map_sample",
+                "source_notes": "fixture startup MAP baro policy",
+                "fixed_kpa10": 1013,
+                "sensor_model": "",
+                "calibration_source": "",
+                "mv_min": 0,
+                "kpa_min_x10": 0,
+                "mv_max": 0,
+                "kpa_max_x10": 0,
+                "calibration_status": "not_yet_certified",
+            },
+            "vbatt": {
+                "voltage_scale_numerator": 4,
+                "voltage_scale_denominator": 1,
+                "scale_source": "fixture divider source",
+            },
+            "lambda": {
+                "installed": False,
+                "required_for_first_run": False,
+                "calibration_status": "not_yet_certified",
+                "controller_type": "wideband fixture",
+                "mv_min": 500,
+                "lambda_min_x100": 68,
+                "mv_max": 4500,
+                "lambda_max_x100": 136,
+            },
+            "knock": {
+                "sensor_count": 2,
+                "covered_cylinders": 6,
+                "channels": {
+                    "front": {
+                        "front_end": "fixture front knock front-end",
+                        "covered_cylinders": 3,
+                        "window_source": "fixture front knock window source",
+                        "threshold_source": "fixture front knock threshold source",
+                    },
+                    "rear": {
+                        "front_end": "fixture rear knock front-end",
+                        "covered_cylinders": 3,
+                        "window_source": "fixture rear knock window source",
+                        "threshold_source": "fixture rear knock threshold source",
+                    },
+                },
+                "authority_status": "monitor_only",
+                "retard_validation_source": "",
+            },
+            "vss": {
+                "installed": False,
+                "required_for_first_run": False,
+                "pulse_source": "",
+                "pulses_per_km": 1,
+                "calibration_status": "not_yet_certified",
+            },
+            "cam_phase": {
+                "tooth_count": 58,
+                "reference_tooth": 0,
+                "window_before": 1,
+                "window_after": 1,
+                "edge_action": "set_phase_a",
+                "window_source": "fixture cam window source",
+            },
+        },
+        "provenance": {
+            "capture_timestamp": "2026-05-18T12:01:00Z",
+            "operator_identity": "operator",
+            "capture_device": "logic analyzer",
+            "channel_mapping": {
+                "crank": "crank_tooth_edge",
+                "cam": "cam_phase_state",
+            },
+            "sample_rate_hz": 1_000_000,
+            "clock_source": "internal",
+            "dry_crank_declared": True,
+            "spark_disabled": True,
+            "injectors_disabled": True,
+            "cranking_rpm_range": "180-220 rpm",
+            "battery_voltage": "12.1 V",
+            "environment_notes": "ambient",
+            "source_notes": "review fixture",
+        },
+        "artifacts": [
+            {
+                "path": "logs/dry_crank_tooth_cam.csv",
+                "kind": "dry_crank_tooth_cam_log",
+            }
+        ],
+    }
+    data.update(overrides)
+    return data
 
 
 class CheckM50Batch8EvidenceTests(unittest.TestCase):
-    def test_incomplete_evidence_fails_closed_with_missing_field_output(self) -> None:
+    def test_structural_package_passes_without_certifying_timing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            evidence_dir = Path(tmp)
-            write_reviewable_dry_crank_csv(evidence_dir)
-            metadata = make_metadata()
-            del metadata["date"]
-            del metadata["firmware_build_id"]
-            write_json(evidence_dir / "metadata.json", metadata)
+            evidence = Path(tmp)
+            write_text(evidence / "logs/dry_crank_tooth_cam.csv", DRY_CRANK_CSV)
+            write_json(evidence / "metadata.json", metadata())
 
-            result = run_checker(evidence_dir)
+            result = run_checker(str(evidence))
 
-            self.assertNotEqual(result.returncode, 0, result.stdout)
-            self.assertIn("FAIL: metadata missing required field: date", result.stdout)
-            self.assertIn(
-                "FAIL: metadata missing required field: firmware_build_id",
-                result.stdout,
-            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("structurally reviewable", result.stdout)
+            self.assertIn("fixed timing is not certified", result.stdout)
 
-    def test_schema_version_is_required_and_exact(self) -> None:
+    def test_missing_artifact_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            evidence_dir = Path(tmp)
-            write_reviewable_dry_crank_csv(evidence_dir)
+            evidence = Path(tmp)
+            write_json(evidence / "metadata.json", metadata())
 
-            for schema_value in (None, "m50-batch8-evidence-v2"):
-                with self.subTest(schema=schema_value):
-                    metadata = make_metadata()
-                    if schema_value is None:
-                        del metadata["schema"]
-                    else:
-                        metadata["schema"] = schema_value
-                    write_json(evidence_dir / "metadata.json", metadata)
+            result = run_checker(str(evidence))
 
-                    result = run_checker(evidence_dir)
-
-                    self.assertNotEqual(result.returncode, 0, result.stdout)
-                    self.assertIn(
-                        f"FAIL: metadata.schema must be '{EXPECTED_SCHEMA}'",
-                        result.stdout,
-                    )
-
-    def test_malformed_metadata_json_fails_without_traceback(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            evidence_dir = Path(tmp)
-            write_text(evidence_dir / "metadata.json", "{not json\n")
-
-            result = run_checker(evidence_dir)
-
-            self.assertNotEqual(result.returncode, 0, result.stdout)
-            self.assertIn("FAIL: metadata.json is not valid JSON", result.stdout)
-            self.assertNotIn("Traceback", result.stderr)
-
-        with tempfile.TemporaryDirectory() as tmp:
-            evidence_dir = Path(tmp)
-            write_text(evidence_dir / "metadata.json", "[]\n")
-
-            result = run_checker(evidence_dir)
-
-            self.assertNotEqual(result.returncode, 0, result.stdout)
-            self.assertIn("FAIL: metadata.json must contain a JSON object", result.stdout)
-            self.assertNotIn("Traceback", result.stderr)
-
-    def test_artifacts_shape_is_validated(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            evidence_dir = Path(tmp)
-            write_reviewable_dry_crank_csv(evidence_dir)
-            write_json(evidence_dir / "metadata.json", make_metadata(artifacts={}))
-
-            result = run_checker(evidence_dir)
-
-            self.assertNotEqual(result.returncode, 0, result.stdout)
-            self.assertIn("FAIL: metadata.artifacts must be a list", result.stdout)
-            self.assertNotIn("Traceback", result.stderr)
-
-        with tempfile.TemporaryDirectory() as tmp:
-            evidence_dir = Path(tmp)
-            write_reviewable_dry_crank_csv(evidence_dir)
-            write_json(evidence_dir / "metadata.json", make_metadata(artifacts=["log.csv"]))
-
-            result = run_checker(evidence_dir)
-
-            self.assertNotEqual(result.returncode, 0, result.stdout)
-            self.assertIn("FAIL: metadata.artifacts[0] must be an object", result.stdout)
-            self.assertIn(
-                "FAIL: metadata.artifacts must contain at least one artifact entry",
-                result.stdout,
-            )
-            self.assertNotIn("Traceback", result.stderr)
-
-    def test_required_metadata_string_fields_reject_wrong_primitive_types(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            evidence_dir = Path(tmp)
-            write_reviewable_dry_crank_csv(evidence_dir)
-            write_json(
-                evidence_dir / "metadata.json",
-                make_metadata(
-                    date=123,
-                    board_revision=["M50"],
-                    firmware_build_id={"id": "fw"},
-                    profile_id=False,
-                    conditioner_path=0,
-                    operator_notes=None,
-                    source_notes=["fixture"],
-                ),
-            )
-
-            result = run_checker(evidence_dir)
-
-            self.assertNotEqual(result.returncode, 0, result.stdout)
-            for field in (
-                "date",
-                "board_revision",
-                "firmware_build_id",
-                "profile_id",
-                "conditioner_path",
-                "operator_notes",
-                "source_notes",
-            ):
-                self.assertIn(
-                    f"FAIL: metadata.{field} must be a non-empty string",
-                    result.stdout,
-                )
-            self.assertNotIn("Traceback", result.stderr)
-
-    def test_structured_provenance_object_is_required(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            evidence_dir = Path(tmp)
-            write_reviewable_dry_crank_csv(evidence_dir)
-            metadata = make_metadata()
-            del metadata["provenance"]
-            write_json(evidence_dir / "metadata.json", metadata)
-
-            result = run_checker(evidence_dir)
-
-            self.assertNotEqual(result.returncode, 0, result.stdout)
-            self.assertIn("FAIL: metadata missing required field: provenance", result.stdout)
-            self.assertIn("FAIL: metadata.provenance must be an object", result.stdout)
-
-    def test_structured_provenance_fields_are_reviewable(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            evidence_dir = Path(tmp)
-            write_reviewable_dry_crank_csv(evidence_dir)
-            write_json(
-                evidence_dir / "metadata.json",
-                make_metadata(
-                    provenance=make_provenance(
-                        capture_timestamp="2026-05-18 12:01:00",
-                        operator_identity=" ",
-                        capture_device="<logic analyzer>",
-                        channel_mapping={
-                            "crank": "",
-                            "cam": "<cam channel>",
-                        },
-                        sample_rate_hz=0,
-                        dry_crank_declared=False,
-                        spark_disabled=False,
-                        injectors_disabled=False,
-                    )
-                ),
-            )
-
-            result = run_checker(evidence_dir)
-
-            self.assertNotEqual(result.returncode, 0, result.stdout)
-            self.assertIn(
-                "FAIL: metadata.provenance.capture_timestamp must include timezone information",
-                result.stdout,
-            )
-            self.assertIn(
-                "FAIL: metadata.provenance.operator_identity must be a non-empty string",
-                result.stdout,
-            )
-            self.assertIn(
-                "FAIL: metadata.provenance.capture_device contains unresolved placeholder token: <logic analyzer>",
-                result.stdout,
-            )
-            self.assertIn(
-                "FAIL: metadata.provenance.channel_mapping.crank must be a non-empty string",
-                result.stdout,
-            )
-            self.assertIn(
-                "FAIL: metadata.provenance.channel_mapping.cam contains unresolved placeholder token: <cam channel>",
-                result.stdout,
-            )
-            self.assertIn(
-                "FAIL: metadata.provenance.sample_rate_hz must be a positive integer",
-                result.stdout,
-            )
-            self.assertIn(
-                "FAIL: metadata.provenance.dry_crank_declared must be true",
-                result.stdout,
-            )
-            self.assertIn(
-                "FAIL: metadata.provenance.spark_disabled must be true",
-                result.stdout,
-            )
-            self.assertIn(
-                "FAIL: metadata.provenance.injectors_disabled must be true",
-                result.stdout,
-            )
-
-    def test_selected_edges_must_be_known_edge_values(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            evidence_dir = Path(tmp)
-            write_reviewable_dry_crank_csv(evidence_dir)
-            write_json(
-                evidence_dir / "metadata.json",
-                make_metadata(
-                    primary_edge="leading",
-                    secondary_edge="cam-high",
-                ),
-            )
-
-            result = run_checker(evidence_dir)
-
-            self.assertNotEqual(result.returncode, 0, result.stdout)
-            self.assertIn(
-                "FAIL: metadata.primary_edge must be one of: falling, rising",
-                result.stdout,
-            )
-            self.assertIn(
-                "FAIL: metadata.secondary_edge must be one of: falling, rising",
-                result.stdout,
-            )
-
-    def test_trigger_angles_must_be_integer_deg10_values(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            evidence_dir = Path(tmp)
-            write_reviewable_dry_crank_csv(evidence_dir)
-            write_json(
-                evidence_dir / "metadata.json",
-                make_metadata(
-                    trigger_angle_atdc_deg10=12.5,
-                    fixed_timing_angle_deg10=True,
-                ),
-            )
-
-            result = run_checker(evidence_dir)
-
-            self.assertNotEqual(result.returncode, 0, result.stdout)
-            self.assertIn(
-                "FAIL: metadata.trigger_angle_atdc_deg10 must be an integer tenths-of-degree value",
-                result.stdout,
-            )
-            self.assertIn(
-                "FAIL: metadata.fixed_timing_angle_deg10 must be an integer tenths-of-degree value or null",
-                result.stdout,
-            )
-
-    def test_msq_alone_is_insufficient(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            evidence_dir = Path(tmp)
-            write_text(evidence_dir / "tune.msq", "[Tune]\n")
-
-            result = run_checker(evidence_dir)
-
-            self.assertNotEqual(result.returncode, 0, result.stdout)
-            self.assertIn("FAIL: missing metadata.json", result.stdout)
-
-    def test_initialized_metadata_fails_closed_without_date_error(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            evidence_dir = Path(tmp) / "evidence"
-
-            init_result = run_init(evidence_dir)
-            self.assertEqual(init_result.returncode, 0, init_result.stdout + init_result.stderr)
-
-            result = run_checker(evidence_dir)
-
-            self.assertNotEqual(result.returncode, 0, result.stdout)
-            self.assertNotIn("metadata.date must be ISO-8601", result.stdout)
-            self.assertNotIn("metadata missing required field: date", result.stdout)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("artifact file does not exist", result.stdout)
             self.assertIn("missing dry-crank tooth/cam log", result.stdout)
 
-    def test_placeholder_metadata_values_are_rejected(self) -> None:
+    def test_placeholders_fail(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            evidence_dir = Path(tmp)
-            write_reviewable_dry_crank_csv(evidence_dir)
-            write_json(
-                evidence_dir / "metadata.json",
-                make_metadata(
-                    board_revision="<M50 board revision>",
-                    firmware_build_id="<firmware build id>",
-                    source_notes="capture provenance: <source notes>",
-                ),
-            )
+            evidence = Path(tmp)
+            write_text(evidence / "logs/dry_crank_tooth_cam.csv", DRY_CRANK_CSV)
+            write_json(evidence / "metadata.json", metadata(board_revision="<board>"))
 
-            result = run_checker(evidence_dir)
+            result = run_checker(str(evidence))
 
-            self.assertNotEqual(result.returncode, 0, result.stdout)
-            self.assertIn(
-                "FAIL: metadata.board_revision contains unresolved placeholder token: <M50 board revision>",
-                result.stdout,
-            )
-            self.assertIn(
-                "FAIL: metadata.firmware_build_id contains unresolved placeholder token: <firmware build id>",
-                result.stdout,
-            )
-            self.assertIn(
-                "FAIL: metadata.source_notes contains unresolved placeholder token: capture provenance: <source notes>",
-                result.stdout,
-            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("placeholder", result.stdout)
 
-    def test_placeholder_artifact_path_cannot_satisfy_dry_crank_log(self) -> None:
+    def test_mlg_and_path_escape_are_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            evidence_dir = Path(tmp)
-            write_text(evidence_dir / "<dry_crank_tooth_cam_log.csv>", "synthetic log\n")
+            evidence = Path(tmp)
+            write_text(evidence / "capture.mlg", "not evidence")
             write_json(
-                evidence_dir / "metadata.json",
-                make_metadata(
+                evidence / "metadata.json",
+                metadata(
                     artifacts=[
-                        {
-                            "path": "<dry_crank_tooth_cam_log.csv>",
-                            "kind": "dry_crank_tooth_cam_log",
-                        }
+                        {"path": "capture.mlg", "kind": "dry_crank_tooth_cam_log"},
+                        {"path": "../escape.csv", "kind": "fixed_timing_validation_artifact"},
                     ]
                 ),
             )
 
-            result = run_checker(evidence_dir)
+            result = run_checker(str(evidence))
 
-            self.assertNotEqual(result.returncode, 0, result.stdout)
-            self.assertIn(
-                "FAIL: metadata.artifacts[0].path contains unresolved placeholder token: <dry_crank_tooth_cam_log.csv>",
-                result.stdout,
-            )
-            self.assertIn("FAIL: missing dry-crank tooth/cam log", result.stdout)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(".msq or .mlg", result.stdout)
+            self.assertIn("escapes evidence dir", result.stdout)
 
-    def test_absolute_artifact_path_cannot_satisfy_dry_crank_log(self) -> None:
+    def test_channel_mapping_must_match_csv_header(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            evidence_dir = Path(tmp)
-            dry_crank = write_reviewable_dry_crank_csv(evidence_dir)
-            write_json(
-                evidence_dir / "metadata.json",
-                make_metadata(
-                    artifacts=[
-                        {
-                            "path": str(dry_crank),
-                            "kind": "dry_crank_tooth_cam_log",
-                        }
-                    ]
-                ),
-            )
+            evidence = Path(tmp)
+            write_text(evidence / "logs/dry_crank_tooth_cam.csv", DRY_CRANK_CSV)
+            bad = metadata()
+            bad["provenance"]["channel_mapping"]["cam"] = "missing_cam_column"
+            write_json(evidence / "metadata.json", bad)
 
-            result = run_checker(evidence_dir)
+            result = run_checker(str(evidence))
 
-            self.assertNotEqual(result.returncode, 0, result.stdout)
-            self.assertIn(
-                f"FAIL: metadata.artifacts[0].path must be relative to the evidence dir: {dry_crank}",
-                result.stdout,
-            )
-            self.assertIn("FAIL: missing dry-crank tooth/cam log", result.stdout)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("channel_mapping.cam", result.stdout)
 
-    def test_duplicate_artifact_paths_are_rejected(self) -> None:
+    def test_dry_crank_capture_must_have_crank_and_cam_events(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            evidence_dir = Path(tmp)
-            write_reviewable_dry_crank_csv(evidence_dir)
-            write_json(
-                evidence_dir / "metadata.json",
-                make_metadata(
-                    artifacts=[
-                        {
-                            "path": METADATA_DRY_CRANK_ARTIFACT_PATH,
-                            "kind": "dry_crank_tooth_cam_log",
-                        },
-                        {
-                            "path": METADATA_DRY_CRANK_ARTIFACT_PATH,
-                            "kind": "fixed_timing_validation_artifact",
-                        },
-                    ]
-                ),
-            )
-
-            result = run_checker(evidence_dir)
-
-            self.assertNotEqual(result.returncode, 0, result.stdout)
-            self.assertIn(
-                "FAIL: metadata.artifacts[1].path duplicates metadata.artifacts[0].path: "
-                + METADATA_DRY_CRANK_ARTIFACT_PATH,
-                result.stdout,
-            )
-
-    def test_unknown_artifact_kind_is_rejected(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            evidence_dir = Path(tmp)
-            dry_crank = write_reviewable_dry_crank_csv(evidence_dir)
-            supplemental = evidence_dir / "validation" / "operator_notes.csv"
-            write_text(supplemental, "time_us,note\n0,reviewed\n")
-            write_json(
-                evidence_dir / "metadata.json",
-                make_metadata(
-                    artifacts=[
-                        {
-                            "path": METADATA_DRY_CRANK_ARTIFACT_PATH,
-                            "kind": "dry_crank_tooth_cam_log",
-                            "sha256": file_sha256(dry_crank),
-                        },
-                        {
-                            "path": "validation/operator_notes.csv",
-                            "kind": "operator_notes",
-                            "sha256": file_sha256(supplemental),
-                        },
-                    ]
-                ),
-            )
-
-            result = run_checker(evidence_dir)
-
-            self.assertNotEqual(result.returncode, 0, result.stdout)
-            self.assertIn(
-                "FAIL: metadata.artifacts[1].kind must be one of: "
-                "dry_crank_tooth_cam_log, fixed_timing_validation_artifact",
-                result.stdout,
-            )
-
-    def test_duplicate_singleton_artifact_kinds_are_rejected(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            for name, duplicate_artifacts, expected_failure in (
-                (
-                    "dry-crank",
-                    [
-                        {
-                            "path": METADATA_DRY_CRANK_ARTIFACT_PATH,
-                            "kind": "dry_crank_tooth_cam_log",
-                        },
-                        {
-                            "path": "logs/dry_crank_tooth_cam_secondary.csv",
-                            "kind": "dry_crank_tooth_cam_log",
-                        },
-                    ],
-                    "FAIL: metadata.artifacts[1].kind duplicates singleton evidence kind "
-                    "metadata.artifacts[0].kind: dry_crank_tooth_cam_log",
-                ),
-                (
-                    "fixed-timing",
-                    [
-                        {
-                            "path": METADATA_DRY_CRANK_ARTIFACT_PATH,
-                            "kind": "dry_crank_tooth_cam_log",
-                        },
-                        {
-                            "path": "validation/fixed_timing_primary.csv",
-                            "kind": "fixed_timing_validation_artifact",
-                        },
-                        {
-                            "path": "validation/fixed_timing_secondary.csv",
-                            "kind": "fixed_timing_validation_artifact",
-                        },
-                    ],
-                    "FAIL: metadata.artifacts[2].kind duplicates singleton evidence kind "
-                    "metadata.artifacts[1].kind: fixed_timing_validation_artifact",
-                ),
-            ):
-                with self.subTest(name=name):
-                    evidence_dir = root / name
-                    write_reviewable_dry_crank_csv(evidence_dir)
-                    write_text(
-                        evidence_dir / "logs" / "dry_crank_tooth_cam_secondary.csv",
-                        REVIEWABLE_DRY_CRANK_CSV,
-                    )
-                    write_text(
-                        evidence_dir / "validation" / "fixed_timing_primary.csv",
-                        "fixed timing primary fixture\n",
-                    )
-                    write_text(
-                        evidence_dir / "validation" / "fixed_timing_secondary.csv",
-                        "fixed timing secondary fixture\n",
-                    )
-                    write_json(
-                        evidence_dir / "metadata.json",
-                        make_metadata(artifacts=duplicate_artifacts),
-                    )
-
-                    result = run_checker(evidence_dir)
-
-                    self.assertNotEqual(result.returncode, 0, result.stdout)
-                    self.assertIn(expected_failure, result.stdout)
-
-    def test_declared_artifact_sha256_must_match_file_contents(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            evidence_dir = Path(tmp)
-            write_reviewable_dry_crank_csv(evidence_dir)
-            write_json(
-                evidence_dir / "metadata.json",
-                make_metadata(
-                    artifacts=[
-                        {
-                            "path": METADATA_DRY_CRANK_ARTIFACT_PATH,
-                            "kind": "dry_crank_tooth_cam_log",
-                            "sha256": "0" * 64,
-                        }
-                    ]
-                ),
-            )
-
-            result = run_checker(evidence_dir)
-
-            self.assertNotEqual(result.returncode, 0, result.stdout)
-            self.assertIn(
-                "FAIL: metadata.artifacts[0].sha256 does not match file contents: "
-                + METADATA_DRY_CRANK_ARTIFACT_PATH,
-                result.stdout,
-            )
-            self.assertIn("FAIL: missing dry-crank tooth/cam log", result.stdout)
-
-    def test_traversal_artifact_path_cannot_escape_evidence_dir(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            evidence_dir = root / "evidence"
-            write_text(root / "outside.csv", "synthetic log\n")
-            write_json(
-                evidence_dir / "metadata.json",
-                make_metadata(
-                    artifacts=[
-                        {
-                            "path": "logs/../../outside.csv",
-                            "kind": "dry_crank_tooth_cam_log",
-                        }
-                    ]
-                ),
-            )
-
-            result = run_checker(evidence_dir)
-
-            self.assertNotEqual(result.returncode, 0, result.stdout)
-            self.assertIn(
-                "FAIL: metadata.artifacts[0] path escapes evidence dir: logs/../../outside.csv",
-                result.stdout,
-            )
-            self.assertIn("FAIL: missing dry-crank tooth/cam log", result.stdout)
-
-    def test_symlink_artifact_path_cannot_escape_evidence_dir(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            evidence_dir = root / "evidence"
-            outside = root / "outside" / "dry_crank_tooth_cam.csv"
-            link = evidence_dir / "logs" / "dry_crank_tooth_cam.csv"
-            write_text(outside, "synthetic log\n")
-            link.parent.mkdir(parents=True, exist_ok=True)
-            try:
-                link.symlink_to(outside)
-            except (NotImplementedError, OSError) as exc:
-                self.skipTest(f"symlinks unsupported: {exc}")
-            write_json(evidence_dir / "metadata.json", make_metadata())
-
-            result = run_checker(evidence_dir)
-
-            self.assertNotEqual(result.returncode, 0, result.stdout)
-            self.assertIn(
-                "FAIL: metadata.artifacts[0] path escapes evidence dir: logs/dry_crank_tooth_cam.csv",
-                result.stdout,
-            )
-            self.assertIn("FAIL: missing dry-crank tooth/cam log", result.stdout)
-
-    def test_generic_mlg_without_metadata_binding_is_insufficient(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            evidence_dir = Path(tmp)
-            write_text(evidence_dir / "logs" / "session.mlg", "synthetic log\n")
-            write_text(evidence_dir / "logs" / "fixed_timing.csv", "synthetic proof\n")
-            write_json(
-                evidence_dir / "metadata.json",
-                make_metadata(
-                    artifacts=[
-                        {
-                            "path": "logs/fixed_timing.csv",
-                            "kind": "fixed_timing_validation_artifact",
-                        }
-                    ]
-                ),
-            )
-
-            result = run_checker(evidence_dir)
-
-            self.assertNotEqual(result.returncode, 0, result.stdout)
-            self.assertIn(
-                "FAIL: missing dry-crank tooth/cam log: collect a real dry-crank tooth/cam log and add at least one metadata.artifacts entry with kind dry_crank_tooth_cam_log",
-                result.stdout,
-            )
-            self.assertIn(
-                "FAIL: forbidden standalone tune/log file cannot satisfy batch-8 evidence: logs/session.mlg",
-                result.stdout,
-            )
-
-    def test_invalid_fixed_timing_mode_is_rejected_clearly(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            evidence_dir = Path(tmp)
-            write_reviewable_dry_crank_csv(evidence_dir)
+            evidence = Path(tmp)
             write_text(
-                evidence_dir / "validation" / "fixed_timing_validation.csv",
-                "fixed timing validation fixture\n",
+                evidence / "logs/dry_crank_tooth_cam.csv",
+                "time_us,crank_tooth_edge,cam_phase_state\n0,rising,0\n100,rising,0\n",
             )
-            write_json(
-                evidence_dir / "metadata.json",
-                make_metadata(
-                    fixed_timing_mode="claimed",
-                    fixed_timing_angle_deg10=100,
-                    artifacts=[
-                        {
-                            "path": METADATA_DRY_CRANK_ARTIFACT_PATH,
-                            "kind": "dry_crank_tooth_cam_log",
-                        },
-                        {
-                            "path": "validation/fixed_timing_validation.csv",
-                            "kind": "fixed_timing_validation_artifact",
-                        },
-                    ],
-                ),
-            )
+            write_json(evidence / "metadata.json", metadata())
 
-            result = run_checker(evidence_dir)
+            result = run_checker(str(evidence))
 
-            self.assertNotEqual(result.returncode, 0, result.stdout)
-            self.assertIn(
-                "FAIL: metadata.fixed_timing_mode must be 'certified' or 'not_yet_certified'",
-                result.stdout,
-            )
-            self.assertNotIn("missing fixed timing proof", result.stdout)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("at least 116 crank tooth-edge events", result.stdout)
+            self.assertIn("at least one cam event", result.stdout)
 
-    def test_certified_fixed_timing_requires_validation_artifact(self) -> None:
+    def test_sensor_calibration_metadata_is_required(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            evidence_dir = Path(tmp)
-            write_reviewable_dry_crank_csv(evidence_dir)
+            evidence = Path(tmp)
+            write_text(evidence / "logs/dry_crank_tooth_cam.csv", DRY_CRANK_CSV)
+            bad = metadata()
+            bad["sensor_calibrations"]["adc"]["vref_mv"] = 999
+            bad["sensor_calibrations"]["adc"]["adc_bits"] = 7
+            bad["sensor_calibrations"]["adc"]["source"] = ""
+            bad["sensor_calibrations"]["map"]["model_source"] = ""
+            del bad["sensor_calibrations"]["map"]["voltage_scale_denominator"]
+            bad["sensor_calibrations"]["map"]["scale_source"] = ""
+            bad["sensor_calibrations"]["tps"]["calibration_source"] = ""
+            bad["sensor_calibrations"]["clt"]["curve_source"] = ""
+            bad["sensor_calibrations"]["clt"]["bias_source"] = ""
+            bad["sensor_calibrations"]["maf"]["runtime_load_status"] = "pretend_supported"
+            bad["sensor_calibrations"]["maf"]["curve_source"] = ""
+            bad["sensor_calibrations"]["baro"]["source"] = "pretend_baro"
+            bad["sensor_calibrations"]["baro"]["source_notes"] = ""
+            bad["sensor_calibrations"]["vbatt"]["voltage_scale_denominator"] = 0
+            bad["sensor_calibrations"]["vbatt"]["scale_source"] = ""
+            bad["sensor_calibrations"]["lambda"]["installed"] = True
+            bad["sensor_calibrations"]["lambda"]["mv_max"] = 500
+            bad["sensor_calibrations"]["knock"]["channels"]["front"]["threshold_source"] = ""
+            bad["sensor_calibrations"]["cam_phase"]["window_source"] = ""
+            bad["sensor_calibrations"]["cam_phase"]["edge_action"] = "alternate_magic"
+            write_json(evidence / "metadata.json", bad)
+
+            result = run_checker(str(evidence))
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("adc.vref_mv must be between 1000 and 5000", result.stdout)
+            self.assertIn("adc.adc_bits must be between 8 and 16", result.stdout)
+            self.assertIn("adc.source", result.stdout)
+            self.assertIn("map.model_source", result.stdout)
+            self.assertIn("map.voltage_scale_denominator", result.stdout)
+            self.assertIn("map.scale_source", result.stdout)
+            self.assertIn("tps.calibration_source", result.stdout)
+            self.assertIn("clt.curve_source", result.stdout)
+            self.assertIn("clt.bias_source", result.stdout)
+            self.assertIn("maf.runtime_load_status", result.stdout)
+            self.assertNotIn("maf.curve_source", result.stdout)
+            self.assertIn("baro.source", result.stdout)
+            self.assertIn("baro.source_notes", result.stdout)
+            self.assertIn("vbatt.voltage_scale_denominator", result.stdout)
+            self.assertIn("vbatt.scale_source", result.stdout)
+            self.assertIn("lambda.mv_max must be greater than mv_min", result.stdout)
+            self.assertIn("knock.channels.front.threshold_source", result.stdout)
+            self.assertIn("cam_phase.window_source", result.stdout)
+            self.assertIn("cam_phase.edge_action", result.stdout)
+
+    def test_uninstalled_lambda_does_not_require_controller_calibration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            evidence = Path(tmp)
+            write_text(evidence / "logs/dry_crank_tooth_cam.csv", DRY_CRANK_CSV)
+            data = metadata()
+            data["sensor_calibrations"]["lambda"] = {
+                "installed": False,
+                "required_for_first_run": False,
+                "calibration_status": "not_yet_certified",
+                "controller_type": "",
+                "mv_min": 0,
+                "lambda_min_x100": 0,
+                "mv_max": 0,
+                "lambda_max_x100": 0,
+            }
+            write_json(evidence / "metadata.json", data)
+
+            result = run_checker(str(evidence))
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_unsupported_maf_does_not_require_curve_or_io_map(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            evidence = Path(tmp)
+            write_text(evidence / "logs/dry_crank_tooth_cam.csv", DRY_CRANK_CSV)
+            data = metadata()
+            data["sensor_calibrations"]["maf"] = {
+                "curve_source": "",
+                "runtime_load_status": "not_supported",
+                "mv_points": [],
+                "flow_x100_points": [],
+            }
+            del data["sensor_io_map"]["maf"]
+            write_json(evidence / "metadata.json", data)
+
+            result = run_checker(str(evidence))
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_required_lambda_must_have_calibration_and_status_for_first_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            evidence = Path(tmp)
+            write_text(evidence / "logs/dry_crank_tooth_cam.csv", DRY_CRANK_CSV)
+            data = first_run_ready_metadata()
+            data["sensor_calibrations"]["lambda"] = {
+                "installed": False,
+                "required_for_first_run": True,
+                "calibration_status": "not_yet_certified",
+                "controller_type": "",
+                "mv_min": 500,
+                "lambda_min_x100": 68,
+                "mv_max": 500,
+                "lambda_max_x100": 136,
+            }
+            write_json(evidence / "metadata.json", data)
+
+            result = run_checker("--require-first-run-ready", str(evidence))
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("lambda.installed must be true", result.stdout)
+            self.assertIn("lambda.controller_type", result.stdout)
+            self.assertIn("lambda.mv_max must be greater than mv_min", result.stdout)
+            self.assertIn("lambda.calibration_status cannot be not_yet_certified", result.stdout)
+
+    def test_required_sensor_io_map_entries_must_have_routing_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            evidence = Path(tmp)
+            write_text(evidence / "logs/dry_crank_tooth_cam.csv", DRY_CRANK_CSV)
+            data = metadata()
+            del data["sensor_io_map"]["crank"]
+            del data["sensor_io_map"]["map"]
+            data["sensor_io_map"]["tps"]["input_path"] = ""
+            data["sensor_io_map"]["clt"]["signal_conditioning"] = ""
+            data["sensor_io_map"]["iat"]["source"] = ""
+            write_json(evidence / "metadata.json", data)
+
+            result = run_checker(str(evidence))
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("sensor_io_map.crank must be an object", result.stdout)
+            self.assertIn("sensor_io_map.map must be an object", result.stdout)
+            self.assertIn("sensor_io_map.tps.input_path", result.stdout)
+            self.assertIn("sensor_io_map.clt.signal_conditioning", result.stdout)
+            self.assertIn("sensor_io_map.iat.source", result.stdout)
+
+    def test_map_io_map_is_required_only_when_map_is_used_or_installed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            evidence = Path(tmp)
+            write_text(evidence / "logs/dry_crank_tooth_cam.csv", DRY_CRANK_CSV)
+            data = metadata(first_run_load_source="tps_alpha_n")
+            data["sensor_calibrations"]["map"]["installation_confirmed"] = False
+            data["sensor_calibrations"]["map"]["model"] = ""
+            data["sensor_calibrations"]["map"]["model_source"] = ""
+            data["sensor_calibrations"]["map"]["voltage_scale_numerator"] = 0
+            data["sensor_calibrations"]["map"]["voltage_scale_denominator"] = 0
+            data["sensor_calibrations"]["map"]["scale_source"] = ""
+            data["sensor_calibrations"]["tps"]["calibration_status"] = "bench_verified"
+            data["sensor_calibrations"]["baro"]["source"] = "fixed_kpa"
+            del data["sensor_io_map"]["map"]
+            write_json(evidence / "metadata.json", data)
+
+            result = run_checker(str(evidence))
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+            data["sensor_calibrations"]["map"]["installation_confirmed"] = True
+            data["sensor_calibrations"]["map"]["model"] = "mpx5700ap"
+            data["sensor_calibrations"]["map"]["model_source"] = "fixture MAP part marking"
+            data["sensor_calibrations"]["map"]["voltage_scale_numerator"] = 33
+            data["sensor_calibrations"]["map"]["voltage_scale_denominator"] = 50
+            data["sensor_calibrations"]["map"]["scale_source"] = "fixture MAP divider measurement"
+            write_json(evidence / "metadata.json", data)
+
+            result = run_checker(str(evidence))
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("sensor_io_map.map must be an object", result.stdout)
+
+    def test_optional_sensor_io_map_entries_are_required_when_sensor_is_used(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            evidence = Path(tmp)
+            write_text(evidence / "logs/dry_crank_tooth_cam.csv", DRY_CRANK_CSV)
+            data = first_run_ready_metadata(first_run_load_source="maf")
+            data["sensor_calibrations"]["maf"]["runtime_load_status"] = "bench_verified"
+            data["sensor_calibrations"]["maf"]["mv_points"] = [330, 990, 2970]
+            data["sensor_calibrations"]["maf"]["flow_x100_points"] = [0, 500, 3000]
+            data["sensor_calibrations"]["lambda"]["installed"] = True
+            data["sensor_calibrations"]["vss"]["installed"] = True
+            data["sensor_calibrations"]["vss"]["pulse_source"] = "fixture VSS"
+            data["sensor_calibrations"]["vss"]["pulses_per_km"] = 10_000
+            data["sensor_calibrations"]["baro"]["source"] = "dedicated_sensor"
+            data["sensor_calibrations"]["baro"]["source_notes"] = "fixture dedicated baro"
+            data["sensor_calibrations"]["baro"]["sensor_model"] = "mpx5700ap"
+            data["sensor_calibrations"]["baro"]["calibration_source"] = "fixture baro calibration"
+            data["sensor_calibrations"]["baro"]["mv_min"] = 500
+            data["sensor_calibrations"]["baro"]["kpa_min_x10"] = 500
+            data["sensor_calibrations"]["baro"]["mv_max"] = 4500
+            data["sensor_calibrations"]["baro"]["kpa_max_x10"] = 1200
+            data["sensor_calibrations"]["baro"]["calibration_status"] = "bench_verified"
+            del data["sensor_io_map"]["maf"]
+            del data["sensor_io_map"]["baro"]
+            del data["sensor_io_map"]["lambda"]
+            del data["sensor_io_map"]["vss"]
+            del data["sensor_io_map"]["knock_front"]
+            del data["sensor_io_map"]["knock_rear"]
+            write_json(evidence / "metadata.json", data)
+
+            result = run_checker(str(evidence))
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("sensor_io_map.maf must be an object", result.stdout)
+            self.assertIn("sensor_io_map.baro must be an object", result.stdout)
+            self.assertIn("sensor_io_map.lambda must be an object", result.stdout)
+            self.assertIn("sensor_io_map.vss must be an object", result.stdout)
+            self.assertIn("sensor_io_map.knock_front must be an object", result.stdout)
+            self.assertIn("sensor_io_map.knock_rear must be an object", result.stdout)
+
+    def test_single_knock_sensor_can_use_aggregate_io_role(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            evidence = Path(tmp)
+            write_text(evidence / "logs/dry_crank_tooth_cam.csv", DRY_CRANK_CSV)
+            data = metadata()
+            data["sensor_calibrations"]["knock"]["sensor_count"] = 1
+            data["sensor_calibrations"]["knock"]["covered_cylinders"] = 6
+            data["sensor_calibrations"]["knock"]["front_end"] = "fixture aggregate knock front-end"
+            data["sensor_calibrations"]["knock"]["window_source"] = "fixture aggregate knock window"
+            data["sensor_calibrations"]["knock"]["threshold_source"] = "fixture aggregate knock threshold"
+            del data["sensor_io_map"]["knock_front"]
+            del data["sensor_io_map"]["knock_rear"]
+            data["sensor_io_map"]["knock"] = {
+                "input_path": "KNOCK0",
+                "signal_conditioning": "fixture aggregate knock front-end",
+                "source": "fixture board routing",
+            }
+            write_json(evidence / "metadata.json", data)
+
+            result = run_checker(str(evidence))
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_disabled_knock_does_not_require_channel_calibration_or_io(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            evidence = Path(tmp)
+            write_text(evidence / "logs/dry_crank_tooth_cam.csv", DRY_CRANK_CSV)
+            data = metadata()
+            data["sensor_calibrations"]["knock"] = {
+                "sensor_count": 2,
+                "covered_cylinders": 6,
+                "authority_status": "disabled",
+                "retard_validation_source": "",
+            }
+            del data["sensor_io_map"]["knock_front"]
+            del data["sensor_io_map"]["knock_rear"]
+            write_json(evidence / "metadata.json", data)
+
+            result = run_checker(str(evidence))
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_active_two_channel_knock_requires_channel_calibration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            evidence = Path(tmp)
+            write_text(evidence / "logs/dry_crank_tooth_cam.csv", DRY_CRANK_CSV)
+            data = metadata()
+            del data["sensor_calibrations"]["knock"]["channels"]
+            write_json(evidence / "metadata.json", data)
+
+            result = run_checker(str(evidence))
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("metadata.sensor_calibrations.knock.channels must be an object", result.stdout)
+
+    def test_knock_channel_coverage_must_cover_declared_cylinders(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            evidence = Path(tmp)
+            write_text(evidence / "logs/dry_crank_tooth_cam.csv", DRY_CRANK_CSV)
+            data = metadata()
+            data["sensor_calibrations"]["knock"]["channels"]["front"]["covered_cylinders"] = 2
+            data["sensor_calibrations"]["knock"]["channels"]["rear"]["covered_cylinders"] = 2
+            write_json(evidence / "metadata.json", data)
+
+            result = run_checker(str(evidence))
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("knock channel coverage must cover declared cylinders", result.stdout)
+
+    def test_baro_source_policy_validates_fixed_and_startup_map_modes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            evidence = Path(tmp)
+            write_text(evidence / "logs/dry_crank_tooth_cam.csv", DRY_CRANK_CSV)
+            data = metadata()
+            data["sensor_calibrations"]["baro"] = {
+                "source": "fixed_kpa",
+                "source_notes": "fixture fixed baro",
+                "fixed_kpa10": 1500,
+                "sensor_model": "",
+                "calibration_source": "",
+                "mv_min": 0,
+                "kpa_min_x10": 0,
+                "mv_max": 0,
+                "kpa_max_x10": 0,
+                "calibration_status": "not_yet_certified",
+            }
+            write_json(evidence / "metadata.json", data)
+
+            result = run_checker(str(evidence))
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("baro.fixed_kpa10 must be between 500 and 1200", result.stdout)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            evidence = Path(tmp)
+            write_text(evidence / "logs/dry_crank_tooth_cam.csv", DRY_CRANK_CSV)
+            data = metadata()
+            data["sensor_calibrations"]["map"]["installation_confirmed"] = False
+            data["first_run_load_source"] = "maf"
+            data["sensor_calibrations"]["maf"]["runtime_load_status"] = "bench_verified"
+            data["sensor_calibrations"]["maf"]["mv_points"] = [330, 990, 2970]
+            data["sensor_calibrations"]["maf"]["flow_x100_points"] = [0, 500, 3000]
+            data["sensor_calibrations"]["baro"]["source"] = "startup_map_sample"
+            write_json(evidence / "metadata.json", data)
+
+            result = run_checker(str(evidence))
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("startup_map_sample requires confirmed MAP installation", result.stdout)
+
+    def test_dedicated_baro_must_be_verified_in_first_run_ready_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            evidence = Path(tmp)
+            write_text(evidence / "logs/dry_crank_tooth_cam.csv", DRY_CRANK_CSV)
+            data = first_run_ready_metadata()
+            data["sensor_calibrations"]["baro"] = {
+                "source": "dedicated_sensor",
+                "source_notes": "fixture dedicated baro",
+                "fixed_kpa10": 1013,
+                "sensor_model": "mpx5700ap",
+                "calibration_source": "fixture baro calibration",
+                "mv_min": 500,
+                "kpa_min_x10": 500,
+                "mv_max": 4500,
+                "kpa_max_x10": 1200,
+                "calibration_status": "not_yet_certified",
+            }
+            write_json(evidence / "metadata.json", data)
+
+            result = run_checker("--require-first-run-ready", str(evidence))
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("baro.calibration_status cannot be not_yet_certified", result.stdout)
+
+    def test_dedicated_baro_requires_voltage_pressure_curve_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            evidence = Path(tmp)
+            write_text(evidence / "logs/dry_crank_tooth_cam.csv", DRY_CRANK_CSV)
+            data = metadata()
+            data["sensor_calibrations"]["baro"] = {
+                "source": "dedicated_sensor",
+                "source_notes": "fixture dedicated baro",
+                "fixed_kpa10": 1013,
+                "sensor_model": "fixture baro sensor",
+                "calibration_source": "",
+                "mv_min": 4500,
+                "kpa_min_x10": 1200,
+                "mv_max": 500,
+                "kpa_max_x10": 500,
+                "calibration_status": "bench_verified",
+            }
+            write_json(evidence / "metadata.json", data)
+
+            result = run_checker(str(evidence))
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("baro.sensor_model", result.stdout)
+            self.assertIn("baro.calibration_source", result.stdout)
+            self.assertIn("baro.mv_max must be greater than mv_min", result.stdout)
+            self.assertIn("baro.kpa_max_x10 must be greater than kpa_min_x10", result.stdout)
+
+    def test_dedicated_baro_accepts_board_pressure_sensor_models(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            evidence = Path(tmp)
+            write_text(evidence / "logs/dry_crank_tooth_cam.csv", DRY_CRANK_CSV)
+            data = first_run_ready_metadata()
+            data["sensor_calibrations"]["baro"] = {
+                "source": "dedicated_sensor",
+                "source_notes": "fixture MPXH6400AC6U dedicated baro policy",
+                "fixed_kpa10": 1013,
+                "sensor_model": "mpxh6400ac6u",
+                "calibration_source": "fixture MPXH6400AC6U transfer function scaled to ADC input",
+                "mv_min": 132,
+                "kpa_min_x10": 200,
+                "mv_max": 3168,
+                "kpa_max_x10": 4000,
+                "calibration_status": "bench_verified",
+            }
+            attach_certified_fixed_timing(evidence, data)
+            write_json(evidence / "metadata.json", data)
+
+            result = run_checker("--require-first-run-ready", str(evidence))
+
+            self.assertEqual(result.returncode, 0, result.stdout)
+
+    def test_sensor_calibration_metadata_rejects_impossible_adc_scaling(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            evidence = Path(tmp)
+            write_text(evidence / "logs/dry_crank_tooth_cam.csv", DRY_CRANK_CSV)
+            bad = metadata()
+            bad["sensor_calibrations"]["map"]["voltage_scale_numerator"] = 5
+            bad["sensor_calibrations"]["map"]["voltage_scale_denominator"] = 3
+            bad["sensor_calibrations"]["tps"]["closed_counts"] = 3500
+            bad["sensor_calibrations"]["tps"]["open_counts"] = 120
+            bad["sensor_calibrations"]["cam_phase"]["reference_tooth"] = 58
+            write_json(evidence / "metadata.json", bad)
+
+            result = run_checker(str(evidence))
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("must not amplify sensor voltage", result.stdout)
+            self.assertIn("open_counts must be greater than closed_counts", result.stdout)
+            self.assertIn("cam_phase.reference_tooth", result.stdout)
+
+    def test_map_sensor_scaled_output_must_fit_adc_reference(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            evidence = Path(tmp)
+            write_text(evidence / "logs/dry_crank_tooth_cam.csv", DRY_CRANK_CSV)
+            bad = metadata()
+            bad["sensor_calibrations"]["map"]["model"] = "mpx5700ap"
+            bad["sensor_calibrations"]["map"]["voltage_scale_numerator"] = 1
+            bad["sensor_calibrations"]["map"]["voltage_scale_denominator"] = 1
+            write_json(evidence / "metadata.json", bad)
+
+            result = run_checker(str(evidence))
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("map scaled maximum voltage", result.stdout)
+
+    def test_tps_adc_counts_use_declared_adc_resolution(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            evidence = Path(tmp)
+            write_text(evidence / "logs/dry_crank_tooth_cam.csv", DRY_CRANK_CSV)
+            bad = metadata()
+            bad["sensor_calibrations"]["adc"]["adc_bits"] = 10
+            bad["sensor_calibrations"]["tps"]["closed_counts"] = 100
+            bad["sensor_calibrations"]["tps"]["open_counts"] = 1200
+            write_json(evidence / "metadata.json", bad)
+
+            result = run_checker(str(evidence))
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("tps.open_counts must be an ADC count from 0 to 1023", result.stdout)
+
+    def test_active_analog_endpoint_voltages_must_fit_adc_reference(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            evidence = Path(tmp)
+            write_text(evidence / "logs/dry_crank_tooth_cam.csv", DRY_CRANK_CSV)
+            bad = metadata()
+            bad["sensor_calibrations"]["baro"] = {
+                "source": "dedicated_sensor",
+                "source_notes": "fixture dedicated baro",
+                "fixed_kpa10": 1013,
+                "sensor_model": "mpx5700ap",
+                "calibration_source": "fixture baro calibration",
+                "mv_min": 500,
+                "kpa_min_x10": 500,
+                "mv_max": 4500,
+                "kpa_max_x10": 1200,
+                "calibration_status": "bench_verified",
+            }
+            bad["sensor_calibrations"]["lambda"]["installed"] = True
+            bad["sensor_calibrations"]["lambda"]["mv_max"] = 4500
+            write_json(evidence / "metadata.json", bad)
+
+            result = run_checker(str(evidence))
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("baro.mv_max must be less than or equal", result.stdout)
+            self.assertIn("lambda.mv_max must be less than or equal", result.stdout)
+
+    def test_first_run_load_source_controls_required_sensor_readiness(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            evidence = Path(tmp)
+            write_text(evidence / "logs/dry_crank_tooth_cam.csv", DRY_CRANK_CSV)
+            bad = metadata(first_run_load_source="maf")
+            bad["sensor_calibrations"]["maf"]["runtime_load_status"] = "not_supported"
+            write_json(evidence / "metadata.json", bad)
+
+            result = run_checker(str(evidence))
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("maf.runtime_load_status must be bench_verified", result.stdout)
+
+    def test_bench_verified_maf_requires_monotonic_curve_points(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            evidence = Path(tmp)
+            write_text(evidence / "logs/dry_crank_tooth_cam.csv", DRY_CRANK_CSV)
+            bad = first_run_ready_metadata(first_run_load_source="maf")
+            bad["sensor_calibrations"]["maf"]["runtime_load_status"] = "bench_verified"
+            bad["sensor_calibrations"]["maf"]["mv_points"] = [1000, 900]
+            bad["sensor_calibrations"]["maf"]["flow_x100_points"] = [100, 90]
+            write_json(evidence / "metadata.json", bad)
+
+            result = run_checker(str(evidence))
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("maf.mv_points must be strictly increasing", result.stdout)
+            self.assertIn("maf.flow_x100_points must be non-decreasing", result.stdout)
+
+    def test_bench_verified_maf_accepts_monotonic_curve_points(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            evidence = Path(tmp)
+            write_text(evidence / "logs/dry_crank_tooth_cam.csv", DRY_CRANK_CSV)
+            data = first_run_ready_metadata(first_run_load_source="maf")
+            data["sensor_calibrations"]["maf"]["runtime_load_status"] = "bench_verified"
+            data["sensor_calibrations"]["maf"]["mv_points"] = [330, 990, 2970]
+            data["sensor_calibrations"]["maf"]["flow_x100_points"] = [0, 500, 3000]
+            write_json(evidence / "metadata.json", data)
+
+            result = run_checker(str(evidence))
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_bench_verified_maf_points_must_fit_adc_reference(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            evidence = Path(tmp)
+            write_text(evidence / "logs/dry_crank_tooth_cam.csv", DRY_CRANK_CSV)
+            data = first_run_ready_metadata(first_run_load_source="maf")
+            data["sensor_calibrations"]["maf"]["runtime_load_status"] = "bench_verified"
+            data["sensor_calibrations"]["maf"]["mv_points"] = [500, 1500, 4500]
+            data["sensor_calibrations"]["maf"]["flow_x100_points"] = [0, 500, 3000]
+            write_json(evidence / "metadata.json", data)
+
+            result = run_checker(str(evidence))
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("maf.mv_points[2] must be less than or equal", result.stdout)
+
+    def test_verified_temperature_sensors_require_monotonic_curve_points(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            evidence = Path(tmp)
+            write_text(evidence / "logs/dry_crank_tooth_cam.csv", DRY_CRANK_CSV)
+            data = metadata()
+            data["sensor_calibrations"]["clt"]["calibration_status"] = "bench_verified"
+            data["sensor_calibrations"]["clt"]["temp_c_points"] = [20, 20]
+            data["sensor_calibrations"]["clt"]["resistance_ohm_points"] = [2500, 2600]
+            write_json(evidence / "metadata.json", data)
+
+            result = run_checker(str(evidence))
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("clt.temp_c_points must include at least 3", result.stdout)
+            self.assertIn("clt.temp_c_points must be strictly increasing", result.stdout)
+            self.assertIn("clt.resistance_ohm_points must be strictly decreasing", result.stdout)
+
+    def test_verified_temperature_sensors_accept_ntc_curve_points(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            evidence = Path(tmp)
+            write_text(evidence / "logs/dry_crank_tooth_cam.csv", DRY_CRANK_CSV)
+            data = metadata()
+            data["sensor_calibrations"]["clt"]["calibration_status"] = "bench_verified"
+            data["sensor_calibrations"]["clt"]["temp_c_points"] = [-20, 20, 80]
+            data["sensor_calibrations"]["clt"]["resistance_ohm_points"] = [14000, 2500, 300]
+            write_json(evidence / "metadata.json", data)
+
+            result = run_checker(str(evidence))
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_map_speed_density_requires_installed_map_sensor(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            evidence = Path(tmp)
+            write_text(evidence / "logs/dry_crank_tooth_cam.csv", DRY_CRANK_CSV)
+            bad = metadata()
+            bad["sensor_calibrations"]["map"]["installation_confirmed"] = False
+            write_json(evidence / "metadata.json", bad)
+
+            result = run_checker(str(evidence))
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("map.installation_confirmed must be true", result.stdout)
+
+    def test_first_run_ready_mode_requires_verified_core_sensors(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            evidence = Path(tmp)
+            write_text(evidence / "logs/dry_crank_tooth_cam.csv", DRY_CRANK_CSV)
+            write_json(evidence / "metadata.json", metadata())
+
+            result = run_checker("--require-first-run-ready", str(evidence))
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("tps.calibration_status cannot be not_yet_certified", result.stdout)
+            self.assertIn("clt.calibration_status cannot be not_yet_certified", result.stdout)
+            self.assertIn("iat.calibration_status cannot be not_yet_certified", result.stdout)
+            self.assertIn("fixed_timing_mode must be certified", result.stdout)
+
+    def test_first_run_ready_mode_accepts_verified_core_sensors(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            evidence = Path(tmp)
+            write_text(evidence / "logs/dry_crank_tooth_cam.csv", DRY_CRANK_CSV)
+            data = first_run_ready_metadata()
+            attach_certified_fixed_timing(evidence, data)
+            write_json(evidence / "metadata.json", data)
+
+            result = run_checker("--require-first-run-ready", str(evidence))
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("first-run-ready structural gate", result.stdout)
+            self.assertIn("hardware evidence still requires human review", result.stdout)
+
+    def test_knock_retard_authority_requires_validation_for_first_run_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            evidence = Path(tmp)
+            write_text(evidence / "logs/dry_crank_tooth_cam.csv", DRY_CRANK_CSV)
+            data = first_run_ready_metadata()
+            data["sensor_calibrations"]["knock"]["authority_status"] = "retard_enabled"
+            write_json(evidence / "metadata.json", data)
+
+            result = run_checker("--require-first-run-ready", str(evidence))
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("knock.retard_validation_source", result.stdout)
+
+    def test_knock_coverage_must_include_all_m50_cylinders(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            evidence = Path(tmp)
+            write_text(evidence / "logs/dry_crank_tooth_cam.csv", DRY_CRANK_CSV)
+            data = metadata()
+            data["sensor_calibrations"]["knock"]["covered_cylinders"] = 4
+            write_json(evidence / "metadata.json", data)
+
+            result = run_checker(str(evidence))
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("knock.covered_cylinders must cover all 6", result.stdout)
+
+    def test_installed_vss_requires_pulse_calibration_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            evidence = Path(tmp)
+            write_text(evidence / "logs/dry_crank_tooth_cam.csv", DRY_CRANK_CSV)
+            data = metadata()
+            data["sensor_calibrations"]["vss"]["installed"] = True
+            data["sensor_calibrations"]["vss"]["pulse_source"] = ""
+            data["sensor_calibrations"]["vss"]["pulses_per_km"] = 0
+            write_json(evidence / "metadata.json", data)
+
+            result = run_checker(str(evidence))
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("vss.pulse_source", result.stdout)
+            self.assertIn("vss.pulses_per_km", result.stdout)
+
+    def test_first_run_required_vss_must_be_verified_in_first_run_ready_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            evidence = Path(tmp)
+            write_text(evidence / "logs/dry_crank_tooth_cam.csv", DRY_CRANK_CSV)
+            data = first_run_ready_metadata()
+            data["sensor_calibrations"]["vss"]["installed"] = True
+            data["sensor_calibrations"]["vss"]["required_for_first_run"] = True
+            data["sensor_calibrations"]["vss"]["pulse_source"] = "fixture VSS"
+            data["sensor_calibrations"]["vss"]["pulses_per_km"] = 10_000
+            data["sensor_calibrations"]["vss"]["calibration_status"] = "not_yet_certified"
+            write_json(evidence / "metadata.json", data)
+
+            result = run_checker("--require-first-run-ready", str(evidence))
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("vss.calibration_status cannot be not_yet_certified", result.stdout)
+
+    def test_first_run_required_vss_must_be_installed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            evidence = Path(tmp)
+            write_text(evidence / "logs/dry_crank_tooth_cam.csv", DRY_CRANK_CSV)
+            data = first_run_ready_metadata()
+            data["sensor_calibrations"]["vss"]["installed"] = False
+            data["sensor_calibrations"]["vss"]["required_for_first_run"] = True
+            data["sensor_calibrations"]["vss"]["pulse_source"] = "fixture VSS"
+            data["sensor_calibrations"]["vss"]["pulses_per_km"] = 10_000
+            data["sensor_calibrations"]["vss"]["calibration_status"] = "bench_verified"
+            write_json(evidence / "metadata.json", data)
+
+            result = run_checker("--require-first-run-ready", str(evidence))
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("vss.installed must be true", result.stdout)
+
+    def test_certified_mode_requires_hashes_and_fixed_timing_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            evidence = Path(tmp)
+            dry = evidence / "logs/dry_crank_tooth_cam.csv"
+            fixed = evidence / "validation/fixed.csv"
+            write_text(dry, DRY_CRANK_CSV)
+            write_text(
+                fixed,
+                "rpm,commanded_timing_deg10,observed_timing_deg10\n"
+                "900,100,100\n",
+            )
             write_json(
-                evidence_dir / "metadata.json",
-                make_metadata(
+                evidence / "metadata.json",
+                metadata(
                     fixed_timing_mode="certified",
                     fixed_timing_angle_deg10=100,
+                    certification_hash=file_hash(fixed),
+                    artifacts=[
+                        {
+                            "path": "logs/dry_crank_tooth_cam.csv",
+                            "kind": "dry_crank_tooth_cam_log",
+                            "sha256": file_hash(dry),
+                        },
+                        {
+                            "path": "validation/fixed.csv",
+                            "kind": "fixed_timing_validation_artifact",
+                            "sha256": file_hash(fixed),
+                        },
+                    ],
                 ),
             )
 
-            result = run_checker(evidence_dir)
+            result = run_checker(str(evidence))
 
-            self.assertNotEqual(result.returncode, 0, result.stdout)
-            self.assertIn(
-                "FAIL: missing fixed timing proof: collect a real fixed-timing validation artifact",
-                result.stdout,
-            )
-            self.assertIn(
-                "FAIL: fixed_timing_mode is certified but no fixed_timing_validation_artifact was provided",
-                result.stdout,
-            )
-            self.assertIn(
-                "FAIL: metadata.certification_hash is required when fixed_timing_mode is certified",
-                result.stdout,
-            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("certified-mode files are present", result.stdout)
 
-    def test_certified_fixed_timing_missing_hash_prints_expected_hash(self) -> None:
+    def test_certified_fixed_timing_artifact_must_be_reviewable_csv(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            evidence_dir = Path(tmp)
-            metadata = make_certified_metadata(evidence_dir)
-            expected_hash = metadata["certification_hash"]
-            metadata["certification_hash"] = None
-            write_json(evidence_dir / "metadata.json", metadata)
-
-            result = run_checker(evidence_dir)
-
-            self.assertNotEqual(result.returncode, 0, result.stdout)
-            self.assertIn(
-                "FAIL: metadata.certification_hash is required when fixed_timing_mode "
-                f"is certified; expected {expected_hash}",
-                result.stdout,
+            evidence = Path(tmp)
+            dry = evidence / "logs/dry_crank_tooth_cam.csv"
+            fixed = evidence / "validation/fixed.csv"
+            write_text(dry, DRY_CRANK_CSV)
+            write_text(fixed, "fixed timing validation\n")
+            write_json(
+                evidence / "metadata.json",
+                metadata(
+                    fixed_timing_mode="certified",
+                    fixed_timing_angle_deg10=100,
+                    certification_hash=file_hash(fixed),
+                    artifacts=[
+                        {
+                            "path": "logs/dry_crank_tooth_cam.csv",
+                            "kind": "dry_crank_tooth_cam_log",
+                            "sha256": file_hash(dry),
+                        },
+                        {
+                            "path": "validation/fixed.csv",
+                            "kind": "fixed_timing_validation_artifact",
+                            "sha256": file_hash(fixed),
+                        },
+                    ],
+                ),
             )
 
-    def test_certified_fixed_timing_rejects_unusable_validation_artifact_paths(
-        self,
-    ) -> None:
+            result = run_checker(str(evidence))
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("fixed-timing artifact needs a header", result.stdout)
+
+    def test_certified_fixed_timing_rows_must_be_numeric_and_match_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            for name, path_text, expected_failure in (
-                (
-                    "placeholder",
-                    "<fixed_timing_validation.csv>",
-                    "FAIL: metadata.artifacts[1].path contains unresolved placeholder token: <fixed_timing_validation.csv>",
-                ),
-                (
-                    "absolute",
-                    str(root / "evidence-absolute" / "validation" / "fixed_timing.csv"),
-                    "FAIL: metadata.artifacts[1].path must be relative to the evidence dir: "
-                    + str(root / "evidence-absolute" / "validation" / "fixed_timing.csv"),
-                ),
-                (
-                    "missing",
-                    "validation/missing_fixed_timing.csv",
-                    "FAIL: metadata.artifacts[1] file does not exist: validation/missing_fixed_timing.csv",
-                ),
-            ):
-                with self.subTest(name=name):
-                    evidence_dir = root / name
-                    write_reviewable_dry_crank_csv(evidence_dir)
-                    if name == "absolute":
-                        write_text(Path(path_text), "fixed timing validation fixture\n")
-                    write_json(
-                        evidence_dir / "metadata.json",
-                        make_metadata(
-                            fixed_timing_mode="certified",
-                            fixed_timing_angle_deg10=100,
-                            artifacts=[
-                                {
-                                    "path": METADATA_DRY_CRANK_ARTIFACT_PATH,
-                                    "kind": "dry_crank_tooth_cam_log",
-                                },
-                                {
-                                    "path": path_text,
-                                    "kind": "fixed_timing_validation_artifact",
-                                },
-                            ],
-                        ),
-                    )
-
-                    result = run_checker(evidence_dir)
-
-                    self.assertNotEqual(result.returncode, 0, result.stdout)
-                    self.assertIn(expected_failure, result.stdout)
-                    self.assertIn(
-                        "FAIL: fixed_timing_mode is certified but no fixed_timing_validation_artifact was provided",
-                        result.stdout,
-                    )
-
-    def test_certified_fixed_timing_requires_artifact_sha256_values(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            evidence_dir = Path(tmp)
-            dry_crank = write_reviewable_dry_crank_csv(evidence_dir)
-            fixed_timing = evidence_dir / "validation" / "fixed_timing_validation.csv"
+            evidence = Path(tmp)
+            dry = evidence / "logs/dry_crank_tooth_cam.csv"
+            fixed = evidence / "validation/fixed.csv"
+            write_text(dry, DRY_CRANK_CSV)
             write_text(
-                fixed_timing,
-                "fixed timing validation fixture\n",
+                fixed,
+                "rpm,commanded_timing_deg10,observed_timing_deg10\n"
+                "idle,120,observed\n"
+                "900,120,100\n",
             )
             write_json(
-                evidence_dir / "metadata.json",
-                make_metadata(
+                evidence / "metadata.json",
+                metadata(
+                    fixed_timing_mode="certified",
+                    fixed_timing_angle_deg10=100,
+                    certification_hash=file_hash(fixed),
+                    artifacts=[
+                        {
+                            "path": "logs/dry_crank_tooth_cam.csv",
+                            "kind": "dry_crank_tooth_cam_log",
+                            "sha256": file_hash(dry),
+                        },
+                        {
+                            "path": "validation/fixed.csv",
+                            "kind": "fixed_timing_validation_artifact",
+                            "sha256": file_hash(fixed),
+                        },
+                    ],
+                ),
+            )
+
+            result = run_checker(str(evidence))
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("row 2 rpm must be an integer", result.stdout)
+            self.assertIn("row 2 observed/measured timing must be an integer", result.stdout)
+            self.assertIn("commanded/fixed timing must match", result.stdout)
+
+    def test_certified_mode_rejects_zero_certification_hash_placeholder(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            evidence = Path(tmp)
+            dry = evidence / "logs/dry_crank_tooth_cam.csv"
+            fixed = evidence / "validation/fixed.csv"
+            write_text(dry, DRY_CRANK_CSV)
+            write_text(
+                fixed,
+                "rpm,commanded_timing_deg10,observed_timing_deg10\n"
+                "900,100,100\n",
+            )
+            write_json(
+                evidence / "metadata.json",
+                metadata(
                     fixed_timing_mode="certified",
                     fixed_timing_angle_deg10=100,
                     certification_hash="0" * 64,
                     artifacts=[
                         {
-                            "path": METADATA_DRY_CRANK_ARTIFACT_PATH,
-                            "kind": "dry_crank_tooth_cam_log",
-                        },
-                        {
-                            "path": "validation/fixed_timing_validation.csv",
-                            "kind": "fixed_timing_validation_artifact",
-                        },
-                    ],
-                ),
-            )
-
-            result = run_checker(evidence_dir)
-
-            self.assertNotEqual(result.returncode, 0, result.stdout)
-            self.assertIn(
-                "FAIL: metadata.artifacts[0].sha256 is required when fixed_timing_mode "
-                "is certified or certification_hash is declared",
-                result.stdout,
-            )
-            self.assertIn(
-                f"{METADATA_DRY_CRANK_ARTIFACT_PATH}; actual {file_sha256(dry_crank)}",
-                result.stdout,
-            )
-            self.assertIn(
-                "FAIL: metadata.artifacts[1].sha256 is required when fixed_timing_mode "
-                "is certified or certification_hash is declared",
-                result.stdout,
-            )
-            self.assertIn(
-                f"validation/fixed_timing_validation.csv; actual {file_sha256(fixed_timing)}",
-                result.stdout,
-            )
-
-    def test_certification_hash_binds_edges_trigger_angle_and_artifact_hashes(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            for name, override in (
-                ("primary_edge", {"primary_edge": "falling"}),
-                ("trigger_angle", {"trigger_angle_atdc_deg10": 130}),
-            ):
-                with self.subTest(name=name):
-                    evidence_dir = root / name
-                    metadata = make_certified_metadata(evidence_dir)
-                    stale_hash = metadata["certification_hash"]
-                    metadata.update(override)
-                    metadata["certification_hash"] = stale_hash
-                    expected_hash = certification_hash(metadata, metadata["artifacts"])
-                    write_json(evidence_dir / "metadata.json", metadata)
-
-                    result = run_checker(evidence_dir)
-
-                    self.assertNotEqual(result.returncode, 0, result.stdout)
-                    self.assertIn(
-                        "FAIL: metadata.certification_hash does not match certification inputs",
-                        result.stdout,
-                    )
-                    self.assertIn(f"expected {expected_hash}", result.stdout)
-
-    def test_complete_certified_evidence_with_hashes_passes_structurally(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            evidence_dir = Path(tmp)
-            write_json(
-                evidence_dir / "metadata.json",
-                make_certified_metadata(evidence_dir),
-            )
-
-            result = run_checker(evidence_dir)
-
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            self.assertIn(
-                "PASS: batch-8 evidence is structurally reviewable",
-                result.stdout,
-            )
-            self.assertIn(
-                "fixed_timing_mode=certified package is structurally complete",
-                result.stdout,
-            )
-            self.assertIn(
-                "profile certification and runtime full-COP authority still require separate review",
-                result.stdout,
-            )
-
-    def test_bound_mlg_does_not_satisfy_dry_crank_artifact(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            evidence_dir = Path(tmp)
-            write_text(evidence_dir / "logs" / "dry_crank_tooth_cam.mlg", "synthetic log\n")
-            write_json(
-                evidence_dir / "metadata.json",
-                make_metadata(
-                    artifacts=[
-                        {
-                            "path": "logs/dry_crank_tooth_cam.mlg",
-                            "kind": "dry_crank_tooth_cam_log",
-                        }
-                    ]
-                ),
-            )
-
-            result = run_checker(evidence_dir)
-
-            self.assertNotEqual(result.returncode, 0, result.stdout)
-            self.assertIn(
-                "FAIL: metadata.artifacts[0] uses forbidden tune/log file extension and cannot satisfy dry_crank_tooth_cam_log: logs/dry_crank_tooth_cam.mlg; provide a reviewable evidence artifact instead of binding .msq or .mlg files",
-                result.stdout,
-            )
-            self.assertIn("FAIL: missing dry-crank tooth/cam log", result.stdout)
-
-    def test_bound_mlg_does_not_satisfy_fixed_timing_artifact(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            evidence_dir = Path(tmp)
-            write_reviewable_dry_crank_csv(evidence_dir)
-            write_text(evidence_dir / "logs" / "fixed_timing.mlg", "synthetic proof\n")
-            write_json(
-                evidence_dir / "metadata.json",
-                make_metadata(
-                    fixed_timing_mode="certified",
-                    artifacts=[
-                        {
                             "path": "logs/dry_crank_tooth_cam.csv",
                             "kind": "dry_crank_tooth_cam_log",
+                            "sha256": file_hash(dry),
                         },
                         {
-                            "path": "logs/fixed_timing.mlg",
+                            "path": "validation/fixed.csv",
                             "kind": "fixed_timing_validation_artifact",
+                            "sha256": file_hash(fixed),
                         },
                     ],
                 ),
             )
 
-            result = run_checker(evidence_dir)
+            result = run_checker(str(evidence))
 
-            self.assertNotEqual(result.returncode, 0, result.stdout)
-            self.assertIn(
-                "FAIL: metadata.artifacts[1] uses forbidden tune/log file extension and cannot satisfy fixed_timing_validation_artifact: logs/fixed_timing.mlg; provide a reviewable evidence artifact instead of binding .msq or .mlg files",
-                result.stdout,
-            )
-            self.assertIn(
-                "FAIL: fixed_timing_mode is certified but no fixed_timing_validation_artifact was provided",
-                result.stdout,
-            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("certification_hash must not be the all-zero placeholder", result.stdout)
 
-    def test_bound_msq_does_not_satisfy_artifact(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            evidence_dir = Path(tmp)
-            write_text(evidence_dir / "logs" / "dry_crank_tooth_cam.msq", "[Tune]\n")
-            write_json(
-                evidence_dir / "metadata.json",
-                make_metadata(
-                    artifacts=[
-                        {
-                            "path": "logs/dry_crank_tooth_cam.msq",
-                            "kind": "dry_crank_tooth_cam_log",
-                        }
-                    ]
-                ),
-            )
+    def test_print_template(self) -> None:
+        result = run_checker("--print-template")
 
-            result = run_checker(evidence_dir)
-
-            self.assertNotEqual(result.returncode, 0, result.stdout)
-            self.assertIn(
-                "FAIL: metadata.artifacts[0] uses forbidden tune/log file extension and cannot satisfy dry_crank_tooth_cam_log: logs/dry_crank_tooth_cam.msq; provide a reviewable evidence artifact instead of binding .msq or .mlg files",
-                result.stdout,
-            )
-            self.assertIn("FAIL: missing dry-crank tooth/cam log", result.stdout)
-
-    def test_bound_msq_does_not_satisfy_fixed_timing_artifact(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            evidence_dir = Path(tmp)
-            write_reviewable_dry_crank_csv(evidence_dir)
-            write_text(evidence_dir / "logs" / "fixed_timing.msq", "[Tune]\n")
-            write_json(
-                evidence_dir / "metadata.json",
-                make_metadata(
-                    fixed_timing_mode="certified",
-                    artifacts=[
-                        {
-                            "path": "logs/dry_crank_tooth_cam.csv",
-                            "kind": "dry_crank_tooth_cam_log",
-                        },
-                        {
-                            "path": "logs/fixed_timing.msq",
-                            "kind": "fixed_timing_validation_artifact",
-                        },
-                    ],
-                ),
-            )
-
-            result = run_checker(evidence_dir)
-
-            self.assertNotEqual(result.returncode, 0, result.stdout)
-            self.assertIn(
-                "FAIL: metadata.artifacts[1] uses forbidden tune/log file extension and cannot satisfy fixed_timing_validation_artifact: logs/fixed_timing.msq; provide a reviewable evidence artifact instead of binding .msq or .mlg files",
-                result.stdout,
-            )
-            self.assertIn(
-                "FAIL: fixed_timing_mode is certified but no fixed_timing_validation_artifact was provided",
-                result.stdout,
-            )
-
-    def test_legacy_file_is_rejected_even_for_supplemental_like_artifact(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            evidence_dir = Path(tmp)
-            dry_crank = write_reviewable_dry_crank_csv(evidence_dir)
-            legacy_log = evidence_dir / "logs" / "supplemental_capture.mlg"
-            write_text(legacy_log, "synthetic supplemental log\n")
-            write_json(
-                evidence_dir / "metadata.json",
-                make_metadata(
-                    certification_hash="0" * 64,
-                    artifacts=[
-                        {
-                            "path": METADATA_DRY_CRANK_ARTIFACT_PATH,
-                            "kind": "dry_crank_tooth_cam_log",
-                            "sha256": file_sha256(dry_crank),
-                        },
-                        {
-                            "path": "logs/supplemental_capture.mlg",
-                            "kind": "supplemental_capture_notes",
-                            "sha256": file_sha256(legacy_log),
-                        },
-                    ],
-                ),
-            )
-
-            result = run_checker(evidence_dir)
-
-            self.assertNotEqual(result.returncode, 0, result.stdout)
-            self.assertIn(
-                "FAIL: metadata.artifacts[1] uses forbidden tune/log file extension and cannot satisfy supplemental_capture_notes: logs/supplemental_capture.mlg; provide a reviewable evidence artifact instead of binding .msq or .mlg files",
-                result.stdout,
-            )
-
-    def test_complete_synthetic_evidence_passes_as_reviewable_only(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            evidence_dir = Path(tmp)
-            write_reviewable_dry_crank_csv(evidence_dir)
-            write_json(evidence_dir / "metadata.json", make_metadata())
-
-            result = run_checker(evidence_dir)
-
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            self.assertIn(
-                "PASS: batch-8 evidence is structurally reviewable",
-                result.stdout,
-            )
-            self.assertIn("structural review only", result.stdout)
-            self.assertIn("fixed timing is not certified", result.stdout)
-            self.assertIn("no profile certification", result.stdout)
-            self.assertIn("runtime full-COP authority", result.stdout)
-
-    def test_empty_dry_crank_csv_cannot_satisfy_artifact(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            evidence_dir = Path(tmp)
-            write_text(evidence_dir / METADATA_DRY_CRANK_ARTIFACT_PATH, "")
-            write_json(evidence_dir / "metadata.json", make_metadata())
-
-            result = run_checker(evidence_dir)
-
-            self.assertNotEqual(result.returncode, 0, result.stdout)
-            self.assertIn(
-                "FAIL: metadata.artifacts[0] dry-crank tooth/cam CSV must be non-empty: "
-                + METADATA_DRY_CRANK_ARTIFACT_PATH,
-                result.stdout,
-            )
-            self.assertIn("FAIL: missing dry-crank tooth/cam log", result.stdout)
-
-    def test_whitespace_dry_crank_csv_cannot_satisfy_artifact(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            evidence_dir = Path(tmp)
-            write_text(evidence_dir / METADATA_DRY_CRANK_ARTIFACT_PATH, " \n\t\n")
-            write_json(evidence_dir / "metadata.json", make_metadata())
-
-            result = run_checker(evidence_dir)
-
-            self.assertNotEqual(result.returncode, 0, result.stdout)
-            self.assertIn(
-                "FAIL: metadata.artifacts[0] dry-crank tooth/cam CSV must be non-empty: "
-                + METADATA_DRY_CRANK_ARTIFACT_PATH,
-                result.stdout,
-            )
-            self.assertIn("FAIL: missing dry-crank tooth/cam log", result.stdout)
-
-    def test_headerless_dry_crank_csv_cannot_satisfy_artifact(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            evidence_dir = Path(tmp)
-            write_text(
-                evidence_dir / METADATA_DRY_CRANK_ARTIFACT_PATH,
-                "0,0,0\n100,1,0\n",
-            )
-            write_json(evidence_dir / "metadata.json", make_metadata())
-
-            result = run_checker(evidence_dir)
-
-            self.assertNotEqual(result.returncode, 0, result.stdout)
-            self.assertIn(
-                "FAIL: metadata.artifacts[0] dry-crank tooth/cam CSV must include a descriptive header row: "
-                + METADATA_DRY_CRANK_ARTIFACT_PATH,
-                result.stdout,
-            )
-            self.assertIn("FAIL: missing dry-crank tooth/cam log", result.stdout)
-
-    def test_dry_crank_csv_missing_required_columns_cannot_satisfy_artifact(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            evidence_dir = Path(tmp)
-            write_text(
-                evidence_dir / METADATA_DRY_CRANK_ARTIFACT_PATH,
-                "time_us,voltage\n0,12.1\n",
-            )
-            write_json(evidence_dir / "metadata.json", make_metadata())
-
-            result = run_checker(evidence_dir)
-
-            self.assertNotEqual(result.returncode, 0, result.stdout)
-            self.assertIn(
-                "FAIL: metadata.artifacts[0] dry-crank tooth/cam CSV header must include "
-                "timestamp/sample-time units, crank signal, and cam signal columns: "
-                + METADATA_DRY_CRANK_ARTIFACT_PATH,
-                result.stdout,
-            )
-            self.assertIn("FAIL: missing dry-crank tooth/cam log", result.stdout)
-
-    def test_dry_crank_csv_channel_mapping_must_match_header_columns(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            evidence_dir = Path(tmp)
-            write_reviewable_dry_crank_csv(evidence_dir)
-            write_json(
-                evidence_dir / "metadata.json",
-                make_metadata(
-                    provenance=make_provenance(
-                        channel_mapping={
-                            "crank": "logic_analyzer_ch0",
-                            "cam": "logic_analyzer_ch1",
-                        }
-                    )
-                ),
-            )
-
-            result = run_checker(evidence_dir)
-
-            self.assertNotEqual(result.returncode, 0, result.stdout)
-            self.assertIn(
-                "FAIL: metadata.artifacts[0] dry-crank tooth/cam CSV header is missing "
-                "metadata.provenance.channel_mapping.crank column: logic_analyzer_ch0: "
-                + METADATA_DRY_CRANK_ARTIFACT_PATH,
-                result.stdout,
-            )
-            self.assertIn(
-                "FAIL: metadata.artifacts[0] dry-crank tooth/cam CSV header is missing "
-                "metadata.provenance.channel_mapping.cam column: logic_analyzer_ch1: "
-                + METADATA_DRY_CRANK_ARTIFACT_PATH,
-                result.stdout,
-            )
-            self.assertIn("FAIL: missing dry-crank tooth/cam log", result.stdout)
-
-    def test_path_escape_artifacts_are_rejected(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            evidence_dir = Path(tmp) / "evidence"
-            evidence_dir.mkdir()
-            write_reviewable_dry_crank_csv(evidence_dir)
-            write_text(evidence_dir.parent / "outside.csv", "escaped artifact\n")
-            write_json(
-                evidence_dir / "metadata.json",
-                make_metadata(
-                    artifacts=[
-                        {
-                            "path": "logs/dry_crank_tooth_cam.csv",
-                            "kind": "dry_crank_tooth_cam_log",
-                        },
-                        {
-                            "path": "../outside.csv",
-                            "kind": "fixed_timing_validation_artifact",
-                        },
-                    ]
-                ),
-            )
-
-            result = run_checker(evidence_dir)
-
-            self.assertNotEqual(result.returncode, 0, result.stdout)
-            self.assertIn(
-                "FAIL: metadata.artifacts[1] path escapes evidence dir: ../outside.csv",
-                result.stdout,
-            )
-
-    def test_help_mentions_print_template(self) -> None:
-        result = run_checker_cli("--help")
-
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("--print-template", result.stdout)
-        self.assertIn("Pass means reviewable, not", result.stdout)
-
-    def test_print_template_shows_required_collection_checklist(self) -> None:
-        result = run_checker_cli("--print-template")
-
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("Structural review only", result.stdout)
-        self.assertIn(
-            "A structural PASS does not grant profile certification or runtime full-COP authority",
-            result.stdout,
-        )
-        self.assertIn("Real certification requires a fixed_timing_validation_artifact", result.stdout)
-        self.assertIn("- dry-crank tooth/cam log", result.stdout)
-        self.assertIn(DEFAULT_DRY_CRANK_CSV, result.stdout)
-        self.assertIn(
-            f"metadata artifact path: {METADATA_DRY_CRANK_ARTIFACT_PATH}",
-            result.stdout,
-        )
-        self.assertIn(
-            f'"path": "{METADATA_DRY_CRANK_ARTIFACT_PATH}"',
-            result.stdout,
-        )
-        self.assertIn("- fixed-timing validation artifact", result.stdout)
-        self.assertIn('"fixed_timing_mode": "not_yet_certified"', result.stdout)
-        self.assertIn(f'"schema": "{EXPECTED_SCHEMA}"', result.stdout)
-        self.assertIn(f"- schema: {EXPECTED_SCHEMA}", result.stdout)
-        self.assertIn('"board_revision": "<M50 board revision>"', result.stdout)
-        self.assertIn('"source_notes": "<source notes for the local hardware run and evidence provenance>"', result.stdout)
-        self.assertIn("- provenance object with capture timestamp", result.stdout)
-        self.assertIn('"provenance": {', result.stdout)
-        self.assertIn('"capture_timestamp": "<ISO-8601 capture timestamp>"', result.stdout)
-        self.assertIn('"channel_mapping": {', result.stdout)
-        self.assertIn('"dry_crank_declared": true', result.stdout)
-        self.assertIn(
-            "allowed artifact kinds: dry_crank_tooth_cam_log, fixed_timing_validation_artifact",
-            result.stdout,
-        )
-        self.assertIn(
-            "artifact paths must be evidence-dir-relative, unique, contained under the evidence dir",
-            result.stdout,
-        )
-        self.assertIn("must not be .msq or .mlg files", result.stdout)
-        self.assertIn("if missing, the checker prints the actual hash", result.stdout)
-        self.assertIn("the checker prints the expected hash", result.stdout)
-
-    def test_print_template_shows_dry_crank_csv_contents_checklist(self) -> None:
-        result = run_checker_cli("--print-template")
-
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("minimum CSV contents checklist", result.stdout)
-        self.assertIn("no placeholders, no .msq, no .mlg", result.stdout)
-        self.assertIn("timestamp or sample-time column", result.stdout)
-        self.assertIn("sample rate / clock source", result.stdout)
-        self.assertIn("crank tooth edge signal column", result.stdout)
-        self.assertIn("edge polarity noted", result.stdout)
-        self.assertIn("cam edge/state signal column", result.stdout)
-        self.assertIn("cam phase noted", result.stdout)
-        self.assertIn("source/provenance notes", result.stdout)
-        self.assertIn("capture device", result.stdout)
-        self.assertIn("ISO-8601 capture timestamp", result.stdout)
-        self.assertIn("capture conditions", result.stdout)
-        self.assertIn("cranking RPM", result.stdout)
-        self.assertIn("dry-crank declaration: spark and injectors disabled", result.stdout)
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("M50 Batch 8 evidence template", result.stdout)
+        self.assertIn("does not certify timing", result.stdout)
+        self.assertIn("Certified fixed-timing artifact must be CSV", result.stdout)
+        self.assertIn("Load source controls required evidence", result.stdout)
+        self.assertIn("enabling knock monitor/retard requires front/rear channel evidence", result.stdout)
 
 
 if __name__ == "__main__":

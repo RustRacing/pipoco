@@ -1,0 +1,17 @@
+[package]
+name = "ecu-sim-avr-harness"
+version = "0.1.0"
+edition = "2021"
+build = "build.rs"
+publish = false
+
+[lib]
+name = "ecu_sim_avr_harness"
+path = "src/lib.rs"
+
+[dependencies]
+avr-tester = "0.6.3"
+ecu-sim-core = { path = "../core" }
+
+[patch.crates-io]
+simavr-ffi = { path = "../../.local/avr-tester/simavr-ffi" }

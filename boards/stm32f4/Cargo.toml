@@ -1,0 +1,54 @@
+[package]
+name = "stm32f4-ecu"
+version = "0.1.0"
+edition = "2021"
+build = "build.rs"
+
+[dependencies]
+ecu-transport = { path = "../../crates/transport", default-features = false }
+ecu-ts = { path = "../../crates/ts", default-features = false, features = ["runtime"] }
+ecu-board-api = { path = "../../crates/board-api" }
+ecu-board-profiles = { path = "../../crates/board-profiles" }
+ecu-calibration = { path = "../../crates/calibration" }
+ecu-domain = { path = "../../crates/domain" }
+ecu-io = { path = "../../crates/io" }
+ecu-runtime = { path = "../../crates/runtime" }
+ecu-scheduler = { path = "../../crates/scheduler" }
+ecu-target-common = { path = "../common", features = ["test-support"] }
+cortex-m = { version = "0.7", optional = true }
+cortex-m-rt = { version = "0.7", optional = true }
+panic-halt = { version = "0.2", optional = true }
+# panic-never = "0.1" # BLOCKED: causes linker failure on this toolchain (see US-FM0290 blocker in tools/TOOLING.md)
+stm32f4xx-hal = { version = "0.21", features = ["stm32f405", "otg-fs", "usb_fs"], optional = true }
+embedded-hal = { version = "0.2", optional = true }
+usb-device = { version = "0.3", optional = true }
+usbd-serial = { version = "0.2", optional = true }
+
+[[bin]]
+name = "stm32f4-ecu"
+path = "src/main.rs"
+test = false
+
+[dev-dependencies]
+ecu-core = { path = "../../crates/core" }
+
+[features]
+default = ["hardware", "capture-tim"]
+hardware = [
+    "dep:cortex-m",
+    "dep:cortex-m-rt",
+    "dep:embedded-hal",
+    "dep:panic-halt",
+    "dep:stm32f4xx-hal",
+]
+# Alternative trigger capture path using TIM2 CH1.
+capture-tim = []
+# Alternative trigger capture path using EXTI GPIO.
+capture-gpio = []
+transport-can = ["ecu-transport/transport-can"]
+transport-can-fd = ["transport-can", "ecu-transport/transport-can-fd"]
+# TunerStudio serial support through target-common.
+ts-usb = ["usb-device", "usbd-serial", "ecu-target-common/ts-usb"]
+# Flash-backed KV bring-up backend.
+flash-kv = []
+ts-usb-hw = ["ts-usb"]

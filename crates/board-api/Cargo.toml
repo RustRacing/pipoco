@@ -1,0 +1,11 @@
+[package]
+name = "ecu-board-api"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "ecu_board_api"
+path = "src/lib.rs"
+
+[dependencies]
+ecu-domain = { path = "../domain" }

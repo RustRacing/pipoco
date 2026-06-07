@@ -1,0 +1,15 @@
+[package]
+name = "ecu-control"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "ecu_control"
+path = "src/lib.rs"
+
+[dependencies]
+ecu-calibration = { path = "../calibration" }
+ecu-domain = { path = "../domain" }
+
+[features]
+default = []

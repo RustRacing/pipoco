@@ -1,9 +1,0 @@
-[package]
-name = "ecu-ts"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-ecu-runtime = { path = "../ecu-runtime" }
-ecu-domain = { path = "../ecu-domain" }
-ecu-calibration = { path = "../ecu-calibration" }

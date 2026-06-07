@@ -1,0 +1,19 @@
+[package]
+name = "ecu-transport"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "ecu_transport"
+path = "src/lib.rs"
+
+[dependencies]
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+postcard = { version = "1.0", default-features = false, features = ["use-crc"] }
+bbqueue = { version = "0.5", optional = true }
+
+[features]
+default = []
+transport-bbqueue = ["dep:bbqueue"]
+transport-can = []
+transport-can-fd = ["transport-can"]

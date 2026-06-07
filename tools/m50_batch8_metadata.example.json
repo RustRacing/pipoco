@@ -4,6 +4,7 @@
   "board_revision": "<M50 board revision>",
   "firmware_build_id": "<firmware build id>",
   "profile_id": "<M50 batch-8 profile id>",
+  "first_run_load_source": "map_speed_density",
   "conditioner_path": "<path to conditioning notes>",
   "primary_edge": "<rising or falling>",
   "secondary_edge": "<rising or falling>",
@@ -13,6 +14,164 @@
   "certification_hash": null,
   "operator_notes": "<operator notes for structural review only>",
   "source_notes": "<source notes for the local hardware run and evidence provenance>",
+  "sensor_io_map": {
+    "crank": {
+      "input_path": "<board crank input>",
+      "signal_conditioning": "<crank conditioner path>",
+      "source": "<routing source>"
+    },
+    "cam": {
+      "input_path": "<board cam input>",
+      "signal_conditioning": "<cam conditioner path>",
+      "source": "<routing source>"
+    },
+    "map": {
+      "input_path": "<board MAP input>",
+      "signal_conditioning": "<MAP divider/filter/conditioner>",
+      "source": "<routing source>"
+    },
+    "tps": {
+      "input_path": "<board TPS input>",
+      "signal_conditioning": "<TPS input conditioning>",
+      "source": "<routing source>"
+    },
+    "clt": {
+      "input_path": "<board CLT input>",
+      "signal_conditioning": "<CLT pullup/filter>",
+      "source": "<routing source>"
+    },
+    "iat": {
+      "input_path": "<board IAT input>",
+      "signal_conditioning": "<IAT pullup/filter>",
+      "source": "<routing source>"
+    },
+    "vbatt": {
+      "input_path": "<board VBatt input>",
+      "signal_conditioning": "<VBatt divider/filter>",
+      "source": "<routing source>"
+    },
+    "maf": {
+      "input_path": "",
+      "signal_conditioning": "",
+      "source": ""
+    },
+    "baro": {
+      "input_path": "",
+      "signal_conditioning": "",
+      "source": ""
+    },
+    "lambda": {
+      "input_path": "",
+      "signal_conditioning": "",
+      "source": ""
+    },
+    "knock_front": {
+      "input_path": "",
+      "signal_conditioning": "",
+      "source": ""
+    },
+    "knock_rear": {
+      "input_path": "",
+      "signal_conditioning": "",
+      "source": ""
+    },
+    "vss": {
+      "input_path": "",
+      "signal_conditioning": "",
+      "source": ""
+    }
+  },
+  "sensor_calibrations": {
+    "adc": {
+      "vref_mv": 3300,
+      "adc_bits": 12,
+      "source": "<ADC reference/resolution source>"
+    },
+    "map": {
+      "model": "<mpxh6400a, mpxh6400ac6u, or mpx5700ap>",
+      "model_source": "<MAP part marking/BOM/source>",
+      "voltage_scale_numerator": 33,
+      "voltage_scale_denominator": 50,
+      "scale_source": "<MAP divider ratio source>",
+      "installation_confirmed": true
+    },
+    "tps": {
+      "closed_counts": 1,
+      "open_counts": 4095,
+      "calibration_status": "not_yet_certified",
+      "calibration_source": "<TPS sweep/source>"
+    },
+    "clt": {
+      "curve_source": "<CLT thermistor curve source>",
+      "bias_ohms": 2490,
+      "bias_source": "<CLT bias resistor source>",
+      "calibration_status": "not_yet_certified",
+      "temp_c_points": [],
+      "resistance_ohm_points": []
+    },
+    "iat": {
+      "curve_source": "<IAT thermistor curve source>",
+      "bias_ohms": 2490,
+      "bias_source": "<IAT bias resistor source>",
+      "calibration_status": "not_yet_certified",
+      "temp_c_points": [],
+      "resistance_ohm_points": []
+    },
+    "maf": {
+      "curve_source": "",
+      "runtime_load_status": "not_supported",
+      "mv_points": [],
+      "flow_x100_points": []
+    },
+    "baro": {
+      "source": "startup_map_sample",
+      "source_notes": "<fixed/startup-map/dedicated baro policy source>",
+      "fixed_kpa10": 1013,
+      "sensor_model": "",
+      "calibration_source": "",
+      "mv_min": 0,
+      "kpa_min_x10": 0,
+      "mv_max": 0,
+      "kpa_max_x10": 0,
+      "calibration_status": "not_yet_certified"
+    },
+    "vbatt": {
+      "voltage_scale_numerator": 1,
+      "voltage_scale_denominator": 1,
+      "scale_source": "<VBatt divider/source>"
+    },
+    "lambda": {
+      "installed": false,
+      "required_for_first_run": false,
+      "calibration_status": "not_yet_certified",
+      "controller_type": "",
+      "mv_min": 500,
+      "lambda_min_x100": 68,
+      "mv_max": 4500,
+      "lambda_max_x100": 136
+    },
+    "knock": {
+      "sensor_count": 2,
+      "covered_cylinders": 6,
+      "authority_status": "disabled",
+      "retard_validation_source": ""
+    },
+    "vss": {
+      "installed": false,
+      "required_for_first_run": false,
+      "pulse_source": "",
+      "pulses_per_km": 1,
+      "calibration_status": "not_yet_certified"
+    },
+    "cam_phase": {
+      "tooth_count": 58,
+      "reference_tooth": 0,
+      "window_before": 0,
+      "window_after": 0,
+      "edge_action": "set_phase_a",
+      "window_source": "<cam phase window source>"
+    }
+  },
   "provenance": {
     "capture_timestamp": "<ISO-8601 capture timestamp>",
     "operator_identity": "<operator identity>",

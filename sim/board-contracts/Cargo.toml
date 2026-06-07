@@ -1,0 +1,17 @@
+[package]
+name = "ecu-board-contracts"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dev-dependencies]
+ecu-board-api = { path = "../../crates/board-api" }
+ecu-board-profiles = { path = "../../crates/board-profiles" }
+ecu-calibration = { path = "../../crates/calibration" }
+ecu-domain = { path = "../../crates/domain" }
+ecu-firmware-resolver = { path = "../../sim/firmware-resolver" }
+ecu-io = { path = "../../crates/io" }
+ecu-runtime = { path = "../../crates/runtime" }
+ecu-target-common = { path = "../../boards/common" }
+ecu-rp2040-pico = { path = "../../boards/rp2040-pico" }
+ecu-rp2350b = { path = "../../boards/rp2350b" }

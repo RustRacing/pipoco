@@ -1,0 +1,15 @@
+[package]
+name = "ecu-atmega2560"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "ecu_atmega2560"
+path = "src/lib.rs"
+
+[dependencies]
+ecu-board-api = { path = "../../crates/board-api" }
+ecu-board-profiles = { path = "../../crates/board-profiles" }
+ecu-domain = { path = "../../crates/domain" }
+ecu-runtime = { path = "../../crates/runtime" }

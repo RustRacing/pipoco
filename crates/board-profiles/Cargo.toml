@@ -1,0 +1,14 @@
+[package]
+name = "ecu-board-profiles"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "ecu_board_profiles"
+path = "src/lib.rs"
+
+[dependencies]
+ecu-board-api = { path = "../board-api" }
+ecu-domain = { path = "../domain" }
+ecu-trigger = { path = "../trigger" }

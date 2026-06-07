@@ -1,0 +1,57 @@
+//! Logical ECU board capability contract.
+//!
+//! `ecu-board-api` is the canonical boundary for what a board can provide to
+//! ECU recipes and runtime-independent board code: clocks, decoded trigger
+//! edges, logical sensor snapshots, scheduled ECU outputs, aux commands,
+//! telemetry, calibration pages, watchdog service, and board capability
+//! metadata.
+//!
+//! Keep this crate above raw electrical details and below runtime policy. It
+//! may depend on `ecu-domain`, but it must not depend on `ecu-runtime` or own
+//! action lowering. Raw pins, capture buffers, trace records, and electrical
+//! samples belong in `ecu-io`.
+
+#![cfg_attr(not(test), no_std)]
+#![forbid(unsafe_code)]
+
+mod capabilities;
+mod output_profiles;
+mod safety;
+mod sensors;
+mod telemetry;
+mod timing_island;
+mod traits;
+pub mod wire;
+
+pub use capabilities::{
+    BoardCapabilities, BoardResourceLimits, CalibrationPage, IgnitionProfileId,
+    LoadSourceCapabilities, PinMapId, ProfileId, RuntimeBuildId,
+};
+pub use output_profiles::{
+    AuxSafetyProfile, FuelOutputMode, FuelOutputProfile, FullEcuOutputProfile,
+    IgnitionOutputProfile, InjectionOutputProfile, OutputAuthorityRequirement,
+    RuntimeOutputProfile, SparkOutputMode, SparkOutputProfile, FULL_ECU_MAX_CYLINDERS,
+    FULL_ECU_MAX_LIMP_AUX_OUTPUTS,
+};
+pub use safety::{
+    SafetyDriverFaultMask, SafetyGateInput, SafetyGatePermit, SafetyGateReason, SafetyGateStatus,
+    SafetyPermitMask,
+};
+pub use sensors::{
+    BoardSensorSnapshot, BoardSensorSnapshotCapture, BoardSensorSnapshotCaptureSource,
+    BoardSensorValidityFlags, CaptureSample, CaptureSampleSource, CaptureSink, SensorSnapshot,
+};
+pub use telemetry::{EngineTimeAuthorityTelemetry, IgnitionProfileMode, TelemetryFrame};
+pub use timing_island::{
+    engine_time_authorizes_full_sequential, AuxCommand, AuxCommandBatch, AuxOutput, AuxValue,
+    EcuOutput, EdgeBatch, EdgeKind, OutputLevel, OutputTransition, OutputTransitionBatch,
+    TimingIslandCommand, TimingIslandCommandBatch, TimingIslandEvent, TimingIslandFaultStatus,
+    TimingIslandRejectReason, TriggerEdge,
+};
+pub use traits::{
+    AuxOutputSink, CalibrationStore, EcuClock, OutputScheduler, SensorSource, TelemetrySink,
+    TriggerEdgeSource, Watchdog,
+};
+
+#[cfg(test)]
+mod tests;

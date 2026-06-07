@@ -1,0 +1,19 @@
+[package]
+name = "ecu-sim"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+ecu-domain = { path = "../../crates/domain" }
+ecu-io = { path = "../../crates/io" }
+ecu-runtime = { path = "../../crates/runtime" }
+
+[dev-dependencies]
+ecu-scheduler = { path = "../../crates/scheduler" }
+ecu-board-api = { path = "../../crates/board-api" }
+ecu-calibration = { path = "../../crates/calibration" }
+ecu-target-common = { path = "../../boards/common", features = ["test-support"] }
+smallvec = "1.13"

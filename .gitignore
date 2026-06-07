@@ -12,6 +12,7 @@ __pycache__/
 
 # Local/generated tool artifacts
 /.codex
+/.local/
 /.session_id
 /.session_meta.json
 /_apalache-out/

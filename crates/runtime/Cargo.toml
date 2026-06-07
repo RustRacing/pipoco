@@ -1,0 +1,19 @@
+[package]
+name = "ecu-runtime"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ecu-board-api = { path = "../board-api" }
+ecu-domain = { path = "../domain" }
+ecu-calibration = { path = "../calibration" }
+ecu-scheduler = { path = "../scheduler" }
+ecu-control = { path = "../control" }
+
+[dev-dependencies]
+criterion = "0.4"
+ecu-spec = { path = "../spec" }
+
+[[bench]]
+name = "runtime_bench"
+harness = false

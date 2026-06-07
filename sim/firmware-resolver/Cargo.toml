@@ -1,0 +1,10 @@
+[package]
+name = "ecu-firmware-resolver"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+ecu-board-api = { path = "../../crates/board-api" }
+ecu-board-profiles = { path = "../../crates/board-profiles" }
+ecu-ts = { path = "../../crates/ts" }

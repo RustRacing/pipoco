@@ -1,0 +1,65 @@
+[package]
+name = "ecu-rp2040-pico"
+version = "0.1.0"
+edition = "2021"
+autobins = false
+build = "build.rs"
+
+[dependencies]
+ecu-ts = { path = "../../crates/ts", default-features = false, features = ["runtime", "persistence"] }
+ecu-board-api = { path = "../../crates/board-api" }
+ecu-board-profiles = { path = "../../crates/board-profiles" }
+ecu-calibration = { path = "../../crates/calibration" }
+ecu-control = { path = "../../crates/control" }
+ecu-domain = { path = "../../crates/domain" }
+ecu-io = { path = "../../crates/io" }
+ecu-runtime = { path = "../../crates/runtime" }
+ecu-scheduler = { path = "../../crates/scheduler" }
+ecu-target-common = { path = "../common" }
+rp2040-hal = { version = "0.9", features = ["rt", "critical-section-impl"] }
+fugit = "0.3"
+embedded-hal = "0.2"
+usb-device = "0.2"
+usbd-serial = "0.1.1"
+cortex-m = "0.7"
+cortex-m-rt = "0.7"
+panic-halt = "0.2"
+# panic-never = "0.1" # BLOCKED: causes linker failure on this toolchain (see US-FM0290 blocker in tools/TOOLING.md)
+pio-proc = "0.2"
+pio = "0.2"
+embedded-storage = "0.3"
+# optional backends; we keep storage abstract and feature-gated
+sequential-storage = { version = "0.3", optional = true }
+
+[[bin]]
+name = "ts-gauges"
+path = "src/bin/ts_gauges.rs"
+required-features = ["example-bins"]
+
+[[bin]]
+name = "ts-ecu"
+path = "src/bin/ts_ecu.rs"
+
+[[bin]]
+name = "pio_capture_example"
+path = "src/bin/pio_capture_example.rs"
+required-features = ["example-bins", "capture-pio"]
+
+[dev-dependencies]
+ecu-core = { path = "../../crates/core", default-features = false }
+
+[features]
+default = []
+# Enable flash-backed KV persistence (uses RP2040 ROM flash routines)
+flash-kv = ["sequential-storage"]
+# Enable PIO-based trigger capture in ts-ecu
+capture-pio = []
+# Explicit no-hardware trigger demo for `ts-ecu`; never use for flashable firmware.
+synthetic-trigger-demo = []
+# Optional cam input via GPIO IRQ
+capture-cam = []
+# Standalone example and host-side binaries.
+example-bins = []
+# ADC29 usage selection
+# If enabled, ADC29 is VSYS/3 and we compute VBATT from it. If disabled, ADC29 is IAT thermistor.
+vbatt-vsys = []

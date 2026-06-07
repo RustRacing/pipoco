@@ -1,0 +1,44 @@
+[package]
+name = "ecu-core"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "ecu_core"
+path = "src/lib.rs"
+
+[dependencies]
+ecu-domain = { path = "../domain" }
+ecu-transport = { path = "../transport", default-features = false }
+
+ecu-io = { path = "../io" }
+ecu-calibration = { path = "../calibration" }
+ecu-runtime = { path = "../runtime" }
+# Canonical TS protocol/server shell. Shell-only: no runtime/board deps.
+ecu-ts = { path = "../ts", default-features = false, features = ["persistence", "runtime"] }
+
+[features]
+default = []
+transport-bbqueue = ["ecu-transport/transport-bbqueue"]
+transport-can = ["ecu-transport/transport-can"]
+transport-can-fd = ["transport-can", "ecu-transport/transport-can-fd"]
+simulation = []
+
+# For testing only - enables test helpers and non-production paths.
+test-utils = []
+
+[dev-dependencies]
+# Enable test-utils feature when running tests
+# This allows integration tests to use create_test_pair() and split-crate runtime checks.
+ecu-sim = { path = "../../sim/harness" }
+ecu-spec = { path = "../spec" }
+
+[[test]]
+name = "transport_integration"
+required-features = ["transport-bbqueue"]
+
+[[test]]
+name = "ported_tests"
+
+[[test]]
+name = "safety_tests"

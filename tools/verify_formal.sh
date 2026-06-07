@@ -46,8 +46,8 @@ fail_if_rg_matches() {
 
 run_tlc_module() {
     local module="$1"
-    local cfg="ecu-spec/tla/${module}.cfg"
-    local tla="ecu-spec/tla/${module}.tla"
+    local cfg="crates/spec/tla/${module}.cfg"
+    local tla="crates/spec/tla/${module}.tla"
     java -cp "$_tla_jar" tlc2.TLC -config "$cfg" "$tla"
 }
 
@@ -205,7 +205,7 @@ fi
 # cargo-public-api
 if command -v cargo-public-api &>/dev/null; then
     echo "Verifying ecu-spec public API against committed snapshot..."
-    _snapshot="ecu-spec/api.snapshot.txt"
+    _snapshot="crates/spec/api.snapshot.txt"
     if [[ -f "$repo_root/$_snapshot" ]]; then
         _tmp_snapshot=$(mktemp)
         # cargo-public-api 0.51 requires nightly rustdoc JSON. Invoking it as
@@ -243,7 +243,7 @@ if [[ ! -x "$_verus_path" ]]; then
     echo "FAIL: Verus not available" >&2
     exit 1
 fi
-_verus_output=$(RUSTUP_TOOLCHAIN="$_rust_toolchain" "$_verus_path" ecu-spec/proofs/verus.rs 2>&1) || {
+_verus_output=$(RUSTUP_TOOLCHAIN="$_rust_toolchain" "$_verus_path" crates/spec/proofs/verus.rs 2>&1) || {
     echo "FAIL: Verus verification failed" >&2
     echo "$_verus_output" >&2
     exit 1
@@ -272,13 +272,28 @@ rm -f "$_verus_tmp"
 echo ""
 
 # ============================================================
-# Section 5: Formal verification — TLC scheduler
+# Section 5: Formal verification — TLC (trigger + scheduler)
 # ============================================================
-echo "=== Formal gate: TLC scheduler (safety + conditional liveness) ==="
+echo "=== Formal gate: TLC trigger (safety + conditional liveness) ==="
 if [[ ! -f "$_tla_jar" ]]; then
     echo "FAIL: TLA+ toolbox not available" >&2
     exit 1
 fi
+set +e
+_tlc_trigger_output=$(run_tlc_module trigger 2>&1)
+_tlc_trigger_status=$?
+set -e
+echo "$_tlc_trigger_output"
+if [[ $_tlc_trigger_status -ne 0 ]]; then
+    echo "FAIL: TLC trigger module" >&2
+    exit 1
+fi
+if ! echo "$_tlc_trigger_output" | grep -q "Model checking completed. No error has been found."; then
+    echo "FAIL: TLC trigger did not complete without error" >&2
+    exit 1
+fi
+
+echo "=== Formal gate: TLC scheduler (safety + conditional liveness) ==="
 set +e
 _tlc_output=$(run_tlc_module scheduler 2>&1)
 _tlc_status=$?
@@ -312,6 +327,65 @@ with open("target/formal-evidence/latest/tla.json", "w") as f:
 print("states:", states, "distinct:", distinct, "errors:", errs)
 PYEOF
 rm -f "$_tlc_tmp"
+echo ""
+
+# ============================================================
+# Section 5b: Model/Rust constant drift gate
+# ============================================================
+# The TLA+ models and the Rust implementations must agree on the bound
+# constants. Rust owns the single source of truth (exported pub consts);
+# the models duplicate the literals for tractable state spaces. Any drift
+# between the two fails the gate. See aidocs/architecture/formal-model-map.md.
+echo "=== Formal gate: model/Rust constant drift ==="
+python3 /dev/stdin << 'PYEOF'
+import re
+import sys
+
+def tla_const(path, name):
+    text = open(path).read()
+    m = re.search(rf'^\s*{re.escape(name)}\s*==\s*(\d+)\b', text, re.MULTILINE)
+    if not m:
+        print(f"FAIL: {name} not found in {path}", file=sys.stderr)
+        sys.exit(1)
+    return int(m.group(1))
+
+def rust_const(path, name):
+    text = open(path).read()
+    m = re.search(rf'\bpub const {re.escape(name)}\s*:\s*\w+\s*=\s*(\d+)\b', text)
+    if not m:
+        print(f"FAIL: {name} not found in {path}", file=sys.stderr)
+        sys.exit(1)
+    return int(m.group(1))
+
+checks = [
+    ("MaxGood", "crates/spec/tla/trigger.tla",
+     "MODEL_MAX_GOOD", "crates/trigger/src/lib.rs"),
+    ("MaxBad", "crates/spec/tla/trigger.tla",
+     "MODEL_MAX_BAD", "crates/trigger/src/lib.rs"),
+    ("MaxPending", "crates/spec/tla/scheduler.tla",
+     "MODEL_MAX_PENDING", "crates/scheduler/src/lib.rs"),
+    ("MaxOutputs", "crates/spec/tla/scheduler.tla",
+     "MODEL_MAX_OUTPUTS", "crates/scheduler/src/lib.rs"),
+]
+
+drift = False
+for tla_name, tla_path, rust_name, rust_path in checks:
+    tv = tla_const(tla_path, tla_name)
+    rv = rust_const(rust_path, rust_name)
+    status = "ok" if tv == rv else "DRIFT"
+    print(f"  {tla_name}={tv} ({tla_path}) vs {rust_name}={rv} ({rust_path}): {status}")
+    if tv != rv:
+        drift = True
+
+if drift:
+    print("FAIL: TLA+ model constants drifted from Rust source of truth", file=sys.stderr)
+    sys.exit(1)
+print("model/Rust constant drift gate: PASS")
+PYEOF
+if [[ $? -ne 0 ]]; then
+    echo "FAIL: model/Rust constant drift gate" >&2
+    exit 1
+fi
 echo ""
 
 # ============================================================
@@ -432,15 +506,15 @@ for pattern in \
     "from_spec\b.*oracle_result\|oracle_result.*from_spec" \
     "ecu_spec::schedule_all_cylinders" \
     "evaluate_fuel\|evaluate_tables"; do
-    if rg -q "$pattern" ecu-runtime/src ecu-scheduler/src src tests --glob '*.rs' 2>/dev/null; then
+    if rg -q "$pattern" crates/runtime/src crates/scheduler/src crates/core/src crates/core/tests --glob '*.rs' 2>/dev/null; then
         echo "FAIL: forbidden shortcut found:" >&2
-        rg -n "$pattern" ecu-runtime/src ecu-scheduler/src src tests --glob '*.rs' 2>/dev/null | head -5 >&2
+        rg -n "$pattern" crates/runtime/src crates/scheduler/src crates/core/src crates/core/tests --glob '*.rs' 2>/dev/null | head -5 >&2
         _audit_fail=true
     fi
 done
 
 # Audit: assert!(true) vacuous assertions
-if rg -q 'assert!\(true\)' ecu-runtime/src ecu-scheduler/src src --glob '*.rs' 2>/dev/null; then
+if rg -q 'assert!\(true\)' crates/runtime/src crates/scheduler/src crates/core/src --glob '*.rs' 2>/dev/null; then
     echo "FAIL: vacuous assert!(true) found" >&2
     _audit_fail=true
 fi
@@ -465,7 +539,7 @@ fi
 # Audit: production ecu-spec dependency in product crates
 # Only flag ecu-spec in [dependencies], not in [dev-dependencies] or other sections
 _prod_spec_deps=false
-for crate_toml in ecu-runtime/Cargo.toml ecu-scheduler/Cargo.toml src/Cargo.toml ecu-target-common/Cargo.toml; do
+for crate_toml in crates/runtime/Cargo.toml crates/scheduler/Cargo.toml crates/core/Cargo.toml boards/common/Cargo.toml; do
     if [[ -f "$crate_toml" ]]; then
         # Get line number of [dependencies] section (not [dev-dependencies])
         _dep_line=$(rg -n '^\[dependencies\]' "$crate_toml" 2>/dev/null | cut -d: -f1 | head -1)
@@ -491,7 +565,7 @@ if $_prod_spec_deps; then
 fi
 
 # Audit: production panic/unwrap/expect in ecu-spec (outside tests)
-_panic_matches=$(rg -n 'panic!\(|unwrap\(\)|expect\(' ecu-spec/src --glob '*.rs' 2>/dev/null | \
+_panic_matches=$(rg -n 'panic!\(|unwrap\(\)|expect\(' crates/spec/src --glob '*.rs' 2>/dev/null | \
     grep -v 'cfg(test)' | grep -v '^[[:space:]]*//' | grep -v '#\[cfg' || true)
 if [[ -n "$_panic_matches" ]]; then
     echo "FAIL: panic/unwrap/expect in ecu-spec production code" >&2
@@ -501,7 +575,7 @@ fi
 
 # Audit: forbidden Verus patterns
 for pattern in "assume\(false\)|ensures\s+true|external_body"; do
-    if rg -q "$pattern" ecu-spec/proofs/verus.rs 2>/dev/null; then
+    if rg -q "$pattern" crates/spec/proofs/verus.rs 2>/dev/null; then
         echo "FAIL: forbidden Verus pattern '$pattern'" >&2
         _audit_fail=true
     fi
@@ -732,12 +806,12 @@ _repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 # Part A: panic!/todo!/unimplemented!/unreachable! — zero tolerance
 # ----------------------------------------------------------------------
 _embedded_dirs=(
-    "rp2040-pico/src/bin/"
-    "rp2040-pico/src/main.rs"
-    "stm32f4/src/bin/"
-    "stm32f4/src/main.rs"
-    "rp2350b/src/bin/"
-    "rp2350b/src/main.rs"
+    "boards/rp2040-pico/src/bin/"
+    "boards/rp2040-pico/src/main.rs"
+    "boards/stm32f4/src/bin/"
+    "boards/stm32f4/src/main.rs"
+    "boards/rp2350b/src/bin/"
+    "boards/rp2350b/src/main.rs"
 )
 
 _forbidden_panic="panic!\b|todo!|unimplemented!|unreachable!"
@@ -763,47 +837,47 @@ done
 # clock init, PIO install, singleton init) where halt is the only safe action.
 _allowlist=(
     # RP2040 fatal-init — Peripherals::take, clock init, PIO install, singleton init
-    "rp2040-pico/src/bin/ts_ecu.rs|510"
-    "rp2040-pico/src/bin/ts_ecu.rs|511"
-    "rp2040-pico/src/bin/ts_ecu.rs|524"
-    "rp2040-pico/src/bin/ts_ecu.rs|550"
-    "rp2040-pico/src/bin/ts_ecu.rs|584"
-    "rp2040-pico/src/bin/ts_gauges.rs|60"
-    "rp2040-pico/src/bin/ts_gauges.rs|61"
-    "rp2040-pico/src/bin/ts_gauges.rs|75"
-    "rp2040-pico/src/bin/ts_gauges.rs|99"
-    "rp2040-pico/src/bin/pio_capture_example.rs|48"
-    "rp2040-pico/src/bin/pio_capture_example.rs|62"
-    "rp2040-pico/src/bin/pio_capture_example.rs|100"
+    "boards/rp2040-pico/src/bin/ts_ecu.rs|510"
+    "boards/rp2040-pico/src/bin/ts_ecu.rs|511"
+    "boards/rp2040-pico/src/bin/ts_ecu.rs|524"
+    "boards/rp2040-pico/src/bin/ts_ecu.rs|550"
+    "boards/rp2040-pico/src/bin/ts_ecu.rs|584"
+    "boards/rp2040-pico/src/bin/ts_gauges.rs|60"
+    "boards/rp2040-pico/src/bin/ts_gauges.rs|61"
+    "boards/rp2040-pico/src/bin/ts_gauges.rs|75"
+    "boards/rp2040-pico/src/bin/ts_gauges.rs|99"
+    "boards/rp2040-pico/src/bin/pio_capture_example.rs|48"
+    "boards/rp2040-pico/src/bin/pio_capture_example.rs|62"
+    "boards/rp2040-pico/src/bin/pio_capture_example.rs|100"
     # STM32F4 fatal-init
-    "stm32f4/src/main.rs|493"
-    "stm32f4/src/main.rs|552"
-    "stm32f4/src/main.rs|605"
-    "stm32f4/src/main.rs|613"
-    "stm32f4/src/bin/ts_gauges.rs|63"
-    "stm32f4/src/bin/ecu_demo.rs|11"
-    "stm32f4/src/bin/can_heartbeat.rs|26"
-    "stm32f4/src/bin/v8_seq.rs|12"
-    "stm32f4/src/bin/4c_batched.rs|11"
+    "boards/stm32f4/src/main.rs|493"
+    "boards/stm32f4/src/main.rs|552"
+    "boards/stm32f4/src/main.rs|605"
+    "boards/stm32f4/src/main.rs|613"
+    "boards/stm32f4/src/bin/ts_gauges.rs|63"
+    "boards/stm32f4/src/bin/ecu_demo.rs|11"
+    "boards/stm32f4/src/bin/can_heartbeat.rs|26"
+    "boards/stm32f4/src/bin/v8_seq.rs|12"
+    "boards/stm32f4/src/bin/4c_batched.rs|11"
     # RP2350B fatal-init
-    "rp2350b/src/main.rs|37"
-    "rp2350b/src/main.rs|38"
-    "rp2350b/src/main.rs|54"
-    "rp2350b/src/bin/minimal_ecu.rs|129"
-    "rp2350b/src/bin/minimal_ecu.rs|130"
-    "rp2350b/src/bin/minimal_ecu.rs|146"
+    "boards/rp2350b/src/main.rs|37"
+    "boards/rp2350b/src/main.rs|38"
+    "boards/rp2350b/src/main.rs|54"
+    "boards/rp2350b/src/bin/minimal_ecu.rs|129"
+    "boards/rp2350b/src/bin/minimal_ecu.rs|130"
+    "boards/rp2350b/src/bin/minimal_ecu.rs|146"
 )
 
 # Build a regex that matches exactly those file:line pairs from the allowlist.
 # rg query: match .unwrap() or .expect() anywhere in board binary dirs.
 # Then filter results to only allowlist entries.
 _unwrap_expect_matches=$(rg -n "\.unwrap\(\)|\.expect\(" \
-    "${_repo_root}/rp2040-pico/src/bin/" \
-    "${_repo_root}/rp2040-pico/src/main.rs" \
-    "${_repo_root}/stm32f4/src/bin/" \
-    "${_repo_root}/stm32f4/src/main.rs" \
-    "${_repo_root}/rp2350b/src/bin/" \
-    "${_repo_root}/rp2350b/src/main.rs" \
+    "${_repo_root}/boards/rp2040-pico/src/bin/" \
+    "${_repo_root}/boards/rp2040-pico/src/main.rs" \
+    "${_repo_root}/boards/stm32f4/src/bin/" \
+    "${_repo_root}/boards/stm32f4/src/main.rs" \
+    "${_repo_root}/boards/rp2350b/src/bin/" \
+    "${_repo_root}/boards/rp2350b/src/main.rs" \
     2>/dev/null \
     | grep -v "^\s*//" \
     | grep -v "^\s*#\[" \
@@ -852,9 +926,9 @@ echo "embedded panic-freedom gate: PASS"
 # ============================================================
 echo "=== Formal gate: RP2040 static-mut regression (US-FM0710) ==="
 _rp2040_v8_files=(
-    "rp2040-pico/src/bin/ts_ecu.rs"
-    "ecu-target-common/src/capture.rs"
-    "ecu-target-common/src/split_tick.rs"
+    "boards/rp2040-pico/src/bin/ts_ecu.rs"
+    "boards/common/src/capture.rs"
+    "boards/common/src/split_tick.rs"
 )
 _rp2040_static_mut_fail=false
 for _f in "${_rp2040_v8_files[@]}"; do
@@ -876,7 +950,7 @@ echo "RP2040 static-mut regression gate: PASS"
 # Section 12: no_alloc static audit
 # ============================================================
 echo "=== Formal gate: no_alloc static audit ==="
-formal_crates=("ecu-runtime/src" "ecu-scheduler/src" "src")
+formal_crates=("crates/runtime/src" "crates/scheduler/src" "crates/core/src")
 for crate_src in "${formal_crates[@]}"; do
     if [[ -d "$repo_root/$crate_src" ]]; then
         # Check for alloc:: in production code using rg
@@ -911,11 +985,11 @@ import json, re, sys
 out_path = sys.argv[1]
 map_path = "aidocs/proof-to-product-conformance-map.md"
 contract_sources = {
-    "RuntimeAdapterContract": "ecu-runtime/src/lib.rs",
-    "SchedulerAdapterContract": "ecu-scheduler/src/lib.rs",
-    "CoreAdapterContract": "src/lib.rs",
-    "BoardAdapterContract": "ecu-target-common/src/lib.rs",
-    "TargetCommonAdapterContract": "ecu-target-common/src/lib.rs",
+    "RuntimeAdapterContract": "crates/runtime/src/lib.rs",
+    "SchedulerAdapterContract": "crates/scheduler/src/lib.rs",
+    "CoreAdapterContract": "crates/core/src/lib.rs",
+    "BoardAdapterContract": "boards/common/src/lib.rs",
+    "TargetCommonAdapterContract": "boards/common/src/lib.rs",
 }
 
 def enum_variants(path, enum_name):

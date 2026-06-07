@@ -1,0 +1,40 @@
+name: Core Architecture Guard
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  ecu-core-board-boundary:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Check ecu-core board boundary
+        run: bash scripts/check_core_architecture.sh
+
+      - name: Check architecture debt guards
+        run: bash scripts/check_architecture_debt.sh
+
+  firmware-recipes:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv6m-none-eabi,thumbv7em-none-eabihf,thumbv8m.main-none-eabihf
+
+      - name: Render and build every firmware recipe
+        run: bash tools/check-recipes.sh

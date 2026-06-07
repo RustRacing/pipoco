@@ -1,0 +1,79 @@
+name: Formal TLC
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  formal-tlc:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Cache tla2tools.jar
+        uses: actions/cache@v4
+        with:
+          path: target/tla
+          key: tla2tools-v1.8.0
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run TLC on trigger and scheduler models
+        run: bash tools/run_tlc.sh trigger scheduler
+
+      - name: Assert model constants match Rust source of truth
+        run: |
+          python3 - << 'PYEOF'
+          import re, sys
+
+          def tla_const(path, name):
+              text = open(path).read()
+              m = re.search(rf'^\s*{re.escape(name)}\s*==\s*(\d+)\b', text, re.MULTILINE)
+              if not m:
+                  print(f"FAIL: {name} not found in {path}", file=sys.stderr)
+                  sys.exit(1)
+              return int(m.group(1))
+
+          def rust_const(path, name):
+              text = open(path).read()
+              m = re.search(rf'\bpub const {re.escape(name)}\s*:\s*\w+\s*=\s*(\d+)\b', text)
+              if not m:
+                  print(f"FAIL: {name} not found in {path}", file=sys.stderr)
+                  sys.exit(1)
+              return int(m.group(1))
+
+          checks = [
+              ("MaxGood", "crates/spec/tla/trigger.tla", "MODEL_MAX_GOOD", "crates/trigger/src/lib.rs"),
+              ("MaxBad", "crates/spec/tla/trigger.tla", "MODEL_MAX_BAD", "crates/trigger/src/lib.rs"),
+              ("MaxPending", "crates/spec/tla/scheduler.tla", "MODEL_MAX_PENDING", "crates/scheduler/src/lib.rs"),
+              ("MaxOutputs", "crates/spec/tla/scheduler.tla", "MODEL_MAX_OUTPUTS", "crates/scheduler/src/lib.rs"),
+          ]
+
+          drift = False
+          for tla_name, tla_path, rust_name, rust_path in checks:
+              tv = tla_const(tla_path, tla_name)
+              rv = rust_const(rust_path, rust_name)
+              status = "ok" if tv == rv else "DRIFT"
+              print(f"{tla_name}={tv} vs {rust_name}={rv}: {status}")
+              if tv != rv:
+                  drift = True
+          if drift:
+              print("FAIL: TLA+ model constants drifted from Rust source of truth", file=sys.stderr)
+              sys.exit(1)
+          print("model/Rust constant drift gate: PASS")
+          PYEOF
+
+      - name: Assert Rust implementations use the model constants
+        run: cargo test -p ecu-trigger -p ecu-scheduler

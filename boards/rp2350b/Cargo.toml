@@ -1,0 +1,52 @@
+[package]
+name = "ecu-rp2350b"
+version = "0.1.0"
+edition = "2021"
+autobins = false
+
+[dependencies]
+ecu-core = { path = "../../crates/core", default-features = false }
+ecu-transport = { path = "../../crates/transport", default-features = false }
+ecu-ts = { path = "../../crates/ts", default-features = false }
+ecu-board-api = { path = "../../crates/board-api" }
+ecu-board-profiles = { path = "../../crates/board-profiles" }
+ecu-domain = { path = "../../crates/domain" }
+ecu-calibration = { path = "../../crates/calibration" }
+ecu-io = { path = "../../crates/io" }
+ecu-runtime = { path = "../../crates/runtime" }
+ecu-scheduler = { path = "../../crates/scheduler" }
+ecu-target-common = { path = "../common", features = ["test-support"] }
+
+# RP2350B HAL (using rp235x-hal for RP2350)
+rp235x-hal = { version = "0.2", features = ["critical-section-impl"] }
+
+# Cortex-M runtime
+cortex-m = "0.7"
+cortex-m-rt = "0.7"
+
+# Panic handler for embedded
+panic-halt = "0.2"
+
+# Embedded HAL traits
+embedded-hal = "1.0"
+
+[features]
+ve-demo = []
+# Alternative trigger capture path using GPIO IRQ.
+capture-gpio = []
+# Standalone example binaries.
+example-bins = []
+transport-can = ["ecu-transport/transport-can"]
+transport-can-fd = ["transport-can", "ecu-transport/transport-can-fd"]
+
+[build-dependencies]
+
+[[bin]]
+name = "ecu-rp2350b-min"
+path = "src/bin/minimal_ecu.rs"
+required-features = ["example-bins"]
+
+[[bin]]
+name = "ecu-rp2350b-demo"
+path = "src/main.rs"
+required-features = ["ve-demo"]

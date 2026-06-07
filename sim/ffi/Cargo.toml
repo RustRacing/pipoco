@@ -1,0 +1,18 @@
+[package]
+name = "ecu-sim-ffi"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["staticlib", "cdylib", "rlib"]
+path = "src/lib.rs"
+
+[features]
+test-support = []
+
+[dependencies]
+ecu-board-api = { path = "../../crates/board-api" }
+ecu-domain = { path = "../../crates/domain" }
+ecu-io = { path = "../../crates/io" }
+ecu-runtime = { path = "../../crates/runtime" }
+ecu-sim = { path = "../harness" }

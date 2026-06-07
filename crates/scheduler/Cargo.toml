@@ -1,0 +1,19 @@
+[package]
+name = "ecu-scheduler"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "ecu_scheduler"
+path = "src/lib.rs"
+
+[dependencies]
+ecu-board-api = { path = "../board-api" }
+ecu-domain = { path = "../domain" }
+
+[dev-dependencies]
+ecu-runtime = { path = "../runtime" }
+ecu-spec = { path = "../spec" }
+
+[features]
+default = []
