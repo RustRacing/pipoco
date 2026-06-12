@@ -6,6 +6,7 @@
 
 mod embedded_loop;
 pub mod ffi_client;
+pub mod hifi_bridge;
 mod output_validation;
 mod plant_bridge;
 mod readiness;
@@ -24,13 +25,22 @@ pub use ffi_client::{
     diagnostics_from_snapshot, observability_from_snapshot_and_sensor_frame, sensor_frame_to_ffi,
     EcuFfiClient,
 };
+pub use hifi_bridge::{
+    bridge_output_transitions_to_hifi_input, drive_hifi_board_step, drive_hifi_loop_tick,
+    drive_hifi_runtime_board_tick, quantize_hifi_output_to_sensor_frame, run_hifi_adapter_step,
+    synthesize_hifi_trigger_edges, X86HifiAdapterStep, X86HifiAdapterStepInput,
+    X86HifiBoardStepError, X86HifiCrankReference, X86HifiLoopPlant, X86HifiLoopTickError,
+    X86HifiPlantBridgeFrame, X86HifiRuntimeTickError,
+};
 pub use plant_bridge::X86PlantBridgeDiagnostics;
 pub use readiness::{SimulatorReadinessEvidence, SoftwareReadinessReport};
 pub use scenario::{
-    run_cold_start_scenario, run_default_headless_smoke, run_default_headless_smoke_twice,
-    run_dfco_decel_scenario, run_headless_smoke, run_hot_restart_scenario,
-    run_sync_loss_recovery_scenario, DriverRunReport, DriverScenarioSignals, ScenarioConfig,
-    ScenarioKind,
+    run_cold_start_scenario, run_cold_start_scenario_with_backend, run_default_headless_scenario,
+    run_default_headless_smoke, run_default_headless_smoke_twice, run_dfco_decel_scenario,
+    run_dfco_decel_scenario_with_backend, run_headless_hifi_smoke, run_headless_smoke,
+    run_hot_restart_scenario, run_hot_restart_scenario_with_backend,
+    run_sync_loss_recovery_scenario, run_sync_loss_recovery_scenario_with_backend, DriverRunReport,
+    DriverScenarioSignals, HifiDriverRunReport, ScenarioBackend, ScenarioConfig, ScenarioKind,
 };
 pub use trace::{
     DriverDecision, DriverDiagnostics, DriverFreezeFrame, DriverObservability, DriverTraceKind,
@@ -66,4 +76,5 @@ pub enum DriverError {
     ScenarioDidNotEmitIgnition,
     ScenarioDidNotCombust,
     ScenarioTraceMismatch,
+    HifiPlant(ecu_sim_hifi::PlantConfigError),
 }

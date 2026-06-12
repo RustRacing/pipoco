@@ -1,4 +1,6 @@
 use crate::DriverError;
+use ecu_board_api::{EcuOutput, OutputTransition as BoardOutputTransition, OutputTransitionBatch};
+use ecu_domain::Ticks;
 use ecu_io::{OutputLevel, OutputTransitionKind};
 use ecu_sim::plant::{ClosedLoopPlant, FixedPlantProfile};
 
@@ -31,7 +33,7 @@ impl OutputLevelTracker {
         }
     }
 
-    fn update(&mut self, event: ecu_io::OutputTransition) -> bool {
+    pub(super) fn update(&mut self, event: ecu_io::OutputTransition) -> bool {
         let idx = event.channel.get() as usize;
         if idx >= 16 {
             return false;
@@ -146,6 +148,45 @@ impl<const N: usize> PendingOutputQueue<N> {
     pub(super) fn pending_overflow(&self) -> u32 {
         self.overflow_count
     }
+
+    pub(super) fn drain_due_to_hifi_batch<const M: usize, const BATCH_CAP: usize>(
+        &mut self,
+        now_us: u32,
+        trace: &mut crate::trace::FixedDriverTrace<M>,
+        levels: &mut OutputLevelTracker,
+        batch: &mut OutputTransitionBatch<BATCH_CAP>,
+    ) -> Result<(), DriverError> {
+        let profile = FixedPlantProfile::inline_four();
+        let mut i = 0;
+        while i < self.len {
+            let Some(event) = self.events[i] else {
+                i += 1;
+                continue;
+            };
+            if event.at_us.get() <= now_us {
+                validate_scenario_output_channel(profile, event)?;
+                let changed = levels.update(event);
+                trace.push(output_trace_record(event, if changed { 0 } else { 1 }))?;
+                if changed {
+                    if let Some(transition) = to_hifi_output_transition(event) {
+                        batch
+                            .push(transition)
+                            .map_err(|_| DriverError::EventOverflow)?;
+                    }
+                }
+                let mut j = i;
+                while j < self.len - 1 {
+                    self.events[j] = self.events[j + 1];
+                    j += 1;
+                }
+                self.events[self.len - 1] = None;
+                self.len -= 1;
+            } else {
+                i += 1;
+            }
+        }
+        Ok(())
+    }
 }
 
 impl<const N: usize> Default for PendingOutputQueue<N> {
@@ -209,6 +250,23 @@ pub(super) fn suppress_output_to_plant(config: ScenarioConfig, kind: OutputTrans
         OutputTransitionKind::Ignition => config.suppress_ignition_to_plant,
         OutputTransitionKind::Idle | OutputTransitionKind::Fan => false,
     }
+}
+
+fn to_hifi_output_transition(event: ecu_io::OutputTransition) -> Option<BoardOutputTransition> {
+    let output = match event.kind {
+        OutputTransitionKind::Injector => EcuOutput::Injector(event.channel),
+        OutputTransitionKind::Ignition => EcuOutput::Ignition(event.channel),
+        OutputTransitionKind::Idle | OutputTransitionKind::Fan => return None,
+    };
+    let level = match event.level {
+        ecu_io::OutputLevel::Low => ecu_board_api::OutputLevel::Low,
+        ecu_io::OutputLevel::High => ecu_board_api::OutputLevel::High,
+    };
+    Some(BoardOutputTransition::new(
+        output,
+        level,
+        Ticks::new(event.at_us.get()),
+    ))
 }
 
 pub(super) fn scenario_initial_rpm(kind: ScenarioKind) -> u16 {

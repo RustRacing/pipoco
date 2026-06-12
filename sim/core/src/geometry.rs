@@ -227,4 +227,46 @@ mod tests {
 
         assert_eq!(torque, TorqueNmX100(15));
     }
+
+    #[test]
+    fn core_geometry_matches_reference_analytic_formula_within_quantization_error() {
+        let cfg = geometry();
+        let bore_m = cfg.bore_um as f64 / 1_000_000.0;
+        let stroke_m = cfg.stroke_um as f64 / 1_000_000.0;
+        let rod_length_m = cfg.rod_length_um as f64 / 1_000_000.0;
+        let compression_ratio = cfg.compression_ratio_x100 as f64 / 100.0;
+
+        let a = stroke_m / 2.0;
+        let piston_area_mm2 = core::f64::consts::PI * bore_m * bore_m / 4.0 * 1_000_000.0;
+        let clearance_mm3 = (piston_area_mm2 * stroke_m / (compression_ratio - 1.0)) * 1_000.0;
+
+        for angle_deg10 in (0..7200).step_by(25) {
+            let angle = CrankDeg10(angle_deg10);
+            let theta_rad = f64::from(angle_deg10).to_radians() / 10.0;
+            let sin_theta = theta_rad.sin();
+            let cos_theta = theta_rad.cos();
+            let root = (rod_length_m * rod_length_m - a * a * sin_theta * sin_theta).sqrt();
+            let displacement_m = a * (1.0 - cos_theta) + rod_length_m - root;
+            let piston_position_um = (displacement_m * 1_000_000.0).round() as f64;
+            let expected_volume_mm3 = clearance_mm3 + piston_area_mm2 * piston_position_um / 1000.0;
+
+            let core_volume_mm3 = cylinder_volume_mm3(cfg, angle).0 as f64;
+            assert!(
+                (core_volume_mm3 - expected_volume_mm3).abs() <= 500.0,
+                "volume mismatch at {angle_deg10}: core={core_volume_mm3} analytic={expected_volume_mm3}",
+            );
+
+            let core_dv_q16 = dvolume_dtheta_mm3_per_rad_q16(cfg, angle).0 as f64;
+            let dx_dtheta_um = (a * 1_000_000.0) * sin_theta
+                + ((a * 1_000_000.0) * (a * 1_000_000.0) * sin_theta * cos_theta
+                    / (root * 1_000_000.0));
+            let piston_area_um2 =
+                core::f64::consts::PI * (cfg.bore_um as f64) * (cfg.bore_um as f64) / 4.0;
+            let expected_dv_q16 = piston_area_um2 * dx_dtheta_um * 65_536.0 / 1_000_000_000.0;
+            assert!(
+                (core_dv_q16 - expected_dv_q16).abs() <= 35_000_000.0,
+                "dV/dtheta mismatch at {angle_deg10}: core={core_dv_q16} analytic={expected_dv_q16}",
+            );
+        }
+    }
 }

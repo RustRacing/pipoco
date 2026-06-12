@@ -12,6 +12,7 @@ ecu-runtime = { path = "../../crates/runtime" }
 ecu-sim = { path = "../harness" }
 ecu-sim-core = { path = "../core" }
 ecu-sim-ffi = { path = "../ffi" }
+ecu-sim-hifi = { path = "../hifi" }
 ecu-trigger = { path = "../../crates/trigger" }
 
 [dev-dependencies]

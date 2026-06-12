@@ -21,9 +21,18 @@ pub struct DriverScenarioSignals {
     pub sync_recovered: u16,
 }
 
+/// Plant backend used by a scenario run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ScenarioBackend {
+    #[default]
+    Harness,
+    Hifi,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScenarioConfig {
     pub kind: ScenarioKind,
+    pub backend: ScenarioBackend,
     pub start_us: u32,
     pub crank_period_us: u32,
     pub tick_period_us: u32,
@@ -40,6 +49,7 @@ impl Default for ScenarioConfig {
     fn default() -> Self {
         Self {
             kind: ScenarioKind::Smoke,
+            backend: ScenarioBackend::Harness,
             start_us: 1_000,
             crank_period_us: 500,
             tick_period_us: 500,
@@ -55,6 +65,11 @@ impl Default for ScenarioConfig {
 }
 
 impl ScenarioConfig {
+    pub fn with_backend(mut self, backend: ScenarioBackend) -> Self {
+        self.backend = backend;
+        self
+    }
+
     pub fn cold_start() -> Self {
         Self {
             kind: ScenarioKind::ColdStart,
@@ -97,11 +112,12 @@ impl ScenarioConfig {
 }
 
 /// Report from a completed driver run.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DriverRunReport {
     pub trace: crate::trace::FixedDriverTrace<{ crate::trace::DRIVER_TRACE_CAP }>,
     pub ecu_snapshot: ecu_sim_ffi::EcuSimSnapshot,
     pub plant_snapshot: ecu_sim::plant::PlantSnapshot,
+    pub hifi_step: Option<crate::X86HifiAdapterStep>,
     pub observability: crate::trace::DriverObservability,
     pub scenario_signals: DriverScenarioSignals,
     pub total_outputs: u16,
@@ -110,6 +126,9 @@ pub struct DriverRunReport {
     pub combustion_events: u32,
     pub pending_overflow_count: u32,
 }
+
+/// Backward-compatible alias while the hifi path is promoted into the main scenario report.
+pub type HifiDriverRunReport = DriverRunReport;
 
 /// Default smoke init configuration.
 pub fn default_smoke_init_cfg() -> ecu_sim_ffi::EcuSimInitCfg {

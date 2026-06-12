@@ -1,5 +1,10 @@
 use crate::types::*;
 
+const DEFAULT_HIFI_BURN_CURVE_X10000: [u16; WIEBE_POINTS] = [
+    0, 2, 12, 41, 97, 189, 324, 510, 752, 1053, 1415, 1838, 2318, 2848, 3421, 4025, 4647, 5275,
+    5893, 6489, 7050, 7566, 8030, 8438, 8787, 9078, 9316, 9504, 9649, 9758, 9838, 9894, 10000,
+];
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PlantConfig<const CYL: usize> {
     pub cylinder_count: u8,
@@ -98,7 +103,7 @@ impl PlantConfig<4> {
                 pmax_target_at_mbt_deg10: 160,
                 ca50_sensitivity_x1000: 3,
                 pmax_sensitivity_x1000: 1,
-                burn_curve: BurnCurve::default_wiebe_like(),
+                burn_curve: BurnCurve::default_hifi_generated(),
             },
             valve_events: ValveEvents {
                 ivo_deg_btdc_x10: 0,
@@ -402,13 +407,9 @@ pub struct BurnCurve {
 }
 
 impl BurnCurve {
-    pub const fn default_wiebe_like() -> Self {
+    pub const fn default_hifi_generated() -> Self {
         Self {
-            burn_fraction_x10000: [
-                0, 2, 8, 22, 50, 95, 162, 260, 397, 579, 814, 1108, 1466, 1891, 2385, 2946, 3570,
-                4249, 4972, 5725, 6491, 7251, 7984, 8667, 9281, 9809, 10000, 10000, 10000, 10000,
-                10000, 10000, 10000,
-            ],
+            burn_fraction_x10000: DEFAULT_HIFI_BURN_CURVE_X10000,
         }
     }
 
@@ -565,5 +566,51 @@ mod tests {
         cfg.physics_mode = PlantPhysicsMode::SingleZoneIdealGas;
 
         assert_eq!(cfg.validate(), Ok(()));
+    }
+
+    #[test]
+    fn default_burn_curve_matches_generated_hifi_artifact() {
+        let generated = parse_burn_curve(include_str!("../../hifi/artifacts/burn_curve.txt"));
+
+        assert_eq!(
+            BurnCurve::default_hifi_generated().burn_fraction_x10000,
+            generated.burn_fraction_x10000
+        );
+    }
+
+    fn parse_burn_curve(contents: &str) -> ExportedBurnCurveArtifact {
+        const EXPECTED_POINTS: usize = WIEBE_POINTS;
+
+        let values = contents
+            .lines()
+            .find_map(|line| line.strip_prefix("burn_fraction_x10000="))
+            .expect("burn fraction line should be present");
+
+        let mut parsed = [0_u16; EXPECTED_POINTS];
+        let mut count = 0_usize;
+
+        for value in values.split(',') {
+            assert!(
+                count < EXPECTED_POINTS,
+                "burn curve artifact has too many points"
+            );
+            parsed[count] = value
+                .trim()
+                .parse::<u16>()
+                .expect("burn curve artifact values should parse as u16");
+            count += 1;
+        }
+
+        assert_eq!(
+            count, EXPECTED_POINTS,
+            "burn curve artifact should be fixed size"
+        );
+        ExportedBurnCurveArtifact {
+            burn_fraction_x10000: parsed,
+        }
+    }
+
+    struct ExportedBurnCurveArtifact {
+        burn_fraction_x10000: [u16; WIEBE_POINTS],
     }
 }

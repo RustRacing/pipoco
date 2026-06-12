@@ -14,6 +14,8 @@ echo "[verify.sh] WARNING DENIAL IS ACTIVE — embedded build warnings will fail
 
 # Green checks for the currently verified slices of the workspace.
 cargo clippy -p ecu-core --all-targets --all-features -- -D warnings
+cargo clippy -p ecu-sim-hifi --all-targets -- -D warnings
+cargo test -p ecu-sim-hifi
 
 # STM32F4 checks (US-FM0287) — clippy with -D warnings on bins
 cargo clippy -p stm32f4-ecu --release --target thumbv7em-none-eabihf --bins -- -D warnings

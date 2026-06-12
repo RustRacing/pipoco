@@ -25,9 +25,11 @@ use ecu_sim_core::config::{
 };
 use ecu_sim_core::types::{Kelvin10, PressurePa};
 use ecu_sim_driver::{
-    bridge_output_transitions_to_core_frame, run_x86_runtime_tick, SimulatorReadinessEvidence,
-    SoftwareReadinessReport, X86RuntimeBoard, X86RuntimeTickResult,
+    bridge_output_transitions_to_core_frame, drive_hifi_runtime_board_tick, run_x86_runtime_tick,
+    SimulatorReadinessEvidence, SoftwareReadinessReport, X86HifiAdapterStepInput, X86RuntimeBoard,
+    X86RuntimeTickResult,
 };
+use ecu_sim_hifi::PlantConfig as HifiPlantConfig;
 
 fn synced_sensor_snapshot() -> ecu_board_api::SensorSnapshot {
     let authority = EngineTimeAuthority::new(
@@ -110,6 +112,12 @@ fn transition_batch<const N: usize>(
     batch
 }
 
+fn hifi_runtime_test_config() -> HifiPlantConfig {
+    let mut cfg = ecu_sim_hifi::default_plant_config();
+    cfg.combustion.spark_angle_rad = 15.0_f64.to_radians();
+    cfg
+}
+
 fn bridge_test_plant_config() -> core_plant::PlantConfig<6> {
     core_plant::PlantConfig {
         cylinder_count: 6,
@@ -183,7 +191,7 @@ fn bridge_test_plant_config() -> core_plant::PlantConfig<6> {
             pmax_target_at_mbt_deg10: 160,
             ca50_sensitivity_x1000: 3,
             pmax_sensitivity_x1000: 1,
-            burn_curve: BurnCurve::default_wiebe_like(),
+            burn_curve: BurnCurve::default_hifi_generated(),
         },
         valve_events: ValveEvents {
             ivo_deg_btdc_x10: 0,
@@ -933,6 +941,75 @@ fn force_safe_state_records_low_transition_for_already_high_output() {
         forced_low.at.get().saturating_sub(2_500),
         500,
         "safe-state low transition preserves observable pulse-width evidence"
+    );
+}
+
+#[test]
+fn hifi_runtime_tick_feeds_runtime_board_from_adapter_step() {
+    let mut board = X86RuntimeBoard::new();
+    board
+        .runtime_mut()
+        .configure_full_ecu(m50_runtime_output_profile(M50B25TU_MEGA_COMPAT));
+    board
+        .runtime_mut()
+        .configure_fuel_model(test_base_fuel_model());
+
+    let outputs = transition_batch([
+        transition(
+            EcuOutput::Injector(ChannelId::new(0)),
+            OutputLevel::High,
+            100,
+        ),
+        transition(
+            EcuOutput::Injector(ChannelId::new(0)),
+            OutputLevel::Low,
+            4_100,
+        ),
+        transition(
+            EcuOutput::Ignition(ChannelId::new(1)),
+            OutputLevel::High,
+            200,
+        ),
+        transition(
+            EcuOutput::Ignition(ChannelId::new(1)),
+            OutputLevel::Low,
+            1_700,
+        ),
+    ]);
+
+    let (step, runtime) = drive_hifi_runtime_board_tick::<4, 128>(
+        &mut board,
+        &hifi_runtime_test_config(),
+        &outputs,
+        X86HifiAdapterStepInput {
+            now_us: 10_000,
+            window_us: 2_000,
+            throttle_x1000: 500,
+            battery_mv: 12_800,
+            load_torque_nm_x100: 300,
+            injector_flow_kg_per_s: 0.02,
+            injector_deadtime_us: 700,
+            crank_ref: None,
+        },
+    )
+    .unwrap();
+
+    assert!(!step.trigger_edges.is_empty());
+    assert!(runtime.diagnostics.synced);
+    assert!(!runtime.trigger_edges.is_empty());
+    assert!(runtime.diagnostics.drained_trigger_edges > 0);
+    assert!(runtime.sensor_snapshot.rpm.get() > 0);
+    assert_eq!(
+        runtime.sensor_snapshot.rpm,
+        ecu_domain::Rpm::new(step.sensor_frame.rpm.get())
+    );
+    assert_eq!(
+        runtime.sensor_snapshot.map,
+        ecu_domain::Kpa10::new(step.sensor_frame.map_kpa10)
+    );
+    assert_eq!(
+        runtime.sensor_snapshot.throttle,
+        ecu_domain::Percent::new((step.sensor_frame.tps_x1000 / 10).min(100) as u8)
     );
 }
 

@@ -59,7 +59,7 @@ mod tests {
 
     #[test]
     fn burn_fraction_starts_at_zero_and_finishes_at_one() {
-        let curve = BurnCurve::default_wiebe_like();
+        let curve = BurnCurve::default_hifi_generated();
 
         assert_eq!(burn_fraction_at_elapsed_deg10(&curve, 0, 450), 0);
         assert_eq!(burn_fraction_at_elapsed_deg10(&curve, 450, 450), 10000);
@@ -68,7 +68,7 @@ mod tests {
 
     #[test]
     fn burn_fraction_is_monotonic_over_duration() {
-        let curve = BurnCurve::default_wiebe_like();
+        let curve = BurnCurve::default_hifi_generated();
         let mut previous = 0;
         let mut elapsed = 0;
         while elapsed <= 450 {
@@ -81,7 +81,7 @@ mod tests {
 
     #[test]
     fn ca50_is_inside_burn_duration() {
-        let curve = BurnCurve::default_wiebe_like();
+        let curve = BurnCurve::default_hifi_generated();
         let ca50 = crank_angle_after_tdc_for_burn_fraction(&curve, 5000, 450).unwrap();
 
         assert!(ca50.0 > 0);

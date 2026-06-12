@@ -1,14 +1,20 @@
 //! Headless driver integration tests.
 
+use ecu_board_api::{EcuOutput, OutputLevel, OutputTransition, OutputTransitionBatch};
+use ecu_domain::{ChannelId, Ticks};
 use ecu_sim_driver::ffi_client::{
     observability_from_snapshot_and_sensor_frame, sensor_frame_to_ffi, EcuFfiClient,
 };
 use ecu_sim_driver::{
-    run_cold_start_scenario, run_default_headless_smoke, run_default_headless_smoke_twice,
-    run_dfco_decel_scenario, run_headless_smoke, run_hot_restart_scenario,
-    run_sync_loss_recovery_scenario, DriverError, DriverObservability, DriverScenarioSignals,
-    DriverTraceKind, FixedDriverTrace, ScenarioConfig, ScenarioKind,
+    run_cold_start_scenario, run_cold_start_scenario_with_backend, run_default_headless_scenario,
+    run_default_headless_smoke, run_default_headless_smoke_twice, run_dfco_decel_scenario,
+    run_dfco_decel_scenario_with_backend, run_headless_smoke, run_hifi_adapter_step,
+    run_hot_restart_scenario, run_hot_restart_scenario_with_backend,
+    run_sync_loss_recovery_scenario, run_sync_loss_recovery_scenario_with_backend, DriverError,
+    DriverObservability, DriverScenarioSignals, DriverTraceKind, FixedDriverTrace, ScenarioBackend,
+    ScenarioConfig, ScenarioKind, X86HifiAdapterStepInput,
 };
+use ecu_sim_hifi::PlantConfig as HifiPlantConfig;
 
 fn final_trace_record(
     report: &ecu_sim_driver::DriverRunReport,
@@ -18,6 +24,47 @@ fn final_trace_record(
     } else {
         report.trace.get(report.trace.len() - 1)
     }
+}
+
+fn scenario_output_batch_since(
+    report: &ecu_sim_driver::DriverRunReport,
+    min_at_us: u32,
+) -> OutputTransitionBatch<256> {
+    let mut batch = OutputTransitionBatch::<256>::new();
+    for index in 0..report.trace.len() {
+        let Some(record) = report.trace.get(index) else {
+            continue;
+        };
+        if record.kind != DriverTraceKind::Output || record.status == 2 || record.at_us < min_at_us
+        {
+            continue;
+        }
+
+        let output = match record.output_kind {
+            0 => EcuOutput::Injector(ChannelId::new(record.channel)),
+            1 => EcuOutput::Ignition(ChannelId::new(record.channel)),
+            _ => continue,
+        };
+        let level = if record.high == 0 {
+            OutputLevel::Low
+        } else {
+            OutputLevel::High
+        };
+        batch
+            .push(OutputTransition::new(
+                output,
+                level,
+                Ticks::new(record.at_us),
+            ))
+            .unwrap();
+    }
+    batch
+}
+
+fn hifi_test_config() -> HifiPlantConfig {
+    let mut cfg = ecu_sim_hifi::default_plant_config();
+    cfg.combustion.spark_angle_rad = 15.0_f64.to_radians();
+    cfg
 }
 
 fn assert_final_snapshot_mirrors_report(report: &ecu_sim_driver::DriverRunReport) {
@@ -125,9 +172,42 @@ fn smoke_test_runs_to_completion() {
 }
 
 #[test]
+fn hifi_smoke_test_runs_to_completion() {
+    let result = run_default_headless_scenario(ScenarioBackend::Hifi);
+    assert!(
+        result.is_ok(),
+        "hifi smoke scenario should run: {:?}",
+        result
+    );
+}
+
+#[test]
+fn main_scenario_api_can_select_hifi_backend_explicitly() {
+    let report =
+        run_headless_smoke(ScenarioConfig::default().with_backend(ScenarioBackend::Hifi)).unwrap();
+    assert_eq!(report.ecu_snapshot.synced, 1);
+    assert!(
+        report.hifi_step.is_some(),
+        "hifi backend should populate hifi_step"
+    );
+}
+
+#[test]
 fn smoke_produces_synced_ecu() {
     let report = run_default_headless_smoke().unwrap();
     assert_eq!(report.ecu_snapshot.synced, 1, "ECU should be synced");
+}
+
+#[test]
+fn hifi_smoke_produces_synced_ecu_and_hifi_outputs() {
+    let report = run_default_headless_scenario(ScenarioBackend::Hifi).unwrap();
+    assert_eq!(report.ecu_snapshot.synced, 1, "ECU should be synced");
+    assert!(report.injection_outputs > 0);
+    assert!(report.ignition_outputs > 0);
+    let hifi_step = report.hifi_step.as_ref().expect("hifi step present");
+    assert!(hifi_step.sensor_frame.rpm.get() > 0);
+    assert!(hifi_step.sensor_frame.map_kpa10 > 0);
+    assert!(hifi_step.plant_output.brake_torque_nm.is_finite());
 }
 
 #[test]
@@ -164,6 +244,172 @@ fn smoke_produces_plant_combustion() {
 fn smoke_trace_records_are_deterministic() {
     let (r1, r2) = run_default_headless_smoke_twice().unwrap();
     assert_eq!(r1.trace, r2.trace, "trace records must match exactly");
+}
+
+#[test]
+fn smoke_outputs_drive_hifi_bridge_trigger_and_sensor_path() {
+    let report = run_default_headless_smoke().unwrap();
+    let now_us = report.ecu_snapshot.now_us;
+    let window_us = now_us.saturating_sub(1_000).max(500);
+    let batch = scenario_output_batch_since(&report, 0);
+    let throttle_x1000 = report
+        .observability
+        .freeze_frame
+        .tps_x100
+        .saturating_mul(10);
+
+    let adapted = run_hifi_adapter_step::<4, 256>(
+        &hifi_test_config(),
+        &batch,
+        X86HifiAdapterStepInput {
+            now_us,
+            window_us,
+            throttle_x1000,
+            battery_mv: report.observability.freeze_frame.vbatt_mv,
+            load_torque_nm_x100: 300,
+            injector_flow_kg_per_s: 0.02,
+            injector_deadtime_us: 700,
+            crank_ref: None,
+        },
+    )
+    .unwrap();
+    assert_eq!(adapted.bridge.diagnostics.open_high_count, 0);
+    assert!(adapted
+        .bridge
+        .plant_input
+        .cylinders
+        .iter()
+        .any(|command| command.fuel_mass_kg > 0.0));
+    assert!(adapted
+        .bridge
+        .plant_input
+        .cylinders
+        .iter()
+        .any(|command| command.dwell_s > 0.0));
+
+    assert!(!adapted.trigger_edges.is_empty());
+    assert!(adapted
+        .trigger_edges
+        .windows(2)
+        .all(|window| window[0].timestamp_us <= window[1].timestamp_us));
+    assert!(adapted.trigger_edges.iter().all(|edge| matches!(
+        edge.line,
+        ecu_sim_driver::SimTriggerLine::Crank | ecu_sim_driver::SimTriggerLine::Cam
+    )));
+    assert!(adapted.sensor_frame.rpm.get() > 0);
+    assert!(adapted.sensor_frame.map_kpa10 > 0);
+    assert!(adapted.sensor_frame.lambda_x1000 > 0);
+    assert!(adapted.plant_output.brake_torque_nm.is_finite());
+}
+
+#[test]
+fn dfco_suppression_keeps_hifi_bridge_fuel_free() {
+    let report = run_dfco_decel_scenario().unwrap();
+    let now_us = report.ecu_snapshot.now_us;
+    let window_us = 1_000;
+    let batch = scenario_output_batch_since(&report, now_us.saturating_sub(window_us));
+    let throttle_x1000 = report
+        .observability
+        .freeze_frame
+        .tps_x100
+        .saturating_mul(10);
+
+    let adapted = run_hifi_adapter_step::<4, 256>(
+        &hifi_test_config(),
+        &batch,
+        X86HifiAdapterStepInput {
+            now_us,
+            window_us,
+            throttle_x1000,
+            battery_mv: report.observability.freeze_frame.vbatt_mv,
+            load_torque_nm_x100: 1_200,
+            injector_flow_kg_per_s: 0.02,
+            injector_deadtime_us: 700,
+            crank_ref: None,
+        },
+    )
+    .unwrap();
+
+    assert!(
+        report.scenario_signals.dfco_suppressed_injection_outputs > 0,
+        "scenario must actually suppress injector outputs before the hifi bridge check"
+    );
+    assert!(adapted
+        .bridge
+        .plant_input
+        .cylinders
+        .iter()
+        .all(|command| command.fuel_mass_kg == 0.0));
+    assert!(adapted
+        .bridge
+        .plant_input
+        .cylinders
+        .iter()
+        .any(|command| command.dwell_s > 0.0));
+}
+
+#[test]
+fn cold_start_outputs_drive_hifi_bridge_with_sync_and_combustion_inputs() {
+    let report = run_cold_start_scenario().unwrap();
+    let now_us = report.ecu_snapshot.now_us;
+    let window_us = now_us.saturating_sub(1_000).max(500);
+    let batch = scenario_output_batch_since(&report, 0);
+    let throttle_x1000 = report
+        .observability
+        .freeze_frame
+        .tps_x100
+        .saturating_mul(10);
+
+    let adapted = run_hifi_adapter_step::<4, 256>(
+        &hifi_test_config(),
+        &batch,
+        X86HifiAdapterStepInput {
+            now_us,
+            window_us,
+            throttle_x1000,
+            battery_mv: report.observability.freeze_frame.vbatt_mv,
+            load_torque_nm_x100: 260,
+            injector_flow_kg_per_s: 0.02,
+            injector_deadtime_us: 700,
+            crank_ref: None,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(
+        report.scenario_signals,
+        DriverScenarioSignals {
+            cold_start_sync_acquired: 1,
+            ..Default::default()
+        }
+    );
+    assert_eq!(report.ecu_snapshot.synced, 1);
+    assert!(
+        adapted
+            .bridge
+            .plant_input
+            .cylinders
+            .iter()
+            .any(|command| command.fuel_mass_kg > 0.0),
+        "cold-start hifi bridge should carry injection mass"
+    );
+    assert!(
+        adapted
+            .bridge
+            .plant_input
+            .cylinders
+            .iter()
+            .any(|command| command.dwell_s > 0.0),
+        "cold-start hifi bridge should carry ignition dwell"
+    );
+    assert!(
+        !adapted.trigger_edges.is_empty(),
+        "cold-start hifi bridge should still synthesize trigger edges"
+    );
+    assert!(
+        adapted.sensor_frame.rpm.get() > 0,
+        "cold-start hifi bridge should quantize a running RPM signal"
+    );
 }
 
 #[test]
@@ -492,6 +738,25 @@ fn cold_start_scenario_acquires_sync_and_combusts() {
 }
 
 #[test]
+fn hifi_cold_start_scenario_acquires_sync_and_carries_combustion_inputs() {
+    let report = run_cold_start_scenario_with_backend(ScenarioBackend::Hifi).unwrap();
+    assert_eq!(
+        report.scenario_signals,
+        DriverScenarioSignals {
+            cold_start_sync_acquired: 1,
+            ..Default::default()
+        }
+    );
+    assert_eq!(report.ecu_snapshot.synced, 1);
+    assert!(report.injection_outputs > 0);
+    assert!(report.ignition_outputs > 0);
+    let hifi_step = report.hifi_step.as_ref().expect("hifi step present");
+    assert!(hifi_step.sensor_frame.rpm.get() > 0);
+    assert!(hifi_step.sensor_frame.map_kpa10 > 0);
+    assert!(hifi_step.plant_output.brake_torque_nm.is_finite());
+}
+
+#[test]
 fn hot_restart_scenario_resets_and_recovers_sync() {
     let report = run_hot_restart_scenario().unwrap();
     assert_eq!(
@@ -506,6 +771,24 @@ fn hot_restart_scenario_resets_and_recovers_sync() {
     assert!(report.total_outputs > 0);
     assert!(report.combustion_events > 0);
     assert_final_snapshot_mirrors_report(&report);
+}
+
+#[test]
+fn hifi_hot_restart_scenario_resets_and_recovers_sync() {
+    let report = run_hot_restart_scenario_with_backend(ScenarioBackend::Hifi).unwrap();
+    assert_eq!(
+        report.scenario_signals,
+        DriverScenarioSignals {
+            hot_restart_count: 1,
+            hot_restart_sync_recovered: 1,
+            ..Default::default()
+        }
+    );
+    assert_eq!(report.ecu_snapshot.synced, 1);
+    assert!(report.total_outputs > 0);
+    let hifi_step = report.hifi_step.as_ref().expect("hifi step present");
+    assert!(hifi_step.sensor_frame.rpm.get() > 0);
+    assert!(hifi_step.plant_output.brake_torque_nm.is_finite());
 }
 
 #[test]
@@ -526,6 +809,24 @@ fn dfco_decel_scenario_suppresses_injection_outputs_to_plant() {
 }
 
 #[test]
+fn hifi_dfco_decel_scenario_suppresses_injection_outputs_to_hifi() {
+    let report = run_dfco_decel_scenario_with_backend(ScenarioBackend::Hifi).unwrap();
+    assert!(report.scenario_signals.dfco_suppressed_injection_outputs > 0);
+    assert!(report.ignition_outputs > 0);
+    let hifi_step = report.hifi_step.as_ref().expect("hifi step present");
+    assert!(report
+        .hifi_step
+        .as_ref()
+        .expect("hifi step present")
+        .bridge
+        .plant_input
+        .cylinders
+        .iter()
+        .all(|command| command.fuel_mass_kg == 0.0));
+    assert!(hifi_step.sensor_frame.rpm.get() > 0);
+}
+
+#[test]
 fn sync_loss_recovery_scenario_detects_loss_and_recovers() {
     let report = run_sync_loss_recovery_scenario().unwrap();
     assert_eq!(
@@ -540,6 +841,25 @@ fn sync_loss_recovery_scenario_detects_loss_and_recovers() {
     assert_eq!(report.ecu_snapshot.synced, 1);
     assert!(report.total_outputs > 0);
     assert_final_snapshot_mirrors_report(&report);
+}
+
+#[test]
+fn hifi_sync_loss_recovery_scenario_detects_loss_and_recovers() {
+    let report = run_sync_loss_recovery_scenario_with_backend(ScenarioBackend::Hifi).unwrap();
+    assert_eq!(
+        report.scenario_signals,
+        DriverScenarioSignals {
+            sync_gap_injected: 1,
+            sync_loss_detected: 1,
+            sync_recovered: 1,
+            ..Default::default()
+        }
+    );
+    assert_eq!(report.ecu_snapshot.synced, 1);
+    assert!(report.total_outputs > 0);
+    let hifi_step = report.hifi_step.as_ref().expect("hifi step present");
+    assert!(hifi_step.sensor_frame.rpm.get() > 0);
+    assert!(hifi_step.plant_output.brake_torque_nm.is_finite());
 }
 
 #[test]
