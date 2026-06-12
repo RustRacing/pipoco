@@ -247,7 +247,7 @@ mod tests {
             let cos_theta = theta_rad.cos();
             let root = (rod_length_m * rod_length_m - a * a * sin_theta * sin_theta).sqrt();
             let displacement_m = a * (1.0 - cos_theta) + rod_length_m - root;
-            let piston_position_um = (displacement_m * 1_000_000.0).round() as f64;
+            let piston_position_um = (displacement_m * 1_000_000.0).round();
             let expected_volume_mm3 = clearance_mm3 + piston_area_mm2 * piston_position_um / 1000.0;
 
             let core_volume_mm3 = cylinder_volume_mm3(cfg, angle).0 as f64;

@@ -10,6 +10,18 @@ pub mod params;
 pub mod state;
 pub mod thermo;
 
+/// Supported host-facing hifi surface.
+///
+/// This is the intended integration boundary for repo callers. Lower-level
+/// `f64` physics types remain public for tests and host-side research helpers,
+/// but they are not the preferred contract surface for scenario/runtime wiring.
+pub mod contract {
+    pub use crate::{
+        advance_plant_step, default_plant_config, CylinderCommand, PlantConfig, PlantConfigError,
+        PlantStepInput, PlantStepOutput,
+    };
+}
+
 pub use crate::cylinder::{
     advance_plant_step, converge_open_system_cycles, run_fired_cycle, run_motored_cycle,
     run_motored_cycle_with_heat_loss, run_open_system_cycle,

@@ -35,7 +35,9 @@ pub use hifi_bridge::{
 pub use plant_bridge::X86PlantBridgeDiagnostics;
 pub use readiness::{SimulatorReadinessEvidence, SoftwareReadinessReport};
 pub use scenario::{
-    run_cold_start_scenario, run_cold_start_scenario_with_backend, run_default_headless_scenario,
+    default_hifi_scenario_config, hifi_scenario_calibrations, hifi_scenario_initial_rpm,
+    hifi_scenario_initial_temperature_k, hifi_scenario_step_frame, run_cold_start_scenario,
+    run_cold_start_scenario_with_backend, run_default_headless_scenario,
     run_default_headless_smoke, run_default_headless_smoke_twice, run_dfco_decel_scenario,
     run_dfco_decel_scenario_with_backend, run_headless_hifi_smoke, run_headless_smoke,
     run_hot_restart_scenario, run_hot_restart_scenario_with_backend,

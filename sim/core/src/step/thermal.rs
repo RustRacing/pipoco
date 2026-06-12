@@ -70,11 +70,7 @@ fn average_lambda<const CYL: usize>(combustion: &CombustionFrame<CYL>) -> u16 {
             count += 1;
         }
     }
-    if count == 0 {
-        1000
-    } else {
-        (sum / count) as u16
-    }
+    sum.checked_div(count).map_or(1000, |avg| avg as u16)
 }
 
 pub(super) fn observed_lambda<const CYL: usize>(

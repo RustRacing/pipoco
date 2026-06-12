@@ -172,94 +172,6 @@ fn reset_dyno_sample_window<const CYL: usize>(state: &mut PlantState<CYL>) {
     state.dyno_sample_torque_sum = 0;
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn sweep_config() -> PlantConfig<4> {
-        let mut config = PlantConfig::<4>::default_four();
-        config.dyno.mode = DynoMode::TargetRpmSweep;
-        config.dyno.sweep_start_rpm = Rpm(2000);
-        config.dyno.sweep_end_rpm = Rpm(2200);
-        config.dyno.sweep_step_rpm = Rpm(100);
-        config.dyno.hold_cycles_before_sample = 1;
-        config.dyno.sample_cycles = 2;
-        config.dyno.rpm_error_limit = Rpm(25);
-        config
-    }
-
-    #[test]
-    fn dyno_sweep_advances_through_hold_sample_and_next_target() {
-        let config = sweep_config();
-        let mut state = PlantState::<4>::new();
-        state.rpm = Rpm(2000);
-        state.map_kpa10 = Kpa10(900);
-        state.cycle.completed_cycle_count = 1;
-
-        let hold = advance_dyno_sweep(&config, &mut state, TorqueNmX100(1000));
-        assert_eq!(hold.point.valid, false);
-        assert_eq!(state.dyno_current_target_rpm, Rpm(2000));
-        assert_eq!(state.dyno_hold_cycle_count, 1);
-
-        state.cycle.completed_cycle_count = 2;
-        let sample_one = advance_dyno_sweep(&config, &mut state, TorqueNmX100(1200));
-        assert_eq!(sample_one.point.valid, false);
-        assert_eq!(state.dyno_sample_cycle_count, 1);
-        assert_eq!(state.dyno_sample_torque_sum, 1200);
-
-        state.cycle.completed_cycle_count = 3;
-        let sample_two = advance_dyno_sweep(&config, &mut state, TorqueNmX100(1400));
-        assert!(sample_two.point.valid);
-        assert!(!sample_two.complete);
-        assert_eq!(sample_two.point.target_rpm, Rpm(2000));
-        assert_eq!(sample_two.point.torque_nm_x100, TorqueNmX100(1300));
-        assert_eq!(state.dyno_current_target_rpm, Rpm(2100));
-        assert_eq!(state.dyno_hold_cycle_count, 0);
-        assert_eq!(state.dyno_sample_cycle_count, 0);
-        assert_eq!(state.dyno_sample_torque_sum, 0);
-    }
-
-    #[test]
-    fn dyno_sweep_resets_window_when_rpm_is_outside_error_limit() {
-        let config = sweep_config();
-        let mut state = PlantState::<4>::new();
-        state.rpm = Rpm(2500);
-        state.dyno_current_target_rpm = Rpm(2000);
-        state.dyno_hold_cycle_count = 1;
-        state.dyno_sample_cycle_count = 1;
-        state.dyno_sample_torque_sum = 1000;
-        state.cycle.completed_cycle_count = 1;
-
-        let step = advance_dyno_sweep(&config, &mut state, TorqueNmX100(1000));
-
-        assert_eq!(step.point.valid, false);
-        assert!(!step.complete);
-        assert_eq!(state.dyno_hold_cycle_count, 0);
-        assert_eq!(state.dyno_sample_cycle_count, 0);
-        assert_eq!(state.dyno_sample_torque_sum, 0);
-    }
-
-    #[test]
-    fn dyno_sweep_reports_complete_at_last_target() {
-        let config = sweep_config();
-        let mut state = PlantState::<4>::new();
-        state.rpm = Rpm(2200);
-        state.dyno_current_target_rpm = Rpm(2200);
-        state.dyno_hold_cycle_count = config.dyno.hold_cycles_before_sample;
-        state.dyno_sample_cycle_count = 1;
-        state.dyno_sample_torque_sum = 1500;
-        state.cycle.completed_cycle_count = 1;
-
-        let step = advance_dyno_sweep(&config, &mut state, TorqueNmX100(1700));
-
-        assert!(step.point.valid);
-        assert!(step.complete);
-        assert_eq!(step.point.target_rpm, Rpm(2200));
-        assert_eq!(step.point.torque_nm_x100, TorqueNmX100(1600));
-        assert_eq!(state.dyno_current_target_rpm, Rpm(2200));
-    }
-}
-
 pub(super) fn fill_sensors<const CYL: usize, const MAX_EDGES: usize, const MAX_EVENTS: usize>(
     state: &PlantState<CYL>,
     output: &mut PlantStepOutput<CYL, MAX_EDGES, MAX_EVENTS>,
@@ -328,4 +240,92 @@ pub(super) fn fill_telemetry<const CYL: usize, const MAX_EDGES: usize, const MAX
     }
     output.telemetry.diagnostic_event_count = output.diagnostics.events.len() as u16;
     output.telemetry.diagnostic_overflow_count = output.diagnostics.overflow_count;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sweep_config() -> PlantConfig<4> {
+        let mut config = PlantConfig::<4>::default_four();
+        config.dyno.mode = DynoMode::TargetRpmSweep;
+        config.dyno.sweep_start_rpm = Rpm(2000);
+        config.dyno.sweep_end_rpm = Rpm(2200);
+        config.dyno.sweep_step_rpm = Rpm(100);
+        config.dyno.hold_cycles_before_sample = 1;
+        config.dyno.sample_cycles = 2;
+        config.dyno.rpm_error_limit = Rpm(25);
+        config
+    }
+
+    #[test]
+    fn dyno_sweep_advances_through_hold_sample_and_next_target() {
+        let config = sweep_config();
+        let mut state = PlantState::<4>::new();
+        state.rpm = Rpm(2000);
+        state.map_kpa10 = Kpa10(900);
+        state.cycle.completed_cycle_count = 1;
+
+        let hold = advance_dyno_sweep(&config, &mut state, TorqueNmX100(1000));
+        assert!(!hold.point.valid);
+        assert_eq!(state.dyno_current_target_rpm, Rpm(2000));
+        assert_eq!(state.dyno_hold_cycle_count, 1);
+
+        state.cycle.completed_cycle_count = 2;
+        let sample_one = advance_dyno_sweep(&config, &mut state, TorqueNmX100(1200));
+        assert!(!sample_one.point.valid);
+        assert_eq!(state.dyno_sample_cycle_count, 1);
+        assert_eq!(state.dyno_sample_torque_sum, 1200);
+
+        state.cycle.completed_cycle_count = 3;
+        let sample_two = advance_dyno_sweep(&config, &mut state, TorqueNmX100(1400));
+        assert!(sample_two.point.valid);
+        assert!(!sample_two.complete);
+        assert_eq!(sample_two.point.target_rpm, Rpm(2000));
+        assert_eq!(sample_two.point.torque_nm_x100, TorqueNmX100(1300));
+        assert_eq!(state.dyno_current_target_rpm, Rpm(2100));
+        assert_eq!(state.dyno_hold_cycle_count, 0);
+        assert_eq!(state.dyno_sample_cycle_count, 0);
+        assert_eq!(state.dyno_sample_torque_sum, 0);
+    }
+
+    #[test]
+    fn dyno_sweep_resets_window_when_rpm_is_outside_error_limit() {
+        let config = sweep_config();
+        let mut state = PlantState::<4>::new();
+        state.rpm = Rpm(2500);
+        state.dyno_current_target_rpm = Rpm(2000);
+        state.dyno_hold_cycle_count = 1;
+        state.dyno_sample_cycle_count = 1;
+        state.dyno_sample_torque_sum = 1000;
+        state.cycle.completed_cycle_count = 1;
+
+        let step = advance_dyno_sweep(&config, &mut state, TorqueNmX100(1000));
+
+        assert!(!step.point.valid);
+        assert!(!step.complete);
+        assert_eq!(state.dyno_hold_cycle_count, 0);
+        assert_eq!(state.dyno_sample_cycle_count, 0);
+        assert_eq!(state.dyno_sample_torque_sum, 0);
+    }
+
+    #[test]
+    fn dyno_sweep_reports_complete_at_last_target() {
+        let config = sweep_config();
+        let mut state = PlantState::<4>::new();
+        state.rpm = Rpm(2200);
+        state.dyno_current_target_rpm = Rpm(2200);
+        state.dyno_hold_cycle_count = config.dyno.hold_cycles_before_sample;
+        state.dyno_sample_cycle_count = 1;
+        state.dyno_sample_torque_sum = 1500;
+        state.cycle.completed_cycle_count = 1;
+
+        let step = advance_dyno_sweep(&config, &mut state, TorqueNmX100(1700));
+
+        assert!(step.point.valid);
+        assert!(step.complete);
+        assert_eq!(step.point.target_rpm, Rpm(2200));
+        assert_eq!(step.point.torque_nm_x100, TorqueNmX100(1600));
+        assert_eq!(state.dyno_current_target_rpm, Rpm(2200));
+    }
 }

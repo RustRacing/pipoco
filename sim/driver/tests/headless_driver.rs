@@ -472,7 +472,7 @@ fn scenario_config_default_values() {
     assert_eq!(cfg.tick_period_us, 500);
     assert_eq!(cfg.steps, 24);
     assert_eq!(cfg.starter_steps, 8);
-    assert_eq!(cfg.throttle_x100, 1_200);
+    assert_eq!(cfg.throttle_x1000, 1_000);
     assert_eq!(cfg.load_torque_x100, 300);
     assert_eq!(cfg.max_events_per_step, 16);
     assert!(!cfg.suppress_injection_to_plant);

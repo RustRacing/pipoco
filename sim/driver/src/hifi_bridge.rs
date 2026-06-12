@@ -92,29 +92,34 @@ pub enum X86HifiLoopTickError<E> {
     Plant(PlantConfigError),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct X86HifiBridgeParams<'a> {
+    pub now_us: u32,
+    pub window_us: u32,
+    pub throttle_x1000: u16,
+    pub load_torque_nm_x100: i32,
+    pub injector_flow_kg_per_s: f64,
+    pub injector_deadtime_us: u32,
+    pub crank_ref: Option<X86HifiCrankReference>,
+    pub cylinder_phase_offsets: &'a [f64],
+}
+
 pub fn bridge_output_transitions_to_hifi_input<const CYL: usize, const N: usize>(
     transitions: &OutputTransitionBatch<N>,
-    now_us: u32,
-    window_us: u32,
-    throttle_x1000: u16,
-    load_torque_nm_x100: i32,
-    injector_flow_kg_per_s: f64,
-    injector_deadtime_us: u32,
-    crank_ref: Option<X86HifiCrankReference>,
-    cylinder_phase_offsets: &[f64],
+    params: X86HifiBridgeParams<'_>,
 ) -> X86HifiPlantBridgeFrame {
-    let (crank_angle_rad, rpm) = match crank_ref {
+    let (crank_angle_rad, rpm) = match params.crank_ref {
         Some(reference) => (reference.step_end_crank_angle_rad, reference.rpm),
         None => (0.0, 250.0),
     };
     let mut frame = X86HifiPlantBridgeFrame {
         plant_input: PlantStepInput {
-            now_s: now_us as f64 / 1_000_000.0,
-            window_s: window_us as f64 / 1_000_000.0,
+            now_s: params.now_us as f64 / 1_000_000.0,
+            window_s: params.window_us as f64 / 1_000_000.0,
             crank_angle_rad,
             rpm,
-            throttle_position: (f64::from(throttle_x1000) / 1000.0).clamp(0.0, 1.0),
-            load_torque_nm: f64::from(load_torque_nm_x100) / 100.0,
+            throttle_position: (f64::from(params.throttle_x1000) / 1000.0).clamp(0.0, 1.0),
+            load_torque_nm: f64::from(params.load_torque_nm_x100) / 100.0,
             cylinders: vec![
                 CylinderCommand {
                     fuel_mass_kg: 0.0,
@@ -166,23 +171,28 @@ pub fn bridge_output_transitions_to_hifi_input<const CYL: usize, const N: usize>
                         if width_us == 0 {
                             frame.diagnostics.short_pulse_width_count += 1;
                         }
-                        let effective_open_us = width_us.saturating_sub(injector_deadtime_us);
-                        command.fuel_mass_kg +=
-                            injector_flow_kg_per_s * (effective_open_us as f64 / 1_000_000.0);
+                        let effective_open_us =
+                            width_us.saturating_sub(params.injector_deadtime_us);
+                        command.fuel_mass_kg += params.injector_flow_kg_per_s
+                            * (effective_open_us as f64 / 1_000_000.0);
                     }
                     OutputChannelKind::Ignition => {
                         if width_us == 0 {
                             frame.diagnostics.short_dwell_count += 1;
                         }
-                        let spark_angle_rad = crank_ref
+                        let spark_angle_rad = params
+                            .crank_ref
                             .and_then(|reference| {
                                 crank_angle_at_us(reference, end_us).and_then(|fire_angle_rad| {
-                                    cylinder_phase_offsets.get(channel).map(|phase_offset| {
-                                        ignition_advance_from_fire(
-                                            fire_angle_rad,
-                                            firing_tdc_for_phase(*phase_offset),
-                                        )
-                                    })
+                                    params
+                                        .cylinder_phase_offsets
+                                        .get(channel)
+                                        .map(|phase_offset| {
+                                            ignition_advance_from_fire(
+                                                fire_angle_rad,
+                                                firing_tdc_for_phase(*phase_offset),
+                                            )
+                                        })
                                 })
                             })
                             .unwrap_or(0.0);
@@ -274,18 +284,20 @@ pub fn run_hifi_adapter_step<const CYL: usize, const N: usize>(
 ) -> Result<X86HifiAdapterStep, PlantConfigError> {
     let bridge = bridge_output_transitions_to_hifi_input::<CYL, N>(
         transitions,
-        input.now_us,
-        input.window_us,
-        input.throttle_x1000,
-        input.load_torque_nm_x100,
-        input.injector_flow_kg_per_s,
-        input.injector_deadtime_us,
-        input.crank_ref,
-        &config
-            .cylinders
-            .iter()
-            .map(|cylinder| cylinder.phase_offset_rad)
-            .collect::<Vec<_>>(),
+        X86HifiBridgeParams {
+            now_us: input.now_us,
+            window_us: input.window_us,
+            throttle_x1000: input.throttle_x1000,
+            load_torque_nm_x100: input.load_torque_nm_x100,
+            injector_flow_kg_per_s: input.injector_flow_kg_per_s,
+            injector_deadtime_us: input.injector_deadtime_us,
+            crank_ref: input.crank_ref,
+            cylinder_phase_offsets: &config
+                .cylinders
+                .iter()
+                .map(|cylinder| cylinder.phase_offset_rad)
+                .collect::<Vec<_>>(),
+        },
     );
     let plant_output = ecu_sim_hifi::advance_plant_step(config, &bridge.plant_input)?;
     let trigger_edges = synthesize_hifi_trigger_edges(
@@ -773,14 +785,16 @@ mod tests {
 
         let bridged = bridge_output_transitions_to_hifi_input::<2, 128>(
             &batch,
-            10_000,
-            20_000,
-            500,
-            2_500,
-            0.02,
-            500,
-            None,
-            &[0.0, core::f64::consts::PI],
+            X86HifiBridgeParams {
+                now_us: 10_000,
+                window_us: 20_000,
+                throttle_x1000: 500,
+                load_torque_nm_x100: 2_500,
+                injector_flow_kg_per_s: 0.02,
+                injector_deadtime_us: 500,
+                crank_ref: None,
+                cylinder_phase_offsets: &[0.0, core::f64::consts::PI],
+            },
         );
 
         assert!(bridged.diagnostics.is_clean());
@@ -814,14 +828,16 @@ mod tests {
 
         let bridged = bridge_output_transitions_to_hifi_input::<2, 128>(
             &batch,
-            0,
-            10_000,
-            0,
-            0,
-            0.02,
-            0,
-            None,
-            &[0.0, core::f64::consts::PI],
+            X86HifiBridgeParams {
+                now_us: 0,
+                window_us: 10_000,
+                throttle_x1000: 0,
+                load_torque_nm_x100: 0,
+                injector_flow_kg_per_s: 0.02,
+                injector_deadtime_us: 0,
+                crank_ref: None,
+                cylinder_phase_offsets: &[0.0, core::f64::consts::PI],
+            },
         );
 
         assert_eq!(bridged.diagnostics.duplicate_high_count, 1);
@@ -856,14 +872,16 @@ mod tests {
 
         let bridged = bridge_output_transitions_to_hifi_input::<1, 128>(
             &batch,
-            0,
-            10_000,
-            0,
-            0,
-            0.01,
-            0,
-            None,
-            &[0.0],
+            X86HifiBridgeParams {
+                now_us: 0,
+                window_us: 10_000,
+                throttle_x1000: 0,
+                load_torque_nm_x100: 0,
+                injector_flow_kg_per_s: 0.01,
+                injector_deadtime_us: 0,
+                crank_ref: None,
+                cylinder_phase_offsets: &[0.0],
+            },
         );
 
         assert!((bridged.plant_input.cylinders[0].fuel_mass_kg - 0.00003).abs() < 1.0e-12);
@@ -888,19 +906,21 @@ mod tests {
 
         let bridged = bridge_output_transitions_to_hifi_input::<1, 128>(
             &batch,
-            10_000,
-            10_000,
-            500,
-            0,
-            0.0,
-            0,
-            Some(X86HifiCrankReference {
-                step_start_us: 0,
-                step_end_us: 10_000,
-                step_end_crank_angle_rad: 20.0_f64.to_radians(),
-                rpm: 3_000.0,
-            }),
-            &[firing_tdc_rad],
+            X86HifiBridgeParams {
+                now_us: 10_000,
+                window_us: 10_000,
+                throttle_x1000: 500,
+                load_torque_nm_x100: 0,
+                injector_flow_kg_per_s: 0.0,
+                injector_deadtime_us: 0,
+                crank_ref: Some(X86HifiCrankReference {
+                    step_start_us: 0,
+                    step_end_us: 10_000,
+                    step_end_crank_angle_rad: 20.0_f64.to_radians(),
+                    rpm: 3_000.0,
+                }),
+                cylinder_phase_offsets: &[firing_tdc_rad],
+            },
         );
 
         assert!(

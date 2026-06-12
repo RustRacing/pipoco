@@ -13,6 +13,11 @@ Host-only `f64` high-fidelity plant crate for the ADR 0009 execution plan.
   boundaries.
 - `ecu-sim-hifi` must not depend on `sim/driver`.
 - Quantization belongs at adapter/export boundaries only.
+- The supported repo-facing integration surface is the plant-step contract:
+  `default_plant_config`, `PlantConfig`, `PlantStepInput`, `PlantStepOutput`,
+  `CylinderCommand`, and `advance_plant_step`.
+- Lower-level `f64` model/config/result types remain public for host-side tests
+  and research helpers, but they are not the intended scenario/runtime contract.
 
 ## Scope
 

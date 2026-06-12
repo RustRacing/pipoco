@@ -6,7 +6,6 @@ use ecu_io::OutputTransitionKind;
 use ecu_sim::plant::{
     ClosedLoopPlant, FixedPlantProfile, InjectorModel, PlantControls, PlantLimits,
 };
-use ecu_sim_hifi::PlantConfig as HifiPlantConfig;
 
 use super::config::{
     default_smoke_init_cfg, DriverRunReport, DriverScenarioSignals, HifiDriverRunReport,
@@ -70,7 +69,6 @@ fn run_headless_smoke_harness(config: ScenarioConfig) -> Result<DriverRunReport,
     let mut last_sensor_frame =
         plant.sensor_frame(Micros::new(config.start_us), PlantControls::idle());
     let restart_step = scenario_restart_step(config.kind);
-    let dfco_decel_step = scenario_dfco_decel_step(config.kind);
     let sync_loss_gap_step = scenario_sync_loss_gap_step(config.kind);
     let sync_loss_gap_us = scenario_sync_loss_gap_us(config.kind);
     let mut hot_restart_done = false;
@@ -159,14 +157,14 @@ fn run_headless_smoke_harness(config: ScenarioConfig) -> Result<DriverRunReport,
         }
 
         // Build controls
-        let mut throttle_x100 = config.throttle_x100;
+        let mut throttle_x100 = config.throttle_x1000 / 10;
         let mut load_torque_x100 = config.load_torque_x100;
         let starter_on = scenario_starter_on(config, step_index, restart_step);
         let mut clt_c10 = scenario_initial_clt_c10(config.kind);
         let mut iat_c10 = scenario_initial_iat_c10(config.kind);
 
         if config.kind == ScenarioKind::DfcoDecel {
-            if let Some(decel_step) = dfco_decel_step {
+            if let Some(decel_step) = scenario_dfco_decel_step(config.kind) {
                 if step_index >= decel_step {
                     dfco_decel_started = true;
                     throttle_x100 = 0;
@@ -627,7 +625,6 @@ pub fn run_headless_hifi_smoke(config: ScenarioConfig) -> Result<HifiDriverRunRe
     let mut crank_edges_seen: u32 = 0;
     let mut cam_edge_emitted = false;
     let restart_step = scenario_restart_step(config.kind);
-    let dfco_decel_step = scenario_dfco_decel_step(config.kind);
     let sync_loss_gap_step = scenario_sync_loss_gap_step(config.kind);
     let sync_loss_gap_us = scenario_sync_loss_gap_us(config.kind);
     let mut hot_restart_done = false;
@@ -635,10 +632,9 @@ pub fn run_headless_hifi_smoke(config: ScenarioConfig) -> Result<HifiDriverRunRe
     let mut sync_loss_observed = false;
     let mut sync_recovered = false;
     let mut sync_loss_time_offset_us: u32 = 0;
-    let mut dfco_decel_started = false;
     let mut last_sensor_frame = initial_hifi_sensor_frame(config.start_us, config.kind);
     let mut last_hifi_step = initial_hifi_adapter_step(config.start_us, config.kind);
-    let hifi_config = default_hifi_scenario_config();
+    let hifi_config = super::default_hifi_scenario_config();
 
     trace.push(crate::trace::DriverTraceRecord {
         at_us: config.start_us,
@@ -716,40 +712,12 @@ pub fn run_headless_hifi_smoke(config: ScenarioConfig) -> Result<HifiDriverRunRe
             }
         }
 
-        let mut throttle_x100 = config.throttle_x100;
-        let mut load_torque_x100 = config.load_torque_x100;
         let _starter_on = scenario_starter_on(config, step_index, restart_step);
-        let mut clt_c10 = scenario_initial_clt_c10(config.kind);
-        let mut iat_c10 = scenario_initial_iat_c10(config.kind);
-
-        if config.kind == ScenarioKind::DfcoDecel {
-            if let Some(decel_step) = dfco_decel_step {
-                if step_index >= decel_step {
-                    dfco_decel_started = true;
-                    throttle_x100 = 0;
-                    load_torque_x100 = 120;
-                }
-            }
-            if dfco_decel_started {
-                clt_c10 = 850;
-                iat_c10 = 320;
-            }
-        }
-
-        if config.kind == ScenarioKind::ColdStart {
-            clt_c10 = -120;
-            iat_c10 = -90;
-        }
-
-        if config.kind == ScenarioKind::HotRestart {
-            clt_c10 = 880;
-            iat_c10 = 600;
-        }
-
-        if config.kind == ScenarioKind::SyncLossRecovery {
-            clt_c10 = 780;
-            iat_c10 = 280;
-        }
+        let frame = super::hifi_scenario_step_frame(config, step_index);
+        let throttle_x100 = frame.throttle_x1000 / 10;
+        let load_torque_x100 = frame.load_torque_x100;
+        let clt_c10 = frame.clt_c10;
+        let iat_c10 = frame.iat_c10;
 
         let mut ecu_sensor_frame = last_sensor_frame;
         ecu_sensor_frame.at_us = Micros::new(now_us);
@@ -936,7 +904,7 @@ pub fn run_headless_hifi_smoke(config: ScenarioConfig) -> Result<HifiDriverRunRe
             }
             total_outputs = total_outputs.saturating_add(1);
             let suppress_to_plant = if config.kind == ScenarioKind::DfcoDecel
-                && dfco_decel_started
+                && throttle_x100 == 0
                 && matches!(transition.kind, OutputTransitionKind::Injector)
             {
                 true
@@ -1130,10 +1098,6 @@ pub fn run_headless_hifi_smoke(config: ScenarioConfig) -> Result<HifiDriverRunRe
         combustion_events,
         pending_overflow_count: pending_queue.pending_overflow(),
     })
-}
-
-fn default_hifi_scenario_config() -> HifiPlantConfig {
-    ecu_sim_hifi::default_plant_config()
 }
 
 fn initial_hifi_sensor_frame(start_us: u32, kind: ScenarioKind) -> ecu_io::SensorFrame {

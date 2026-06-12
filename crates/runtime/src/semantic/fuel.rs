@@ -17,10 +17,9 @@ pub(super) const fn clamp_u16_s(value: u16, lo: u16, hi: u16) -> u16 {
 
 #[inline]
 const fn mul_div_floor_u64(num: u64, mul: u64, div: u64) -> u64 {
-    if div == 0 {
-        0
-    } else {
-        (num * mul) / div
+    match (num * mul).checked_div(div) {
+        Some(value) => value,
+        None => 0,
     }
 }
 

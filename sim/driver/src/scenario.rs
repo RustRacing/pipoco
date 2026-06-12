@@ -5,8 +5,9 @@ mod execution;
 mod output;
 
 pub use config::{
-    DriverRunReport, DriverScenarioSignals, HifiDriverRunReport, ScenarioBackend, ScenarioConfig,
-    ScenarioKind,
+    default_hifi_scenario_config, hifi_scenario_calibrations, hifi_scenario_initial_rpm,
+    hifi_scenario_initial_temperature_k, hifi_scenario_step_frame, DriverRunReport,
+    DriverScenarioSignals, HifiDriverRunReport, ScenarioBackend, ScenarioConfig, ScenarioKind,
 };
 pub use execution::{
     run_cold_start_scenario, run_cold_start_scenario_with_backend, run_default_headless_scenario,

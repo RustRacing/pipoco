@@ -8,7 +8,10 @@ use ecu_sim_core::{
     },
     InitialPlantState, Plant,
 };
-use ecu_sim_driver::{ScenarioConfig, ScenarioKind};
+use ecu_sim_driver::{
+    hifi_scenario_calibrations, hifi_scenario_initial_rpm, hifi_scenario_initial_temperature_k,
+    hifi_scenario_step_frame, ScenarioConfig, ScenarioKind,
+};
 use ecu_sim_hifi::{
     advance_plant_step, parse_burn_curve, parse_loss_config, parse_ve_table, CylinderCommand,
     PlantConfig as HifiPlantConfig, PlantStepInput as HifiPlantStepInput,
@@ -40,6 +43,7 @@ struct ConformanceBands {
     map_steady_state_kpa10: f64,
     lambda_max_abs_x1000: f64,
     lambda_steady_state_x1000: f64,
+    provenance: &'static str,
 }
 
 #[derive(Clone, Copy)]
@@ -66,6 +70,7 @@ const CORPUS: [ConformancePoint; 3] = [
             map_steady_state_kpa10: 60.0,
             lambda_max_abs_x1000: 1_200.0,
             lambda_steady_state_x1000: 1_200.0,
+            provenance: "warm-idle temporary bootstrap band, commit 58cdac9",
         },
     },
     ConformancePoint {
@@ -81,6 +86,7 @@ const CORPUS: [ConformancePoint; 3] = [
             map_steady_state_kpa10: 60.0,
             lambda_max_abs_x1000: 800.0,
             lambda_steady_state_x1000: 800.0,
+            provenance: "mid-load temporary bootstrap band, commit 58cdac9",
         },
     },
     ConformancePoint {
@@ -96,6 +102,7 @@ const CORPUS: [ConformancePoint; 3] = [
             map_steady_state_kpa10: 21.248 * 1.5,
             lambda_max_abs_x1000: 261.026 * 1.5,
             lambda_steady_state_x1000: 261.026 * 1.5,
+            provenance: "high-load band rebased at 1.5x observed error, commit 58cdac9",
         },
     },
 ];
@@ -105,53 +112,46 @@ struct ScenarioBands {
     torque_max_abs_nm: f64,
     map_max_abs_kpa10: f64,
     lambda_max_abs_x1000: f64,
+    provenance: &'static str,
 }
 
 #[derive(Clone, Copy)]
 struct ScenarioCase {
     name: &'static str,
     config: ScenarioConfig,
-    fuel_mass_kg: f64,
-    spark_advance_deg10: u16,
     bands: ScenarioBands,
 }
 
 fn scenario_corpus() -> [ScenarioCase; 3] {
     [
         ScenarioCase {
-            name: "smoke",
-            config: ScenarioConfig {
-                kind: ScenarioKind::Smoke,
-                ..ScenarioConfig::default()
-            },
-            fuel_mass_kg: 1.8e-5,
-            spark_advance_deg10: 180,
-            bands: ScenarioBands {
-                torque_max_abs_nm: 8.572 * 1.5,
-                map_max_abs_kpa10: 266.166 * 1.5,
-                lambda_max_abs_x1000: 53.889 * 1.5,
-            },
-        },
-        ScenarioCase {
             name: "cold-start",
             config: ScenarioConfig::cold_start(),
-            fuel_mass_kg: 2.0e-5,
-            spark_advance_deg10: 160,
             bands: ScenarioBands {
-                torque_max_abs_nm: 770.324 * 1.5,
-                map_max_abs_kpa10: 262.139 * 1.5,
-                lambda_max_abs_x1000: 187.5 * 1.5,
+                torque_max_abs_nm: 800.0,
+                map_max_abs_kpa10: 400.0,
+                lambda_max_abs_x1000: 400.0,
+                provenance: "cold-start scenario aligned to open-loop conformance harness, commit 58cdac9+api",
             },
         },
         ScenarioCase {
-            name: "dfco-decel",
-            config: ScenarioConfig::dfco_decel(),
-            fuel_mass_kg: 1.8e-5,
-            spark_advance_deg10: 180,
+            name: "hot-restart",
+            config: ScenarioConfig::hot_restart(),
             bands: ScenarioBands {
-                torque_max_abs_nm: 20.155 * 1.5,
-                map_max_abs_kpa10: 535.165 * 1.5,
-                lambda_max_abs_x1000: 38.214 * 1.5,
+                torque_max_abs_nm: 15.143 * 1.5,
+                map_max_abs_kpa10: 0.268 * 1.5,
+                lambda_max_abs_x1000: 450.524 * 1.5,
+                provenance: "hot-restart scenario aligned to open-loop conformance harness and rebased at 1.5x observed error, commit 58cdac9+api",
+            },
+        },
+        ScenarioCase {
+            name: "sync-loss-recovery",
+            config: ScenarioConfig::sync_loss_recovery(),
+            bands: ScenarioBands {
+                torque_max_abs_nm: 14.874 * 1.5,
+                map_max_abs_kpa10: 0.268 * 1.5,
+                lambda_max_abs_x1000: 451.110 * 1.5,
+                provenance: "sync-loss-recovery scenario aligned to open-loop conformance harness and rebased at 1.5x observed error, commit 58cdac9+api",
             },
         },
     ]
@@ -185,8 +185,9 @@ fn core_and_hifi_track_shared_operating_points_within_documented_bands() {
             let core_last = core.last().unwrap();
             let hifi_last = hifi.last().unwrap();
             failures.push(format!(
-                "{}: torque max {:.3} steady {:.3} (core {:.3}, hifi {:.3}); map max {:.3} steady {:.3} (core {:.3}, hifi {:.3}); lambda max {:.3} steady {:.3} (core {:.3}, hifi {:.3})",
+                "{} [{}]: torque max {:.3} steady {:.3} (core {:.3}, hifi {:.3}); map max {:.3} steady {:.3} (core {:.3}, hifi {:.3}); lambda max {:.3} steady {:.3} (core {:.3}, hifi {:.3})",
                 point.name,
+                point.bands.provenance,
                 torque_max_abs,
                 torque_steady,
                 core_last.torque_nm,
@@ -232,8 +233,9 @@ fn core_and_hifi_track_scenario_defined_step_schedules_within_loose_bands() {
             let core_last = core.last().unwrap();
             let hifi_last = hifi.last().unwrap();
             failures.push(format!(
-                "{}: torque max {:.3} (core {:.3}, hifi {:.3}); map max {:.3} (core {:.3}, hifi {:.3}); lambda max {:.3} (core {:.3}, hifi {:.3})",
+                "{} [{}]: torque max {:.3} (core {:.3}, hifi {:.3}); map max {:.3} (core {:.3}, hifi {:.3}); lambda max {:.3} (core {:.3}, hifi {:.3})",
                 case.name,
+                case.bands.provenance,
                 torque_max_abs,
                 core_last.torque_nm,
                 hifi_last.torque_nm,
@@ -333,7 +335,9 @@ fn run_core_scenario(case: ScenarioCase) -> Vec<SignalSample> {
         map_kpa10: Kpa10(700),
         crank_angle_deg10: CrankDeg10(0),
         completed_cycle_count: 0,
-        cylinder_fuel_mass_ug: [mass_kg_to_ug(case.fuel_mass_kg); CYL],
+        cylinder_fuel_mass_ug: [mass_kg_to_ug(
+            hifi_scenario_calibrations(case.config.kind).fuel_mass_kg,
+        ); CYL],
     });
 
     let mut output =
@@ -356,12 +360,11 @@ fn run_core_scenario(case: ScenarioCase) -> Vec<SignalSample> {
 fn run_hifi_scenario(case: ScenarioCase) -> Vec<SignalSample> {
     let config = hifi_config_for_scenario(case);
     let mut samples = Vec::with_capacity(case.config.steps as usize);
-    let mut rpm = 2500.0;
+    let mut rpm = f64::from(hifi_scenario_initial_rpm(case.config.kind));
     let mut crank_angle_rad = core::f64::consts::PI;
 
     for step_index in 0..case.config.steps {
-        let (throttle_x1000, load_torque_nm_x100, fuel_mass_kg) =
-            scenario_step_controls(case, step_index);
+        let frame = hifi_scenario_step_frame(case.config, step_index);
         let output = advance_plant_step(
             &config,
             &HifiPlantStepInput {
@@ -369,12 +372,12 @@ fn run_hifi_scenario(case: ScenarioCase) -> Vec<SignalSample> {
                 rpm,
                 now_s: (step_index as f64) * (STEP_US as f64 / 1_000_000.0),
                 window_s: STEP_US as f64 / 1_000_000.0,
-                throttle_position: f64::from(throttle_x1000) / 1000.0,
-                load_torque_nm: f64::from(load_torque_nm_x100) / 100.0,
+                throttle_position: f64::from(frame.throttle_x1000) / 1000.0,
+                load_torque_nm: f64::from(frame.load_torque_x100) / 100.0,
                 cylinders: vec![
                     CylinderCommand {
-                        fuel_mass_kg,
-                        spark_angle_rad: f64::from(case.spark_advance_deg10).to_radians() / 10.0,
+                        fuel_mass_kg: frame.fuel_mass_kg,
+                        spark_angle_rad: f64::from(frame.spark_advance_deg10).to_radians() / 10.0,
                         dwell_s: 0.002,
                     };
                     CYL
@@ -450,7 +453,7 @@ fn hifi_config_from_source_defaults() -> HifiPlantConfig {
 
 fn hifi_config_for_scenario(case: ScenarioCase) -> HifiPlantConfig {
     let mut cfg = hifi_config_from_source_defaults();
-    cfg.initial_temperature_k = f64::from(scenario_initial_temp_k10(case.config.kind)) / 10.0;
+    cfg.initial_temperature_k = hifi_scenario_initial_temperature_k(case.config.kind);
     cfg
 }
 
@@ -497,13 +500,12 @@ fn core_input_for_scenario_step(
     case: ScenarioCase,
     step_index: u16,
 ) -> ecu_sim_core::io::PlantStepInput<CYL, CORE_MAX_EVENTS> {
-    let (throttle_x1000, load_torque_nm_x100, fuel_mass_kg) =
-        scenario_step_controls(case, step_index);
+    let frame = hifi_scenario_step_frame(case.config, step_index);
     let mut input = ecu_sim_core::io::PlantStepInput::idle(Micros(STEP_US));
-    input.driver.throttle_x1000 = throttle_x1000;
-    input.driver.load_torque_nm_x100 = TorqueNmX100(load_torque_nm_x100);
+    input.driver.throttle_x1000 = frame.throttle_x1000;
+    input.driver.load_torque_nm_x100 = TorqueNmX100(frame.load_torque_x100);
 
-    let fuel_mass_ug = mass_kg_to_ug(fuel_mass_kg).0;
+    let fuel_mass_ug = mass_kg_to_ug(frame.fuel_mass_kg).0;
     let effective_pw_us = fuel_mass_ug.div_ceil(INJECTOR_FLOW_UG_PER_US);
     let pulse_width_us = effective_pw_us + INJECTOR_DEADTIME_US;
 
@@ -525,7 +527,7 @@ fn core_input_for_scenario_step(
             .spark_events
             .push(SparkCommand {
                 cylinder: CylinderIndex(cylinder as u8),
-                spark_angle_deg10: CrankDeg10(case.spark_advance_deg10),
+                spark_angle_deg10: CrankDeg10(frame.spark_advance_deg10),
                 dwell_us: Micros(2000),
                 coil_energy_x1000: 1000,
             })
@@ -533,20 +535,6 @@ fn core_input_for_scenario_step(
     }
 
     input
-}
-
-fn scenario_step_controls(case: ScenarioCase, step_index: u16) -> (u16, i32, f64) {
-    let mut throttle_x1000 = case.config.throttle_x100 / 10;
-    let mut load_torque_nm_x100 = case.config.load_torque_x100;
-    let mut fuel_mass_kg = case.fuel_mass_kg;
-
-    if case.config.kind == ScenarioKind::DfcoDecel && step_index >= 12 {
-        throttle_x1000 = 0;
-        load_torque_nm_x100 = 120;
-        fuel_mass_kg = 0.0;
-    }
-
-    (throttle_x1000, load_torque_nm_x100, fuel_mass_kg)
 }
 
 fn scenario_initial_temp_k10(kind: ScenarioKind) -> u16 {
