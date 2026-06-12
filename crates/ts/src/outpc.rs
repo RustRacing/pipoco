@@ -80,10 +80,11 @@ impl Outpc {
 #[cfg(test)]
 mod tests {
     use super::*;
+    const _: () = assert!(Outpc::WIRE_LEN <= 64);
+
     #[test]
     fn outpc_size_stable() {
         assert_eq!(Outpc::WIRE_LEN, 48);
-        assert!(Outpc::WIRE_LEN <= 64);
     }
 
     #[test]

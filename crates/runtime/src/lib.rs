@@ -1,5 +1,19 @@
 #![cfg_attr(not(test), no_std)]
 
+//! Deterministic runtime orchestration and action emission.
+//!
+//! # Supported integration surfaces
+//!
+//! Product callers should prefer the structured, authority-aware stepping path
+//! exposed through [`ingress`]. This is the canonical runtime boundary.
+//!
+//! Raw [`StepInputs`] and related fixture-oriented helpers remain supported for
+//! compatibility and support use, but they are not the preferred product
+//! ingress. Conformance- and representability-oriented helpers live under
+//! [`support`], not the main product-facing surface.
+//!
+//! See `aidocs/architecture/adr-0010-runtime-compat-boundaries.md`.
+//!
 mod actions;
 mod engine;
 mod lowering;
@@ -8,6 +22,16 @@ mod outputs;
 #[cfg(test)]
 mod queues;
 pub mod semantic;
+pub mod ingress {
+    pub use crate::observations::{ControlInputs, RuntimeAuthorityError, StepInputs, StepResult};
+    pub use ecu_domain::EngineTimeAuthority;
+}
+pub mod support {
+    pub use crate::observations::{
+        extract_fuel_observations, extract_torque_observations, DifferentialInputSnapshot,
+        RuntimeAdapterContract, RuntimeObservedSurface,
+    };
+}
 
 pub use actions::{
     Action, ActionBatch, ActionExecutor, ActionExportError, RuntimeScheduledLevel,
@@ -26,11 +50,10 @@ pub use lowering::{
     ActionLoweringStatus, ActionOutputBatchAdapter, BoardApiBatchExecutor,
 };
 pub use observations::{
-    extract_fuel_observations, extract_torque_observations, CalibrationState, CamObservation,
-    ControlInputs, ControlPlan, ControlState, DecoderObservation, DifferentialInputSnapshot,
-    EngineState, FaultState, RuntimeAdapterContract, RuntimeAfrOverride, RuntimeAuthorityError,
-    RuntimeEngineMode, RuntimeFuelObservations, RuntimeObservedSurface, RuntimeSnapshot,
-    StepInputs, StepResult, TorqueObservations, TriggerObservation, ValidatedInputs,
+    CalibrationState, CamObservation, ControlInputs, ControlPlan, ControlState, DecoderObservation,
+    EngineState, FaultState, RuntimeAfrOverride, RuntimeEngineMode, RuntimeFuelObservations,
+    RuntimeSnapshot, StepInputs, StepResult, TorqueObservations, TriggerObservation,
+    ValidatedInputs,
 };
 pub use outputs::runtime_full_sequential_authorized;
 #[cfg(test)]

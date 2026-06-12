@@ -1,4 +1,5 @@
 use super::*;
+use crate::support::DifferentialInputSnapshot;
 use ecu_board_api::{
     AuxCommand, AuxCommandBatch, AuxOutput, AuxValue, EcuOutput, OutputLevel, OutputTransition,
     OutputTransitionBatch, TimingIslandCommand, TimingIslandCommandBatch,

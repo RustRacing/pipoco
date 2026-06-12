@@ -6,6 +6,16 @@
 //! low-level TS shell and carry no runtime/board dependencies. Runtime- and
 //! calibration-facing surfaces live behind explicit `runtime`/`persistence`
 //! features so low-level consumers get the shell-only API by default.
+//!
+//! When the `runtime` feature is enabled, the runtime-facing surface follows
+//! the staged-calibration model:
+//!
+//! - runtime status is mapped only from `ecu_runtime::RuntimeSnapshot`
+//! - staged edits operate on `ecu_calibration::CalibrationSnapshot`
+//! - commit/reset/persist orchestration is intentionally hosted here for the
+//!   current phase
+//!
+//! See `aidocs/architecture/adr-0010-runtime-compat-boundaries.md`.
 
 pub const TS_SIGNATURE: &[u8] = b"IPW-ECU V0.1";
 

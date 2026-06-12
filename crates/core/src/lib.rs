@@ -31,6 +31,16 @@
 //! - **Wrapping arithmetic**: Correctly handles timer overflow
 //! - **Compatibility boundary**: Keep legacy-facing data stable while new
 //!   runtime, fuel, and scheduler behavior stays in split crates
+//!
+//! ## Ownership
+//!
+//! `ecu-core` is a shrinking compatibility shell. New canonical product
+//! behavior belongs in the split crates (`ecu-runtime`, `ecu-control`,
+//! `ecu-scheduler`, `ecu-calibration`) rather than here. Compatibility-owned
+//! surfaces are grouped under [`compat`] and remain public only to support
+//! migration and legacy callers. See
+//! `aidocs/architecture/adr-0001-core-ownership.md` and
+//! `aidocs/architecture/adr-0010-runtime-compat-boundaries.md`.
 
 #![cfg_attr(not(test), no_std)]
 
@@ -61,6 +71,18 @@ pub mod torque;
 pub mod trigger;
 pub mod ts;
 pub mod units;
+
+/// Explicit compatibility namespace for legacy mirrors and migration shims.
+pub mod compat {
+    pub use crate::compat_state::{
+        CoreAdapterContract, DiagnosticFlags, EcuConfig, EcuDerived, EcuFaults, EcuInputs,
+        EcuOutputs, RuntimeSignals, SafetyStatus,
+    };
+    pub use crate::runtime_adapter::{
+        runtime_fuel_strategy_from_fuel_tune, runtime_fuel_strategy_from_state,
+        runtime_semantic_calibration_from_fuel_tune, runtime_semantic_calibration_from_state,
+    };
+}
 
 pub use capture::CaptureBuffer;
 pub use compat_state::{

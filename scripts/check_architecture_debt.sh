@@ -1190,6 +1190,108 @@ print("PASS: board TS-provider sources hold no raw self-pointer fields or derefs
 PY
 }
 
+check_core_compatibility_shell_boundary() {
+    python3 - <<'PY'
+from pathlib import Path
+import re
+import sys
+
+lib_path = Path("crates/core/src/lib.rs")
+compat_path = Path("crates/core/src/compat_state.rs")
+lib_text = lib_path.read_text(encoding="utf-8")
+compat_text = compat_path.read_text(encoding="utf-8")
+
+errors = []
+
+if "pub mod compat {" not in lib_text:
+    errors.append("crates/core/src/lib.rs: missing explicit `pub mod compat` namespace")
+
+if "adr-0001-core-ownership.md" not in lib_text or "adr-0010-runtime-compat-boundaries.md" not in lib_text:
+    errors.append("crates/core/src/lib.rs: crate docs must reference ADR-0001 and ADR-0010")
+
+required_markers = {
+    "RuntimeSignals": "Compatibility-only surface",
+    "EcuInputs": "Compatibility-only surface",
+    "EcuDerived": "Compatibility-only surface",
+    "EcuOutputs": "Compatibility-only surface",
+    "EcuFaults": "Compatibility-only surface",
+}
+
+for typename, marker in required_markers.items():
+    marker_pos = compat_text.find(marker)
+    struct_pos = compat_text.find(f"pub struct {typename}")
+    if marker_pos == -1 or struct_pos == -1 or marker_pos > struct_pos:
+        errors.append(
+            f"crates/core/src/compat_state.rs: `{typename}` docs must carry compatibility-only marker"
+        )
+
+if errors:
+    print(
+        "ERROR: ecu-core compatibility shell boundary is not documented/enforced as required",
+        file=sys.stderr,
+    )
+    for error in errors:
+        print(error, file=sys.stderr)
+    sys.exit(1)
+
+print("PASS: ecu-core compatibility shell boundary markers are present")
+PY
+}
+
+check_runtime_primary_ingress_boundary() {
+    python3 - <<'PY'
+from pathlib import Path
+import re
+import sys
+
+lib_path = Path("crates/runtime/src/lib.rs")
+step_path = Path("crates/runtime/src/engine/step.rs")
+lib_text = lib_path.read_text(encoding="utf-8")
+step_text = step_path.read_text(encoding="utf-8")
+
+errors = []
+
+if "pub mod ingress {" not in lib_text:
+    errors.append("crates/runtime/src/lib.rs: missing explicit `ingress` namespace")
+if "pub mod support {" not in lib_text:
+    errors.append("crates/runtime/src/lib.rs: missing explicit `support` namespace")
+if "adr-0010-runtime-compat-boundaries.md" not in lib_text:
+    errors.append("crates/runtime/src/lib.rs: crate docs must reference ADR-0010")
+
+if "canonical runtime boundary" not in lib_text:
+    errors.append("crates/runtime/src/lib.rs: docs must identify structured ingress as canonical")
+
+for forbidden in [
+    "DifferentialInputSnapshot",
+    "RuntimeObservedSurface",
+    "RuntimeAdapterContract",
+    "extract_fuel_observations",
+    "extract_torque_observations",
+]:
+    pattern = re.compile(rf"pub use observations::.*\\b{re.escape(forbidden)}\\b", re.S)
+    if pattern.search(lib_text):
+        errors.append(
+            f"crates/runtime/src/lib.rs: support symbol `{forbidden}` must not be re-exported from main root surface"
+        )
+
+if "Compatibility/support stepping path" not in step_text:
+    errors.append("crates/runtime/src/engine/step.rs: raw `step` docs must mark compatibility/support role")
+if "This is the canonical product ingress." not in step_text:
+    errors.append("crates/runtime/src/engine/step.rs: `step_with_authority` docs must mark canonical role")
+
+if errors:
+    print(
+        "ERROR: ecu-runtime ingress/support boundary is not documented/enforced as required",
+        file=sys.stderr,
+    )
+    for error in errors:
+        print(error, file=sys.stderr)
+    sys.exit(1)
+
+print("PASS: ecu-runtime primary ingress/support boundary markers are present")
+PY
+}
+
 check_no_rg_hits \
     "PR4 generic runtime/scheduler code has no product-specific M50 names" \
     'M50|configure_m50|RuntimeOutputProfile::M50|M50OutputProfile|M50IgnitionMode' \
@@ -1265,6 +1367,14 @@ if ! check_timing_island_safety_gate_neutrality; then
 fi
 
 if ! check_board_ts_provider_unsafe; then
+    status=1
+fi
+
+if ! check_core_compatibility_shell_boundary; then
+    status=1
+fi
+
+if ! check_runtime_primary_ingress_boundary; then
     status=1
 fi
 

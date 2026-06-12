@@ -63,6 +63,9 @@ pub struct TunerStudioRuntimeView {
 }
 
 /// Adapter that maps runtime snapshots into a TS view.
+///
+/// This surface reads only `RuntimeSnapshot`; it does not inspect live runtime
+/// internals directly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct RuntimeSnapshotAdapter;
 
@@ -129,6 +132,10 @@ impl CalibrationWrite {
 }
 
 /// TS write surface that only mutates staged calibration.
+///
+/// For the current phase, this type is also the accepted home for
+/// commit/reset/persist orchestration over `CalibrationSnapshot` plus
+/// `CommitRules`. Active calibration still changes only through commit flow.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CalibrationEditSurface {
     snapshot: CalibrationSnapshot,

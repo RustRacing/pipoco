@@ -52,11 +52,13 @@ use ecu_runtime::semantic::{
     RuntimeSemanticInputSnapshot, RuntimeSemanticState, RuntimeSemanticTable2dI16,
     RuntimeSemanticTable2dU16, RuntimeSemanticTable2dU32,
 };
+use ecu_runtime::support::{
+    extract_fuel_observations, RuntimeAdapterContract, RuntimeObservedSurface,
+};
 use ecu_runtime::{
-    extract_fuel_observations, runtime_full_sequential_authorized, runtime_semantic_evaluate_fuel,
-    runtime_x100_to_spec_x1000, Action, ActionBatch, BaseFuelModel, ControlInputs, EngineRuntime,
-    EnrichmentInputs, IgnitionInputs, LambdaTrimInputs, RuntimeAdapterContract,
-    RuntimeObservedSurface, StepInputs, TorqueInputs,
+    runtime_full_sequential_authorized, runtime_semantic_evaluate_fuel, runtime_x100_to_spec_x1000,
+    Action, ActionBatch, BaseFuelModel, ControlInputs, EngineRuntime, EnrichmentInputs,
+    IgnitionInputs, LambdaTrimInputs, StepInputs, TorqueInputs,
 };
 use ecu_spec::{
     AfrOverride, CylinderArrayU16, EngineMode, InjectionAngleMode, InputSnapshot,
@@ -763,7 +765,7 @@ fn conformance_test(case: &fm0016_fixture_matrix::FixtureCase) {
             cmp_u16(
                 "torque_request_x100",
                 obs.torque_request_x100,
-                spec_tq as u16,
+                spec_tq,
                 EPS_TORQUE_PCT,
             );
         }
@@ -1323,51 +1325,49 @@ fn runtime_semantic_schedule_requires_validated_authority_not_sync_alone() {
 
 #[test]
 fn runtime_adapter_contracts_map_to_correct_variants() {
-    use RuntimeAdapterContract::*;
-
     // US-FM0805: ve_pct_x100, target_afr_x100, pw_base_us, pw_air_us, pw_corr_us
     // are covered by runtime_semantic_conformance_all_fixtures.
     // US-FM1004: lambda_correction_x1000 and lambda_integrator_state are also Covered.
     // Remaining adapter contract assertions:
     assert!(matches!(
         conformance_status_for_field("fuel_cut"),
-        RuntimeConformanceStatus::AdapterContract(FuelCutInput)
+        RuntimeConformanceStatus::AdapterContract(RuntimeAdapterContract::FuelCutInput)
     ));
     assert!(matches!(
         conformance_status_for_field("spark_cut"),
-        RuntimeConformanceStatus::AdapterContract(SparkCutInput)
+        RuntimeConformanceStatus::AdapterContract(RuntimeAdapterContract::SparkCutInput)
     ));
     assert!(matches!(
         conformance_status_for_field("torque_request_x1000"),
-        RuntimeConformanceStatus::AdapterContract(TorqueRequest)
+        RuntimeConformanceStatus::AdapterContract(RuntimeAdapterContract::TorqueRequest)
     ));
     assert!(matches!(
         conformance_status_for_field("torque_allowed_x1000"),
-        RuntimeConformanceStatus::AdapterContract(TorqueAllowed)
+        RuntimeConformanceStatus::AdapterContract(RuntimeAdapterContract::TorqueAllowed)
     ));
     assert!(matches!(
         conformance_status_for_field("torque_actuated_x1000"),
-        RuntimeConformanceStatus::AdapterContract(TorqueActuated)
+        RuntimeConformanceStatus::AdapterContract(RuntimeAdapterContract::TorqueActuated)
     ));
     assert!(matches!(
         conformance_status_for_field("idle_duty_x1000"),
-        RuntimeConformanceStatus::AdapterContract(IdleDuty)
+        RuntimeConformanceStatus::AdapterContract(RuntimeAdapterContract::IdleDuty)
     ));
     assert!(matches!(
         conformance_status_for_field("advance_deg10_trim"),
-        RuntimeConformanceStatus::AdapterContract(IgnitionAdvanceTrim)
+        RuntimeConformanceStatus::AdapterContract(RuntimeAdapterContract::IgnitionAdvanceTrim)
     ));
     assert!(matches!(
         conformance_status_for_field("cut_reason_code"),
-        RuntimeConformanceStatus::AdapterContract(CutReasonCode)
+        RuntimeConformanceStatus::AdapterContract(RuntimeAdapterContract::CutReasonCode)
     ));
     assert!(matches!(
         conformance_status_for_field("knock_intensity_x100"),
-        RuntimeConformanceStatus::AdapterContract(KnockIntensity)
+        RuntimeConformanceStatus::AdapterContract(RuntimeAdapterContract::KnockIntensity)
     ));
     assert!(matches!(
         conformance_status_for_field("idle_integrator_state"),
-        RuntimeConformanceStatus::AdapterContract(IdleIntegratorState)
+        RuntimeConformanceStatus::AdapterContract(RuntimeAdapterContract::IdleIntegratorState)
     ));
 }
 

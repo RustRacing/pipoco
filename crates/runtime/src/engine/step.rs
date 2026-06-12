@@ -38,6 +38,11 @@ impl EngineRuntime {
         }
     }
 
+    /// Compatibility/support stepping path using raw scalar inputs.
+    ///
+    /// Prefer [`EngineRuntime::step_with_authority`] for product integration so
+    /// the runtime receives structured engine-time authority instead of deriving
+    /// it from boolean sync/cam flags.
     pub fn step(&mut self, inputs: StepInputs, control_inputs: ControlInputs) -> StepResult {
         let authority = self.engine.engine_time_authority;
         self.step_with_authority(inputs, control_inputs, authority)
@@ -45,8 +50,9 @@ impl EngineRuntime {
 
     /// Step the runtime with structured engine-time authority already supplied by the caller.
     ///
-    /// Board adapters should use this when they have a decoder/profile authority snapshot so
-    /// output gating does not fall back to boolean sync/cam inputs.
+    /// This is the canonical product ingress. Board adapters should use this
+    /// when they have a decoder/profile authority snapshot so output gating
+    /// does not fall back to boolean sync/cam inputs.
     pub fn step_with_authority(
         &mut self,
         inputs: StepInputs,

@@ -1,4 +1,4 @@
-use crate::{RuntimeAdapterContract, RuntimeFuelStrategy};
+use crate::{support::RuntimeAdapterContract, RuntimeFuelStrategy};
 use ecu_calibration::{FuelRuntimeTune, FUEL_RUNTIME_LOAD_BINS, FUEL_RUNTIME_RPM_BINS};
 use ecu_domain::{Kpa10, Micros, Rpm, SyncState};
 

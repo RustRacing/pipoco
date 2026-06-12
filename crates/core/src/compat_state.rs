@@ -21,6 +21,9 @@ pub enum CoreAdapterContract {
 }
 
 /// Runtime mirror of the live scalar inputs that are still duplicated on `EcuState`.
+///
+/// Compatibility-only surface: keep stable for migration, but do not add new
+/// runtime-facing fields without an explicit migration rationale.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RuntimeSignals {
     pub rpm: u16,
@@ -34,6 +37,9 @@ pub struct RuntimeSignals {
 }
 
 /// Diagnostic fault flags that are mirrored in `EcuState::faults`.
+///
+/// Compatibility-only surface: keep stable for migration, but do not add new
+/// runtime-facing fields without an explicit migration rationale.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DiagnosticFlags {
     pub emergency_trigger_map_oob: bool,
@@ -42,6 +48,9 @@ pub struct DiagnosticFlags {
 }
 
 /// Safety outputs derived from limiter and cut state.
+///
+/// Compatibility-only surface: keep stable for migration, but do not add new
+/// runtime-facing fields without an explicit migration rationale.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SafetyStatus {
     pub fuel_cut_active: bool,
@@ -56,6 +65,9 @@ pub use ecu_calibration::EcuConfig;
 
 /// Trigger-derived live inputs that are in the process of being separated
 /// from the main `EcuState` layout.
+///
+/// Compatibility-only surface: keep stable for migration, but do not add new
+/// runtime-facing fields without an explicit migration rationale.
 #[derive(Debug, Clone, Copy)]
 pub struct EcuInputs {
     pub rpm: u16,
@@ -73,6 +85,9 @@ pub struct EcuInputs {
 
 /// Derived enrichment outputs that are in the process of being separated
 /// from the main `EcuState` layout.
+///
+/// Compatibility-only surface: keep stable for migration, but do not add new
+/// runtime-facing fields without an explicit migration rationale.
 #[derive(Debug, Clone, Copy)]
 pub struct EcuDerived {
     pub wue_percent: u8,
@@ -85,6 +100,9 @@ pub struct EcuDerived {
 
 /// Runtime output cache that is in the process of being separated from the
 /// main `EcuState` layout.
+///
+/// Compatibility-only surface: keep stable for migration, but do not add new
+/// runtime-facing fields without an explicit migration rationale.
 #[derive(Debug, Clone, Copy)]
 pub struct EcuOutputs {
     pub final_pw: Micros,
@@ -93,6 +111,9 @@ pub struct EcuOutputs {
 
 /// Fault and diagnostics cache that is in the process of being separated from
 /// the main `EcuState` layout.
+///
+/// Compatibility-only surface: keep stable for migration, but do not add new
+/// runtime-facing fields without an explicit migration rationale.
 #[derive(Debug)]
 pub struct EcuFaults {
     pub emergency_trigger_map_oob: bool,
