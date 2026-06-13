@@ -3,8 +3,7 @@
 //! `ecu-board-api` is the canonical boundary for what a board can provide to
 //! ECU recipes and runtime-independent board code: clocks, decoded trigger
 //! edges, logical sensor snapshots, scheduled ECU outputs, aux commands,
-//! telemetry, calibration pages, watchdog service, and board capability
-//! metadata.
+//! telemetry, watchdog service, and board capability metadata.
 //!
 //! Keep this crate above raw electrical details and below runtime policy. It
 //! may depend on `ecu-domain`, but it must not depend on `ecu-runtime` or own
@@ -29,13 +28,15 @@ pub mod legacy {
     //! New board/runtime code should use the canonical authority-aware timing
     //! and output profile APIs from the crate root instead of these shims.
 
+    pub use crate::capabilities::CalibrationPage;
     pub use crate::output_profiles::legacy::single_channel_runtime_output_profile;
     pub use crate::timing_island::legacy::sync_state_authority;
+    pub use crate::traits::CalibrationStore;
 }
 
 pub use capabilities::{
-    BoardCapabilities, BoardResourceLimits, CalibrationPage, IgnitionProfileId,
-    LoadSourceCapabilities, PinMapId, ProfileId, RuntimeBuildId,
+    BoardCapabilities, BoardResourceLimits, IgnitionProfileId, LoadSourceCapabilities, PinMapId,
+    ProfileId, RuntimeBuildId,
 };
 pub use output_profiles::{
     AuxSafetyProfile, FuelOutputMode, FuelOutputProfile, FullEcuOutputProfile,
@@ -59,8 +60,8 @@ pub use timing_island::{
     TimingIslandRejectReason, TriggerEdge,
 };
 pub use traits::{
-    AuxOutputSink, CalibrationStore, EcuClock, OutputScheduler, SensorSource, TelemetrySink,
-    TriggerEdgeSource, Watchdog,
+    AuxOutputSink, EcuClock, OutputScheduler, SensorSource, TelemetrySink, TriggerEdgeSource,
+    Watchdog,
 };
 
 #[cfg(test)]

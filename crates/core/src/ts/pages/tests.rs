@@ -1,8 +1,8 @@
 use super::*;
+use crate::compat::EcuState;
 use crate::constants::fuel as fuel_consts;
 use crate::trigger::SyncState;
 use crate::units::{Micros, Rpm};
-use crate::EcuState;
 use ecu_ts::pages::{
     AePage, AsePage, DfcoPage, PageCodecFamily, TsPageDescriptor, WuePage, AE_PAGE_BYTES,
     ANGLES_PAGE_BYTES, ASE_PAGE_BYTES, DFCO_PAGE_BYTES, DIAG_LOG_PAGE_BYTES, LIMITS_PAGE_BYTES,

@@ -96,7 +96,7 @@ pub enum DecoderObservation {
     Cam(CamObservation),
 }
 
-/// Raw inputs accepted by the runtime step pipeline.
+/// Compatibility/support raw inputs accepted by the runtime step pipeline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StepInputs {
     pub now_us: Micros,

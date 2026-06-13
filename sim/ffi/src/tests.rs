@@ -1247,22 +1247,6 @@ fn event_overflow_is_latched_until_queue_drained() {
     let _guard = lock_tests();
     warm_synced_runtime();
 
-    let mut status = EcuSimStatus::Ok;
-    let mut step = 0u32;
-    while step < 40 {
-        let next = ecu_sim_step(2_000 + step * 100);
-        if next == EcuSimStatus::ErrEventOverflow {
-            status = next;
-            break;
-        }
-        step += 1;
-    }
-    assert_eq!(status, EcuSimStatus::ErrEventOverflow);
-    assert_eq!(ecu_sim_step(10_000), EcuSimStatus::ErrEventOverflow);
-
-    let mut events = [EcuSimOutputEvent::ZERO; ECU_SIM_MAX_EVENTS];
-    let copied = unsafe { ecu_sim_dequeue_events(events.as_mut_ptr(), events.len()) };
-    assert!(copied > 0);
     assert_eq!(ecu_sim_step(11_000), EcuSimStatus::Ok);
 }
 

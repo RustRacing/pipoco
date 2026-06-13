@@ -7,8 +7,8 @@ pub mod trigger_pattern;
 
 use ecu_domain::{Degrees10, Kpa10, Micros, Rpm};
 use ecu_runtime::{
-    CamObservation, ControlInputs, DecoderObservation, EngineRuntime, StepInputs, StepResult,
-    TriggerObservation,
+    ingress::AuthorityStepInputs, CamObservation, ControlInputs, DecoderObservation, EngineRuntime,
+    StepResult, TriggerObservation,
 };
 
 /// Board-like simulation events that feed the runtime.
@@ -59,7 +59,12 @@ pub struct SimulationStep {
 pub struct SimulationHarness<const FAST: usize, const SLOW: usize> {
     runtime: EngineRuntime,
     queues: SimQueues<FAST, SLOW>,
-    pending_inputs: StepInputs,
+    pending_now_us: Micros,
+    pending_rpm: u32,
+    pending_load_kpa10: u32,
+    pending_angle_x10: i32,
+    pending_launch_armed: bool,
+    pending_flat_shift_armed: bool,
     last_result: Option<StepResult>,
 }
 
@@ -68,16 +73,12 @@ impl<const FAST: usize, const SLOW: usize> SimulationHarness<FAST, SLOW> {
         Self {
             runtime,
             queues: SimQueues::new(),
-            pending_inputs: StepInputs {
-                now_us: Micros::new(0),
-                rpm: 0,
-                load_kpa10: 0,
-                angle_x10: 0,
-                trigger_synced: false,
-                cam_seen: false,
-                flat_shift_armed: false,
-                launch_armed: false,
-            },
+            pending_now_us: Micros::new(0),
+            pending_rpm: 0,
+            pending_load_kpa10: 0,
+            pending_angle_x10: 0,
+            pending_launch_armed: false,
+            pending_flat_shift_armed: false,
             last_result: None,
         }
     }
@@ -171,10 +172,9 @@ impl<const FAST: usize, const SLOW: usize> SimulationHarness<FAST, SLOW> {
                 angle_x10,
                 synced,
             } => {
-                self.pending_inputs.now_us = at_us;
-                self.pending_inputs.rpm = u32::from(rpm.get());
-                self.pending_inputs.angle_x10 = i32::from(angle_x10.get());
-                self.pending_inputs.trigger_synced = synced;
+                self.pending_now_us = at_us;
+                self.pending_rpm = u32::from(rpm.get());
+                self.pending_angle_x10 = i32::from(angle_x10.get());
                 self.runtime
                     .apply_decoder_observation(DecoderObservation::Trigger(TriggerObservation {
                         at_us,
@@ -185,8 +185,7 @@ impl<const FAST: usize, const SLOW: usize> SimulationHarness<FAST, SLOW> {
                 None
             }
             SimEvent::CamEdge { at_us, cam_seen } => {
-                self.pending_inputs.now_us = at_us;
-                self.pending_inputs.cam_seen = cam_seen;
+                self.pending_now_us = at_us;
                 self.runtime
                     .apply_decoder_observation(DecoderObservation::Cam(CamObservation {
                         at_us,
@@ -200,16 +199,25 @@ impl<const FAST: usize, const SLOW: usize> SimulationHarness<FAST, SLOW> {
                 load_kpa10,
                 angle_x10,
             } => {
-                self.pending_inputs.now_us = at_us;
-                self.pending_inputs.rpm = u32::from(rpm.get());
-                self.pending_inputs.load_kpa10 = u32::from(load_kpa10.get());
-                self.pending_inputs.angle_x10 = i32::from(angle_x10.get());
+                self.pending_now_us = at_us;
+                self.pending_rpm = u32::from(rpm.get());
+                self.pending_load_kpa10 = u32::from(load_kpa10.get());
+                self.pending_angle_x10 = i32::from(angle_x10.get());
                 self.runtime.apply_sensor_sample(rpm, load_kpa10, angle_x10);
                 None
             }
             SimEvent::Tick { now_us, control } => {
-                self.pending_inputs.now_us = now_us;
-                let result = self.runtime.step(self.pending_inputs, control);
+                self.pending_now_us = now_us;
+                let inputs = AuthorityStepInputs::new(
+                    self.pending_now_us,
+                    self.pending_rpm,
+                    self.pending_load_kpa10,
+                    self.pending_angle_x10,
+                    self.runtime.engine_time_authority(),
+                    self.pending_launch_armed,
+                    self.pending_flat_shift_armed,
+                );
+                let result = self.runtime.step_with_authority(inputs, control);
                 self.last_result = Some(result);
                 Some(result)
             }

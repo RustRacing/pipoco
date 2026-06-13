@@ -1,4 +1,4 @@
-use ecu_core::EcuState;
+use ecu_core::compat::EcuState;
 use ecu_ts::server::PageStore;
 
 #[test]

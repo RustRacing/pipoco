@@ -1,5 +1,5 @@
 use ecu_core::hal::TimeSource;
-use ecu_core::{scale_u16, EcuState, IpwTable, TriggerDecoder};
+use ecu_core::{compat::EcuState, scale_u16, IpwTable, TriggerDecoder};
 use std::cell::Cell;
 
 // Mock time source for testing with interior mutability

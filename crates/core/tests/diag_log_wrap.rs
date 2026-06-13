@@ -1,5 +1,5 @@
+use ecu_core::compat::EcuState;
 use ecu_core::ts::pages::PAGE_DIAG_LOG;
-use ecu_core::EcuState;
 use ecu_core::{Kpa10, Micros};
 use ecu_ts::server::PageStore;
 

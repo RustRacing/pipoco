@@ -1,6 +1,6 @@
 /// Tests ported from RusEFI and Speeduino
 /// Adapted to work with our simplified IPW-based architecture
-use ecu_core::{hal::TimeSource, scale_u16, EcuState, IpwTable, TriggerDecoder};
+use ecu_core::{compat::EcuState, hal::TimeSource, scale_u16, IpwTable, TriggerDecoder};
 use std::cell::Cell;
 
 // Mock time source for testing with interior mutability

@@ -1,6 +1,6 @@
 //! Negative protocol tests inspired by FreeMS2’s packet approach
 
-use ecu_core::EcuState;
+use ecu_core::compat::EcuState;
 use ecu_ts::outpc::Outpc;
 use ecu_ts::pages::FuelIgnPageStore;
 use ecu_ts::proto::{self, Cmd};

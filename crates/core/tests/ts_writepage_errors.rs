@@ -1,10 +1,10 @@
 //! Verify TS server returns ERR on wrong-sized WritePage payloads
 
+use ecu_core::compat::EcuState;
 use ecu_core::ts::pages::{
     EcuPageStore, PAGE_AE, PAGE_DFCO, PAGE_DIAG, PAGE_DIAG_LOG, PAGE_FUEL, PAGE_IGN, PAGE_LIMITS,
     PAGE_SENSORS, PAGE_SNAPSHOT,
 };
-use ecu_core::EcuState;
 use ecu_ts::outpc::Outpc;
 use ecu_ts::proto::{self, Cmd};
 use ecu_ts::server::{OutpcProvider, TunerstudioServer};

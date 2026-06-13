@@ -125,6 +125,12 @@ impl SchedulerState {
         self.suspend();
     }
 
+    pub fn on_sync_recovered(&mut self) {
+        if self.mode == SchedulerMode::Suspended {
+            self.mode = SchedulerMode::Idle;
+        }
+    }
+
     pub fn on_geometry_commit(&mut self) {
         self.cancel_group(OutputGroup::Injector);
         self.cancel_group(OutputGroup::Ignition);

@@ -40,6 +40,8 @@ use ecu_target_common::{
     split_tick::run_runtime_scheduled_output_tick,
     trigger_adapter::{apply_trigger_timestamp_to_runtime_adapter, SplitTriggerAdapter},
 };
+#[cfg(feature = "ts-usb-hw")]
+use ecu_ts::persistence::written_pages_require_runtime_fuel_retune;
 #[cfg(not(test))]
 use panic_halt as _;
 use stm32f4xx_hal::{pac, pac::interrupt, prelude::*};
@@ -50,13 +52,6 @@ mod hal_impl;
 mod ts_support;
 use hal_impl::Stm32Time;
 use hal_impl::Stm32Watchdog;
-
-#[cfg(feature = "ts-usb-hw")]
-fn written_pages_affect_runtime_fuel_tune(pages: ecu_ts::persistence::WrittenPageSet) -> bool {
-    pages.contains(ecu_ts::pages::PAGE_VE_TUNE)
-        || pages.contains(ecu_ts::pages::PAGE_VE_TABLE)
-        || pages.contains(ecu_ts::pages::PAGE_AFR_TABLE)
-}
 
 // Arduino-style global pin declarations for easy remapping
 // Adjust these macros to change physical pin assignments
@@ -239,7 +234,7 @@ fn main() -> ! {
             if let (Some(ref mut svc), Some(ref mut cdc)) = (&mut maybe_ts, &mut maybe_cdc) {
                 svc.pump_with_budget(cdc, 4);
                 if let Some(pages) = svc.server.store_mut().take_written_pages() {
-                    if written_pages_affect_runtime_fuel_tune(pages) {
+                    if written_pages_require_runtime_fuel_retune(pages) {
                         let tune = svc.server.store().runtime_fuel_tune();
                         adapter.configure_runtime_fuel_strategy(
                             ecu_runtime::runtime_fuel_strategy_from_fuel_tune(&tune),

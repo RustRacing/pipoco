@@ -82,6 +82,16 @@ impl WrittenPageSet {
     }
 }
 
+/// Shared policy for deciding when TS page writes require runtime fuel retuning.
+///
+/// This keeps runtime retune ownership in one place even when the live
+/// calibration seam remains page-store based.
+pub const fn written_pages_require_runtime_fuel_retune(pages: WrittenPageSet) -> bool {
+    pages.contains(crate::pages::PAGE_VE_TUNE)
+        || pages.contains(crate::pages::PAGE_VE_TABLE)
+        || pages.contains(crate::pages::PAGE_AFR_TABLE)
+}
+
 /// Tracks successful TS page writes without interpreting their runtime meaning.
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub struct PageWriteReporter {

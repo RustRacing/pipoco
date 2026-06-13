@@ -27,46 +27,70 @@ impl EngineRuntime {
                 let _ = actions.push(Action::Idle);
             }
         } else if matches!(self.engine.sync, SyncState::Locked { .. }) {
+            self.scheduler.on_sync_recovered();
             match self.output_profile {
                 RuntimeOutputProfile::LegacySingleChannel => {
-                    let inj = TimedInjectionPlan {
-                        plan: InjectionPlan {
-                            output: ExclusiveChannel::new(OutputGroup::Injector, ChannelId::new(1)),
-                            pulse_width: control.enriched_fuel,
-                        },
-                        start_at: now_us,
-                        end_at: Micros::new(
-                            now_us
-                                .get()
-                                .saturating_add(control.enriched_fuel.get() as u32),
+                    let injection_end = Micros::new(
+                        now_us
+                            .get()
+                            .saturating_add(control.enriched_fuel.get() as u32)
+                            .max(now_us.get().saturating_add(2)),
+                    );
+                    let ignition_end = Micros::new(
+                        now_us
+                            .get()
+                            .saturating_add(control.ignition.dwell_us.get() as u32)
+                            .max(now_us.get().saturating_add(2)),
+                    );
+                    if let (Ok(injection), Ok(ignition)) = (
+                        self.scheduler.schedule_injection(
+                            now_us,
+                            Micros::new(now_us.get().saturating_add(1)),
+                            injection_end,
+                            InjectionPlan {
+                                output: ExclusiveChannel::new(
+                                    OutputGroup::Injector,
+                                    ChannelId::new(1),
+                                ),
+                                pulse_width: control.enriched_fuel,
+                            },
                         ),
-                    };
-                    let ign = TimedIgnitionPlan {
-                        plan: self.make_ignition_plan(control, now_us),
-                        start_at: now_us,
-                        end_at: Micros::new(
-                            now_us
-                                .get()
-                                .saturating_add(control.ignition.dwell_us.get() as u32),
+                        self.scheduler.schedule_ignition(
+                            now_us,
+                            Micros::new(now_us.get().saturating_add(1)),
+                            ignition_end,
+                            self.make_ignition_plan(control, now_us),
                         ),
-                    };
-                    self.scheduler.arm_group(OutputGroup::Injector);
-                    self.scheduler.arm_group(OutputGroup::Ignition);
-                    let _ = actions.push(Action::ArmScheduler {
-                        injection: inj,
-                        ignition: ign,
-                    });
+                    ) {
+                        let _ = actions.push(Action::ArmScheduler {
+                            injection,
+                            ignition,
+                        });
+                    } else {
+                        self.scheduler.cancel_group(OutputGroup::Injector);
+                        self.scheduler.cancel_group(OutputGroup::Ignition);
+                        let _ = actions.push(Action::Idle);
+                    }
                 }
                 RuntimeOutputProfile::IgnitionOnly(profile) => {
                     if self.engine.rpm.get() == 0 || control.spark_cut {
                         let _ = actions.push(Action::Idle);
                     } else {
-                        self.scheduler.arm_group(OutputGroup::Ignition);
                         let event_count = IgnitionScheduler::new(profile).event_count();
                         for event_index in 0..event_count {
                             let ignition =
                                 self.make_ignition_only_plan(profile, event_index, control, now_us);
-                            let _ = actions.push(Action::ArmIgnition(ignition));
+                            if let Ok(ignition) = self.scheduler.schedule_ignition(
+                                now_us,
+                                ignition.start_at,
+                                ignition.end_at,
+                                ignition.plan,
+                            ) {
+                                let _ = actions.push(Action::ArmIgnition(ignition));
+                            }
+                        }
+                        if actions.is_empty() {
+                            let _ = actions.push(Action::Idle);
                         }
                     }
                 }
@@ -77,7 +101,6 @@ impl EngineRuntime {
                     {
                         let _ = actions.push(Action::Idle);
                     } else {
-                        self.scheduler.arm_group(OutputGroup::Injector);
                         let event_count = InjectionScheduler::new(profile).event_count();
                         for event_index in 0..event_count {
                             let injection = self.make_injection_only_plan(
@@ -86,7 +109,17 @@ impl EngineRuntime {
                                 control,
                                 now_us,
                             );
-                            let _ = actions.push(Action::ArmInjection(injection));
+                            if let Ok(injection) = self.scheduler.schedule_injection(
+                                now_us,
+                                injection.start_at,
+                                injection.end_at,
+                                injection.plan,
+                            ) {
+                                let _ = actions.push(Action::ArmInjection(injection));
+                            }
+                        }
+                        if actions.is_empty() {
+                            let _ = actions.push(Action::Idle);
                         }
                     }
                 }
@@ -95,40 +128,46 @@ impl EngineRuntime {
                     if event_count == 0 {
                         let _ = actions.push(Action::Idle);
                     } else {
-                        self.scheduler.arm_group(OutputGroup::Injector);
-                        self.scheduler.arm_group(OutputGroup::Ignition);
                         let cycle_slot_us = profile.cycle_slot_us(self.engine.rpm);
                         for slot in 0..event_count {
                             let slot_offset = cycle_slot_us.saturating_mul(slot as u32);
-                            let injection_start =
-                                Micros::new(now_us.get().saturating_add(slot_offset));
+                            let injection_start = Micros::new(
+                                now_us.get().saturating_add(slot_offset).saturating_add(1),
+                            );
                             let injection_end = Micros::new(
                                 injection_start
                                     .get()
                                     .saturating_add(control.enriched_fuel.get() as u32)
                                     .max(injection_start.get().saturating_add(1)),
                             );
-                            let ignition_start =
-                                Micros::new(now_us.get().saturating_add(slot_offset));
+                            let ignition_start = Micros::new(
+                                now_us.get().saturating_add(slot_offset).saturating_add(1),
+                            );
                             let ignition_end = Micros::new(
                                 ignition_start
                                     .get()
                                     .saturating_add(control.ignition.dwell_us.get() as u32)
                                     .max(ignition_start.get().saturating_add(1)),
                             );
-                            let _ = actions.push(Action::ArmInjection(TimedInjectionPlan {
-                                plan: InjectionPlan {
+                            if let Ok(injection) = self.scheduler.schedule_injection(
+                                now_us,
+                                injection_start,
+                                injection_end,
+                                InjectionPlan {
                                     output: ExclusiveChannel::new(
                                         OutputGroup::Injector,
                                         profile.injector_channel(slot),
                                     ),
                                     pulse_width: control.enriched_fuel,
                                 },
-                                start_at: injection_start,
-                                end_at: injection_end,
-                            }));
-                            let _ = actions.push(Action::ArmIgnition(TimedIgnitionPlan {
-                                plan: ecu_scheduler::IgnitionPlan {
+                            ) {
+                                let _ = actions.push(Action::ArmInjection(injection));
+                            }
+                            if let Ok(ignition) = self.scheduler.schedule_ignition(
+                                now_us,
+                                ignition_start,
+                                ignition_end,
+                                ecu_scheduler::IgnitionPlan {
                                     output: ExclusiveChannel::new(
                                         OutputGroup::Ignition,
                                         profile.ignition_channel(slot),
@@ -136,9 +175,12 @@ impl EngineRuntime {
                                     dwell: control.ignition.dwell_us,
                                     advance: control.ignition.advance_deg10,
                                 },
-                                start_at: ignition_start,
-                                end_at: ignition_end,
-                            }));
+                            ) {
+                                let _ = actions.push(Action::ArmIgnition(ignition));
+                            }
+                        }
+                        if actions.is_empty() {
+                            let _ = actions.push(Action::Idle);
                         }
                     }
                 }

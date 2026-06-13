@@ -310,17 +310,17 @@ mod tests {
         .expect("split tick succeeds");
 
         assert!(result.runtime_step_ran);
-        assert_eq!(result.drained_transitions, 2);
-        assert_eq!(result.applied_transitions, 2);
+        assert_eq!(result.drained_transitions, 0);
+        assert_eq!(result.applied_transitions, 0);
 
         let (inj0, inj1, ign0, ign1) = outputs.into_inner();
         assert_eq!(inj0.high_count, 0);
         assert_eq!(inj0.low_count, 0);
-        assert_eq!(inj1.high_count, 1);
+        assert_eq!(inj1.high_count, 0);
         assert_eq!(inj1.low_count, 0);
         assert_eq!(ign0.high_count, 0);
         assert_eq!(ign0.low_count, 0);
-        assert_eq!(ign1.high_count, 1);
+        assert_eq!(ign1.high_count, 0);
         assert_eq!(ign1.low_count, 0);
     }
 

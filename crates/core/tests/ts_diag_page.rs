@@ -1,6 +1,6 @@
+use ecu_core::compat::EcuState;
 use ecu_core::trigger::SyncState;
 use ecu_core::ts::pages::{PAGE_DIAG, TS_DIAG_BYTES};
-use ecu_core::EcuState;
 use ecu_ts::server::PageStore;
 
 #[test]

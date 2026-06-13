@@ -1,6 +1,6 @@
 use ecu_calibration::FuelRuntimeTune;
+use ecu_core::compat::EcuState;
 use ecu_core::ts::pages::EcuPageStore;
-use ecu_core::EcuState;
 use ecu_target_common::kv::ram::RamKv512;
 use ecu_target_common::ts::service::TsService;
 use ecu_ts::persistence::{PageStoreProvider, PersistedTsPageStore};
@@ -145,7 +145,7 @@ fn ts_pump_records_serial_write_failures() {
 
 // Minimal Outpc provider for tests
 mod test_provider {
-    use ecu_core::EcuState;
+    use ecu_core::compat::EcuState;
     use ecu_ts::outpc::Outpc;
     use ecu_ts::server::OutpcProvider;
 

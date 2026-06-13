@@ -45,12 +45,6 @@ const OUTPUT_TEST_MAX_MS: u32 = 1000;
 const OUTPUT_TEST_MAX_REPS: u8 = 5;
 const OUTPUT_TEST_CHUNK_MS: u32 = 50;
 
-fn written_pages_affect_runtime_fuel_tune(pages: ecu_ts::persistence::WrittenPageSet) -> bool {
-    pages.contains(ecu_ts::pages::PAGE_VE_TUNE)
-        || pages.contains(ecu_ts::pages::PAGE_VE_TABLE)
-        || pages.contains(ecu_ts::pages::PAGE_AFR_TABLE)
-}
-
 #[cfg(feature = "capture-cam")]
 use core::sync::atomic::{AtomicBool, Ordering};
 use ecu_calibration::DfcoConfig;
@@ -73,7 +67,7 @@ use ecu_target_common::{
     trigger_adapter::{apply_trigger_timestamp_to_runtime_adapter, SplitTriggerAdapter},
 };
 use ecu_ts::outpc::Outpc;
-use ecu_ts::persistence::PersistedTsPageStore;
+use ecu_ts::persistence::{written_pages_require_runtime_fuel_retune, PersistedTsPageStore};
 use ecu_ts::proto::{self, Cmd};
 use ecu_ts::serial::{FrameAssembler, SerialPort};
 use ecu_ts::server::OutpcProvider;
@@ -596,7 +590,7 @@ fn main() -> ! {
                 }
             }
             if let Some(pages) = ts.server.store_mut().take_written_pages() {
-                if written_pages_affect_runtime_fuel_tune(pages) {
+                if written_pages_require_runtime_fuel_retune(pages) {
                     let tune = ts.server.store().runtime_fuel_tune();
                     adapter.configure_runtime_fuel_strategy(
                         ecu_runtime::runtime_fuel_strategy_from_fuel_tune(&tune),

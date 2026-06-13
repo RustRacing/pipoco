@@ -4,7 +4,7 @@
 //! legacy `EcuState` layout. Board-common should remain generic runtime/IO
 //! plumbing and not depend on `EcuState`.
 
-use crate::EcuState;
+use crate::compat::EcuState;
 use ecu_calibration::FuelRuntimeTune;
 use ecu_runtime::{RuntimeFuelStrategy, RuntimeSemanticCalibration};
 

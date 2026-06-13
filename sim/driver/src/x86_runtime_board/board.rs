@@ -1,11 +1,12 @@
 use ecu_board_api::{
-    AuxCommandBatch, AuxOutputSink, CalibrationPage, CalibrationStore, EcuClock, EcuOutput,
-    EdgeBatch, OutputLevel, OutputScheduler, OutputTransition, OutputTransitionBatch,
-    RuntimeOutputProfile, SensorSnapshot, SensorSource, TelemetryFrame, TelemetrySink, TriggerEdge,
-    TriggerEdgeSource,
+    legacy::{CalibrationPage, CalibrationStore},
+    AuxCommandBatch, AuxOutputSink, EcuClock, EcuOutput, EdgeBatch, OutputLevel, OutputScheduler,
+    OutputTransition, OutputTransitionBatch, RuntimeOutputProfile, SensorSnapshot, SensorSource,
+    TelemetryFrame, TelemetrySink, TriggerEdge, TriggerEdgeSource,
 };
 use ecu_domain::{Micros, SyncState, Ticks};
-use ecu_runtime::{Action, BaseFuelModel, EngineRuntime, StepInputs};
+use ecu_runtime::compat::StepInputs;
+use ecu_runtime::{Action, BaseFuelModel, EngineRuntime};
 
 use super::bridge::bridge_output_transitions_to_core_frame;
 use super::io::{

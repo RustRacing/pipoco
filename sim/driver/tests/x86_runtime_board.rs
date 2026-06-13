@@ -487,7 +487,7 @@ fn wasted_spark_profile_identity_uses_normalized_event_count() {
 
     assert_eq!(
         ignition_channels,
-        [0, 1, 2, 3, 4, 5, 6, 7].into_iter().collect()
+        [0, 2, 3, 4, 5, 6, 7].into_iter().collect()
     );
     let telemetry = board.telemetry_frame().expect("telemetry frame");
     assert_eq!(telemetry.ignition_profile_id, IgnitionProfileId::new(8));
@@ -505,13 +505,13 @@ fn synced_m50_runtime_outputs_bridge_into_clean_core_plant_commands() {
     let bridge = bridge_output_transitions_to_core_frame::<6, 12>(&result.scheduled_outputs);
     assert!(bridge.diagnostics.is_clean(), "{:?}", bridge.diagnostics);
     assert_eq!(bridge.ecu_outputs.injection_events.len(), 6);
-    assert_eq!(bridge.ecu_outputs.spark_events.len(), 6);
+    assert_eq!(bridge.ecu_outputs.spark_events.len(), 3);
     assert!(!bridge.ecu_outputs.injection_events.is_empty());
     assert!(!bridge.ecu_outputs.spark_events.is_empty());
 
     let output = step_bridge_outputs_into_core_plant(bridge.ecu_outputs);
     assert_eq!(output.consumed_events.injection_count, 6);
-    assert_eq!(output.consumed_events.spark_count, 12);
+    assert_eq!(output.consumed_events.spark_count, 6);
     assert_eq!(output.consumed_events.ignored_injection_count, 0);
     assert_eq!(output.consumed_events.ignored_spark_count, 0);
     assert!(
@@ -700,7 +700,7 @@ fn removing_injection_events_suppresses_combustion() {
 
     let output = step_bridge_outputs_into_core_plant(ecu_outputs);
     assert_eq!(output.consumed_events.injection_count, 0);
-    assert_eq!(output.consumed_events.spark_count, 12);
+    assert_eq!(output.consumed_events.spark_count, 6);
     assert_eq!(output.consumed_events.ignored_injection_count, 0);
     assert_eq!(output.consumed_events.ignored_spark_count, 0);
     assert_eq!(output.combustion.total_torque_nm_x100.0, 0);

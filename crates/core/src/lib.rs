@@ -78,6 +78,7 @@ pub mod compat {
         CoreAdapterContract, DiagnosticFlags, EcuConfig, EcuDerived, EcuFaults, EcuInputs,
         EcuOutputs, RuntimeSignals, SafetyStatus,
     };
+    pub use crate::ecu_state::EcuState;
     pub use crate::runtime_adapter::{
         runtime_fuel_strategy_from_fuel_tune, runtime_fuel_strategy_from_state,
         runtime_semantic_calibration_from_fuel_tune, runtime_semantic_calibration_from_state,
@@ -85,10 +86,6 @@ pub mod compat {
 }
 
 pub use capture::CaptureBuffer;
-pub use compat_state::{
-    CoreAdapterContract, DiagnosticFlags, EcuConfig, EcuDerived, EcuFaults, EcuInputs, EcuOutputs,
-    RuntimeSignals, SafetyStatus,
-};
 pub use fuel_state::{apply_cl_delta, scale_u16, Corrections};
 pub use ignition::{calculate_dwell, calculate_timing, IgnitionCorrections, IgnitionTable};
 pub use rev_limiter::{
@@ -103,5 +100,3 @@ pub use tables::IpwTable;
 pub use telemetry::IsrStats;
 pub use trigger::{TriggerDecoder, TriggerTiming};
 pub use units::{DegX10, Kpa10, Micros, Rpm, Ticks};
-
-pub use ecu_state::EcuState;

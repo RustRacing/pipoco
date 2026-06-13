@@ -1,7 +1,8 @@
 use ecu_board_api::{
-    AuxCommandBatch, AuxOutputSink, CalibrationPage, CalibrationStore, EcuClock, EcuOutput,
-    EdgeBatch, OutputLevel, OutputScheduler, OutputTransition, OutputTransitionBatch,
-    SensorSnapshot, TelemetryFrame, TelemetrySink, TriggerEdge, TriggerEdgeSource,
+    legacy::{CalibrationPage, CalibrationStore},
+    AuxCommandBatch, AuxOutputSink, EcuClock, EcuOutput, EdgeBatch, OutputLevel, OutputScheduler,
+    OutputTransition, OutputTransitionBatch, SensorSnapshot, TelemetryFrame, TelemetrySink,
+    TriggerEdge, TriggerEdgeSource,
 };
 use ecu_domain::{EnginePhase, Kpa10, Lambda100, Micros, Percent, Rpm, SyncState, Ticks};
 

@@ -32,14 +32,14 @@ mod fm0016_fixture_matrix {
 
 // Re-export runtime semantic types needed for product observation building
 use ecu_runtime::{
-    runtime_semantic_evaluate_fuel,
     semantic::{
-        conformance::runtime_semantic_evaluate_schedule, RuntimeSemanticAxis16,
-        RuntimeSemanticCalibration, RuntimeSemanticCurve16U16, RuntimeSemanticCylinderArrayU16,
-        RuntimeSemanticEngineMode, RuntimeSemanticFuelObservations,
-        RuntimeSemanticInjectionAngleMode, RuntimeSemanticInputSnapshot,
-        RuntimeSemanticScheduleCalibration, RuntimeSemanticScheduleEventKind, RuntimeSemanticState,
-        RuntimeSemanticTable2dI16, RuntimeSemanticTable2dU16, RuntimeSemanticTable2dU32,
+        conformance::runtime_semantic_evaluate_schedule, runtime_semantic_evaluate_fuel,
+        RuntimeSemanticAxis16, RuntimeSemanticCalibration, RuntimeSemanticCurve16U16,
+        RuntimeSemanticCylinderArrayU16, RuntimeSemanticEngineMode,
+        RuntimeSemanticFuelObservations, RuntimeSemanticInjectionAngleMode,
+        RuntimeSemanticInputSnapshot, RuntimeSemanticScheduleCalibration,
+        RuntimeSemanticScheduleEventKind, RuntimeSemanticState, RuntimeSemanticTable2dI16,
+        RuntimeSemanticTable2dU16, RuntimeSemanticTable2dU32,
     },
     RuntimeSemanticAfrOverride,
 };

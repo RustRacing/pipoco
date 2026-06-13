@@ -5,9 +5,10 @@ use ecu_calibration::{
     StagedCalibration, TriggerAuthority, TriggerEdge, TriggerFilter, TriggerPattern,
 };
 use ecu_domain::{Degrees10, Lambda100, Micros, Rpm};
+use ecu_runtime::compat::StepInputs;
 use ecu_runtime::{
     Action, ControlInputs, EngineRuntime, EnrichmentInputs, IgnitionInputs, LambdaTrimInputs,
-    StepInputs, TorqueInputs,
+    TorqueInputs,
 };
 
 #[test]

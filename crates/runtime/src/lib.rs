@@ -24,9 +24,12 @@ mod queues;
 pub mod semantic;
 pub mod ingress {
     pub use crate::observations::{
-        AuthorityStepInputs, ControlInputs, RuntimeAuthorityError, StepInputs, StepResult,
+        AuthorityStepInputs, ControlInputs, RuntimeAuthorityError, StepResult,
     };
     pub use ecu_domain::EngineTimeAuthority;
+}
+pub mod compat {
+    pub use crate::observations::StepInputs;
 }
 pub mod support {
     pub use crate::observations::{
@@ -54,8 +57,8 @@ pub use lowering::{
 pub use observations::{
     AuthorityStepInputs, CalibrationState, CamObservation, ControlInputs, ControlPlan,
     ControlState, DecoderObservation, EngineState, FaultState, RuntimeAfrOverride,
-    RuntimeEngineMode, RuntimeFuelObservations, RuntimeSnapshot, StepInputs, StepResult,
-    TorqueObservations, TriggerObservation, ValidatedInputs,
+    RuntimeEngineMode, RuntimeFuelObservations, RuntimeSnapshot, StepResult, TorqueObservations,
+    TriggerObservation, ValidatedInputs,
 };
 pub use outputs::runtime_full_sequential_authorized;
 #[cfg(test)]
@@ -71,12 +74,12 @@ pub(crate) use semantic::{
 };
 pub use semantic::{
     runtime_fuel_strategy_from_fuel_tune, runtime_semantic_calibration_from_fuel_tune,
-    runtime_semantic_evaluate_fuel, RuntimeSemanticAfrOverride, RuntimeSemanticAxis16,
-    RuntimeSemanticCalibration, RuntimeSemanticCurve16U16, RuntimeSemanticCylinderArrayU16,
-    RuntimeSemanticEngineMode, RuntimeSemanticFuelError, RuntimeSemanticFuelObservations,
-    RuntimeSemanticInjectionAngleMode, RuntimeSemanticInputSnapshot,
-    RuntimeSemanticPiIntegratorState, RuntimeSemanticState, RuntimeSemanticTable2dI16,
-    RuntimeSemanticTable2dU16, RuntimeSemanticTable2dU32, RUNTIME_SEMANTIC_TABLE_LEN,
+    RuntimeSemanticAfrOverride, RuntimeSemanticAxis16, RuntimeSemanticCalibration,
+    RuntimeSemanticCurve16U16, RuntimeSemanticCylinderArrayU16, RuntimeSemanticEngineMode,
+    RuntimeSemanticFuelError, RuntimeSemanticFuelObservations, RuntimeSemanticInjectionAngleMode,
+    RuntimeSemanticInputSnapshot, RuntimeSemanticPiIntegratorState, RuntimeSemanticState,
+    RuntimeSemanticTable2dI16, RuntimeSemanticTable2dU16, RuntimeSemanticTable2dU32,
+    RUNTIME_SEMANTIC_TABLE_LEN,
 };
 
 pub use ecu_calibration::{CalibrationSnapshot, PersistedCalibrationBlob};

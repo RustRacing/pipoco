@@ -286,62 +286,56 @@ fn replay_same_trace_twice_produces_identical_results() {
 fn unsupported_record_combinations_return_unsupported_record() {
     // Test: Edge input with None payload
     {
-        assert!(matches!(
-            TraceRecord::try_from_raw(
-                0,
-                Micros::new(100),
-                TraceInputKind::Edge,
-                TracePayload::None,
-                Rpm::new(0),
-                false,
-                0,
-                Degrees10::new(0),
-                FaultCode::None,
-            ),
-            Err(_)
-        ));
+        assert!(TraceRecord::try_from_raw(
+            0,
+            Micros::new(100),
+            TraceInputKind::Edge,
+            TracePayload::None,
+            Rpm::new(0),
+            false,
+            0,
+            Degrees10::new(0),
+            FaultCode::None,
+        )
+        .is_err());
     }
 
     // Test: Sensor input with Edge payload
     {
-        assert!(matches!(
-            TraceRecord::try_from_raw(
-                0,
-                Micros::new(100),
-                TraceInputKind::Sensor,
-                TracePayload::Edge(EdgeSample {
-                    at_us: Micros::new(100),
-                    line: EdgeLine::Crank,
-                    polarity: EdgePolarity::Rising,
-                    angle_x10: Degrees10::new(0),
-                    rpm: Rpm::new(1200),
-                }),
-                Rpm::new(1200),
-                false,
-                0,
-                Degrees10::new(0),
-                FaultCode::None,
-            ),
-            Err(_)
-        ));
+        assert!(TraceRecord::try_from_raw(
+            0,
+            Micros::new(100),
+            TraceInputKind::Sensor,
+            TracePayload::Edge(EdgeSample {
+                at_us: Micros::new(100),
+                line: EdgeLine::Crank,
+                polarity: EdgePolarity::Rising,
+                angle_x10: Degrees10::new(0),
+                rpm: Rpm::new(1200),
+            }),
+            Rpm::new(1200),
+            false,
+            0,
+            Degrees10::new(0),
+            FaultCode::None,
+        )
+        .is_err());
     }
 
     // Test: Tick input with None payload
     {
-        assert!(matches!(
-            TraceRecord::try_from_raw(
-                0,
-                Micros::new(100),
-                TraceInputKind::Tick,
-                TracePayload::None,
-                Rpm::new(0),
-                false,
-                0,
-                Degrees10::new(0),
-                FaultCode::None,
-            ),
-            Err(_)
-        ));
+        assert!(TraceRecord::try_from_raw(
+            0,
+            Micros::new(100),
+            TraceInputKind::Tick,
+            TracePayload::None,
+            Rpm::new(0),
+            false,
+            0,
+            Degrees10::new(0),
+            FaultCode::None,
+        )
+        .is_err());
     }
 }
 

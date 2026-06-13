@@ -17,8 +17,7 @@
 
 #![cfg(test)]
 
-use ecu_core::CoreAdapterContract;
-use ecu_core::EcuState;
+use ecu_core::compat::{CoreAdapterContract, EcuState};
 use fm0016_fixture_matrix::{assert_fixture_semantics, fixture_cases, oracle_result, FixtureCase};
 use std::panic::catch_unwind;
 

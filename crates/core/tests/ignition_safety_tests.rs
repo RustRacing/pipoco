@@ -6,7 +6,7 @@
 //! - Incorrect timing during cranking
 
 use ecu_core::constants::ignition::*;
-use ecu_core::{calculate_dwell, calculate_timing, EcuState, IgnitionCorrections};
+use ecu_core::{calculate_dwell, calculate_timing, compat::EcuState, IgnitionCorrections};
 
 // =============================================================================
 // TIMING SAFETY TESTS

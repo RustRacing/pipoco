@@ -1,9 +1,10 @@
+use crate::compat::StepInputs;
 use crate::ingress::RuntimeAuthorityError;
 use crate::{
     runtime_full_sequential_authorized, Action, ActionBatch, CalibrationState, ControlInputs,
     ControlPlan, ControlState, DecoderObservation, EngineState, FaultState, RuntimeOutputProfile,
     RuntimeSemanticAfrOverride, RuntimeSemanticCalibration, RuntimeSemanticEngineMode,
-    RuntimeSemanticInputSnapshot, RuntimeSemanticState, RuntimeSnapshot, StepInputs, StepResult,
+    RuntimeSemanticInputSnapshot, RuntimeSemanticState, RuntimeSnapshot, StepResult,
     TorqueObservations, ValidatedInputs, RUNTIME_ACTION_CAP, RUNTIME_AUX_COMMAND_CAP,
 };
 use ecu_board_api::{AuxCommand, AuxCommandBatch, AuxOutput, AuxValue, OutputLevel};
@@ -25,7 +26,7 @@ use ecu_scheduler::{
     TimedIgnitionPlan, TimedInjectionPlan,
 };
 
-use crate::{runtime_semantic_evaluate_fuel, FullEcuOutputProfile};
+use crate::{semantic::runtime_semantic_evaluate_fuel, FullEcuOutputProfile};
 
 fn engine_phase_from_authority(authority: EngineTimeAuthority, rpm: Rpm) -> EnginePhase {
     if rpm.get() == 0 {

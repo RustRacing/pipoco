@@ -8,7 +8,8 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use ecu_control::{EnrichmentInputs, IgnitionInputs, LambdaTrimInputs, TorqueInputs};
 use ecu_domain::{Degrees10, Micros, Rpm};
-use ecu_runtime::{ControlInputs, EngineRuntime, StepInputs};
+use ecu_runtime::compat::StepInputs;
+use ecu_runtime::{ControlInputs, EngineRuntime};
 use ecu_spec::TempC10;
 
 fn default_runtime() -> EngineRuntime {

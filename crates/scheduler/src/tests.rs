@@ -129,8 +129,8 @@ fn injection_scheduler_uses_fuel_topology_without_ignition() {
     assert_eq!(timed.plan.output.group(), OutputGroup::Injector);
     assert_eq!(timed.plan.output.channel(), ChannelId::new(2));
     assert_eq!(timed.plan.pulse_width, PulseWidthUs::new(2_500));
-    assert_eq!(timed.start_at, Micros::new(2_000));
-    assert_eq!(timed.end_at, Micros::new(4_500));
+    assert_eq!(timed.start_at, Micros::new(14_500));
+    assert_eq!(timed.end_at, Micros::new(17_000));
 }
 
 #[test]
@@ -178,8 +178,8 @@ fn injection_scheduler_zero_pulse_width_still_exports_valid_deadline() {
 
     assert_eq!(timed.plan.output.group(), OutputGroup::Injector);
     assert_eq!(timed.plan.output.channel(), ChannelId::new(0));
-    assert_eq!(timed.start_at, Micros::new(2_000));
-    assert_eq!(timed.end_at, Micros::new(2_001));
+    assert_eq!(timed.start_at, Micros::new(24_500));
+    assert_eq!(timed.end_at, Micros::new(24_501));
 }
 
 #[test]

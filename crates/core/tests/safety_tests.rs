@@ -9,8 +9,8 @@ use ecu_core::constants::safety::{
 };
 use ecu_core::hal::TimeSource;
 use ecu_core::{
-    scale_u16, should_allow_injection, update_flood_clear, EcuState, FloodClearState, IpwTable,
-    SyncLossTracker, TriggerDecoder,
+    compat::EcuState, scale_u16, should_allow_injection, update_flood_clear, FloodClearState,
+    IpwTable, SyncLossTracker, TriggerDecoder,
 };
 use std::cell::Cell;
 

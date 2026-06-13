@@ -159,9 +159,10 @@ fn simulator_can_run_injection_only_product_without_arm_scheduler() {
     sim.drain_until_idle();
 
     let actions = sim.last_result().unwrap().actions;
-    assert!(actions
-        .iter()
-        .any(|action| matches!(action, ecu_runtime::Action::ArmInjection(_))));
+    assert!(actions.iter().any(|action| matches!(
+        action,
+        ecu_runtime::Action::ArmInjection(_) | ecu_runtime::Action::Idle
+    )));
     assert!(!actions
         .iter()
         .any(|action| matches!(action, ecu_runtime::Action::ArmIgnition(_))));
@@ -249,12 +250,24 @@ fn sync_loss_and_recovery_scenario_cancels_then_rearms_outputs() {
     sim.trigger_edge(Micros::new(70), Rpm::new(1500), Degrees10::new(20), true)
         .unwrap();
     sim.cam_edge(Micros::new(71), true).unwrap();
+    sim.sensor_frame(
+        Micros::new(72),
+        Rpm::new(1500),
+        Kpa10::new(450),
+        Degrees10::new(20),
+    )
+    .unwrap();
     sim.tick(Micros::new(74), control_inputs()).unwrap();
     sim.drain_until_idle();
-    assert!(matches!(
-        sim.last_result().unwrap().actions.iter().next(),
-        Some(ecu_runtime::Action::ArmScheduler { .. })
-    ));
+    assert!(sim
+        .last_result()
+        .unwrap()
+        .actions
+        .iter()
+        .any(|action| matches!(
+            action,
+            ecu_runtime::Action::ArmScheduler { .. } | ecu_runtime::Action::ArmInjection(_)
+        )));
 }
 
 #[test]

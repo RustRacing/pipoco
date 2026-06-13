@@ -92,7 +92,13 @@ impl InjectionScheduler {
         event_index: usize,
         fuel: FuelPlan,
     ) -> TimedInjectionPlan {
-        let start_at = crank.now_us;
+        let event_count = self.event_count().max(1) as u32;
+        let rev_slot_deg10 = (u32::from(CRANK_REV_DEGREES10) / event_count).max(1) as u16;
+        let current = norm_deg10(crank.angle_deg10.get() as i32, CRANK_REV_DEGREES10);
+        let target = ((event_index as u32 % event_count) * u32::from(rev_slot_deg10)) as u16;
+        let delta = forward_angle_delta_deg10(current, target, CRANK_REV_DEGREES10);
+        let start_delay_us = micros_for_angle_delta(delta.max(1), crank.rpm);
+        let start_at = Micros::new(crank.now_us.get().saturating_add(start_delay_us));
         let end_at = Micros::new(
             start_at
                 .get()

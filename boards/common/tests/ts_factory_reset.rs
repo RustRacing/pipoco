@@ -1,7 +1,7 @@
 use ecu_calibration::FuelRuntimeTune;
+use ecu_core::compat::EcuState;
 use ecu_core::constants::{fuel as fuel_consts, ignition as ign_consts};
 use ecu_core::ts::pages::EcuPageStore;
-use ecu_core::EcuState;
 use ecu_target_common::kv::ram::RamKv512;
 use ecu_ts::pages::{PAGE_FUEL, PAGE_IGN, TABLE_PAGE_BYTES};
 use ecu_ts::persistence::{PageStoreProvider, PersistedTsPageStore};

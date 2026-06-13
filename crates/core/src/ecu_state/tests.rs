@@ -1,5 +1,6 @@
 #[cfg(test)]
 use super::EcuState;
+use crate::compat::{DiagnosticFlags, RuntimeSignals};
 use crate::constants::fuel::{DEFAULT_PULSE_WIDTH_US, MAX_PULSE_WIDTH_US, MIN_PULSE_WIDTH_US};
 use crate::*;
 

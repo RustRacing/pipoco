@@ -39,6 +39,7 @@ use ecu_domain::{
     AbsoluteTimeAuthority, CancelReason, ControlMode, CrankSyncState, EngineTimeAuthority,
     FaultCode, FaultSeverity, Kpa10, Micros, PhaseSyncState, Rpm, SyncState as DomainSyncState,
 };
+use ecu_runtime::compat::StepInputs;
 use ecu_runtime::semantic::{
     conformance::{
         runtime_semantic_evaluate_schedule_with_authority, runtime_semantic_evaluate_torque,
@@ -46,9 +47,9 @@ use ecu_runtime::semantic::{
         RuntimeSemanticScheduleDiagnostic, RuntimeSemanticScheduleEvent,
         RuntimeSemanticScheduleEventKind, RuntimeSemanticTorqueInput,
     },
-    RuntimeSemanticAfrOverride, RuntimeSemanticAxis16, RuntimeSemanticCalibration,
-    RuntimeSemanticCurve16U16, RuntimeSemanticCylinderArrayU16, RuntimeSemanticEngineMode,
-    RuntimeSemanticFuelObservations, RuntimeSemanticInjectionAngleMode,
+    runtime_semantic_evaluate_fuel, RuntimeSemanticAfrOverride, RuntimeSemanticAxis16,
+    RuntimeSemanticCalibration, RuntimeSemanticCurve16U16, RuntimeSemanticCylinderArrayU16,
+    RuntimeSemanticEngineMode, RuntimeSemanticFuelObservations, RuntimeSemanticInjectionAngleMode,
     RuntimeSemanticInputSnapshot, RuntimeSemanticState, RuntimeSemanticTable2dI16,
     RuntimeSemanticTable2dU16, RuntimeSemanticTable2dU32,
 };
@@ -56,9 +57,9 @@ use ecu_runtime::support::{
     extract_fuel_observations, RuntimeAdapterContract, RuntimeObservedSurface,
 };
 use ecu_runtime::{
-    runtime_full_sequential_authorized, runtime_semantic_evaluate_fuel, runtime_x100_to_spec_x1000,
-    Action, ActionBatch, BaseFuelModel, ControlInputs, EngineRuntime, EnrichmentInputs,
-    IgnitionInputs, LambdaTrimInputs, StepInputs, TorqueInputs,
+    runtime_full_sequential_authorized, runtime_x100_to_spec_x1000, Action, ActionBatch,
+    BaseFuelModel, ControlInputs, EngineRuntime, EnrichmentInputs, IgnitionInputs,
+    LambdaTrimInputs, TorqueInputs,
 };
 use ecu_spec::{
     AfrOverride, CylinderArrayU16, EngineMode, InjectionAngleMode, InputSnapshot,

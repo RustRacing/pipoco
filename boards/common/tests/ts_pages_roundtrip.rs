@@ -84,17 +84,17 @@ use ecu_calibration::{
     ExpertUnlock, PrimaryTriggerSpeed, SecondaryTriggerMode, TriggerAuthority, TriggerEdge,
     TriggerFilter, TriggerPattern,
 };
-use ecu_core::EcuState;
+use ecu_core::compat::EcuState;
 use ecu_domain::{
     AbsoluteTimeAuthority, ChannelId, CrankSyncState, CylinderId, EngineTimeAuthority, Kpa10,
     Micros, PhaseSyncState, Rpm,
 };
+use ecu_runtime::compat::StepInputs;
 use ecu_runtime::{
     runtime_full_sequential_authorized, Action, AuxSafetyProfile, ControlInputs, EngineRuntime,
     EnrichmentInputs, FullEcuOutputProfile, IgnitionInputs, LambdaTrimInputs,
     OutputAuthorityRequirement, RuntimeSemanticAxis16, RuntimeSemanticCalibration,
-    RuntimeSemanticCurve16U16, RuntimeSemanticState, RuntimeSemanticTable2dU16, StepInputs,
-    TorqueInputs,
+    RuntimeSemanticCurve16U16, RuntimeSemanticState, RuntimeSemanticTable2dU16, TorqueInputs,
 };
 
 const fn inline_full_ecu_profile() -> FullEcuOutputProfile {
