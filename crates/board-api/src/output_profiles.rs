@@ -122,10 +122,6 @@ impl FuelOutputProfile {
 }
 
 impl RuntimeOutputProfile {
-    pub const fn legacy_single_channel() -> Self {
-        Self::LegacySingleChannel
-    }
-
     pub const fn crank_only_wasted_spark(cylinder_count: u8) -> Self {
         Self::IgnitionOnly(SparkOutputProfile::crank_only_wasted_spark(cylinder_count))
     }
@@ -144,6 +140,14 @@ impl RuntimeOutputProfile {
 
     pub const fn full_ecu(profile: FullEcuOutputProfile) -> Self {
         Self::FullEcu(profile)
+    }
+}
+
+pub mod legacy {
+    use super::RuntimeOutputProfile;
+
+    pub const fn single_channel_runtime_output_profile() -> RuntimeOutputProfile {
+        RuntimeOutputProfile::LegacySingleChannel
     }
 }
 

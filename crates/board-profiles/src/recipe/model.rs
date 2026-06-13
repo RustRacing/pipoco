@@ -11,7 +11,7 @@ impl RuntimeProfile {
     }
 
     pub const fn rev_limiter() -> Self {
-        Self::new(RuntimeOutputProfile::legacy_single_channel())
+        Self::new(ecu_board_api::legacy::single_channel_runtime_output_profile())
     }
 }
 

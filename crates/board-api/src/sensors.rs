@@ -45,7 +45,7 @@ impl SensorSnapshot {
             intake_temp_c10,
             battery_mv,
             lambda,
-            crate::timing_island::legacy_sync_state_authority(sync_state),
+            crate::timing_island::legacy::sync_state_authority(sync_state),
             engine_phase,
         )
     }

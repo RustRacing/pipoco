@@ -661,3 +661,152 @@ fn transition_queue_saturates_at_max_pending_then_recovers_after_drain() {
     );
     assert_eq!(queue.active_count(), 1);
 }
+
+#[test]
+fn sync_loss_cancels_queue_and_suspends_scheduler_state() {
+    let mut queue = ScheduledTransitionQueue::<MODEL_MAX_PENDING>::new();
+    let mut state = SchedulerState::new();
+
+    let inj = InjectionPlan {
+        output: ExclusiveChannel::new(OutputGroup::Injector, ChannelId::new(1)),
+        pulse_width: PulseWidthUs::new(1200),
+    };
+    let ign = IgnitionPlan {
+        output: ExclusiveChannel::new(OutputGroup::Ignition, ChannelId::new(0)),
+        dwell: DwellUs::new(1400),
+        advance: Degrees10::new(120),
+    };
+
+    let timed_inj = state
+        .schedule_injection(Micros::new(100), Micros::new(150), Micros::new(350), inj)
+        .expect("injection should arm before sync loss");
+    let timed_ign = state
+        .schedule_ignition(Micros::new(100), Micros::new(180), Micros::new(420), ign)
+        .expect("ignition should arm before sync loss");
+    queue
+        .enqueue_export(
+            &timed_inj
+                .export_transitions::<MODEL_MAX_PENDING>()
+                .expect("valid export"),
+        )
+        .expect("queue accepts injection export");
+    queue
+        .enqueue_export(
+            &timed_ign
+                .export_transitions::<MODEL_MAX_PENDING>()
+                .expect("valid export"),
+        )
+        .expect("queue accepts ignition export");
+
+    assert!(queue.active_count() > 0);
+    assert_eq!(state.mode(), SchedulerMode::Armed);
+
+    queue.on_sync_loss();
+    state.on_sync_loss();
+
+    assert_eq!(queue.active_count(), 0);
+    assert_eq!(state.mode(), SchedulerMode::Suspended);
+    assert_eq!(state.active_groups(), 0);
+    assert_eq!(state.injection_count(), 0);
+    assert_eq!(state.ignition_count(), 0);
+}
+
+#[test]
+fn hard_safety_shutdown_clears_all_active_schedule_state() {
+    let mut queue = ScheduledTransitionQueue::<MODEL_MAX_PENDING>::new();
+    let mut state = SchedulerState::new();
+
+    let inj = InjectionPlan {
+        output: ExclusiveChannel::new(OutputGroup::Injector, ChannelId::new(2)),
+        pulse_width: PulseWidthUs::new(1300),
+    };
+
+    let timed_inj = state
+        .schedule_injection(Micros::new(50), Micros::new(100), Micros::new(300), inj)
+        .expect("injection should arm before safety shutdown");
+    queue
+        .enqueue_export(
+            &timed_inj
+                .export_transitions::<MODEL_MAX_PENDING>()
+                .expect("valid export"),
+        )
+        .expect("queue accepts export before shutdown");
+
+    queue.on_hard_safety_shutdown();
+    state.on_hard_safety_shutdown();
+
+    assert_eq!(queue.active_count(), 0);
+    assert_eq!(state.mode(), SchedulerMode::Suspended);
+    assert_eq!(state.active_groups(), 0);
+    assert_eq!(state.reserved_channels(), [0; 4]);
+}
+
+#[test]
+fn queue_drain_preserves_stable_order_for_equal_timestamps() {
+    let mut queue = ScheduledTransitionQueue::<MODEL_MAX_PENDING>::new();
+
+    let first = ScheduledTransition {
+        at_us: Micros::new(500),
+        kind: ScheduledTransitionKind::Injector,
+        channel: ChannelId::new(1),
+        level: ScheduledLevel::High,
+    };
+    let second = ScheduledTransition {
+        at_us: Micros::new(500),
+        kind: ScheduledTransitionKind::Ignition,
+        channel: ChannelId::new(2),
+        level: ScheduledLevel::Low,
+    };
+
+    queue
+        .enqueue_transition(first)
+        .expect("first transition enqueues");
+    queue
+        .enqueue_transition(second)
+        .expect("second transition enqueues");
+
+    let mut drained = TransitionDrainBuffer::<MODEL_MAX_PENDING>::new();
+    let count = queue.drain_due(Micros::new(600), &mut drained);
+
+    assert_eq!(count, 2);
+    assert_eq!(drained.len, 2);
+    assert_eq!(drained.transitions[0], Some(second));
+    assert_eq!(drained.transitions[1], Some(first));
+}
+
+#[test]
+fn enqueue_export_overflow_is_explicit_and_atomic() {
+    let mut queue = ScheduledTransitionQueue::<MODEL_MAX_PENDING>::new();
+
+    let existing = ScheduledTransition {
+        at_us: Micros::new(100),
+        kind: ScheduledTransitionKind::Injector,
+        channel: ChannelId::new(0),
+        level: ScheduledLevel::High,
+    };
+    queue
+        .enqueue_transition(existing)
+        .expect("seed transition should enqueue");
+
+    let mut export = ScheduleExport::<MODEL_MAX_PENDING> {
+        len: MODEL_MAX_PENDING as u8,
+        transitions: [None; MODEL_MAX_PENDING],
+    };
+    for idx in 0..MODEL_MAX_PENDING {
+        export.transitions[idx] = Some(ScheduledTransition {
+            at_us: Micros::new(200 + idx as u32 * 10),
+            kind: ScheduledTransitionKind::Injector,
+            channel: ChannelId::new((idx + 1) as u8),
+            level: ScheduledLevel::High,
+        });
+    }
+
+    let before = queue.snapshot();
+    assert_eq!(queue.enqueue_export(&export), Err(ScheduleError::QueueFull));
+    assert_eq!(
+        queue.snapshot(),
+        before,
+        "overflowing export must not partially enqueue"
+    );
+    assert_eq!(queue.active_count(), 1);
+}

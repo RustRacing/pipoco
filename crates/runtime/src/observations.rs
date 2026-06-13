@@ -111,6 +111,43 @@ pub struct StepInputs {
     pub flat_shift_armed: bool,
 }
 
+/// Canonical product ingress for one runtime step.
+///
+/// Unlike [`StepInputs`], this frame carries engine-time authority directly and
+/// does not rely on boolean sync/cam side channels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AuthorityStepInputs {
+    pub now_us: Micros,
+    pub rpm: u32,
+    pub load_kpa10: u32,
+    pub angle_x10: i32,
+    pub authority: EngineTimeAuthority,
+    pub launch_armed: bool,
+    pub flat_shift_armed: bool,
+}
+
+impl AuthorityStepInputs {
+    pub const fn new(
+        now_us: Micros,
+        rpm: u32,
+        load_kpa10: u32,
+        angle_x10: i32,
+        authority: EngineTimeAuthority,
+        launch_armed: bool,
+        flat_shift_armed: bool,
+    ) -> Self {
+        Self {
+            now_us,
+            rpm,
+            load_kpa10,
+            angle_x10,
+            authority,
+            launch_armed,
+            flat_shift_armed,
+        }
+    }
+}
+
 /// Runtime engine-mode input used for formal differential fixture mapping.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeEngineMode {
@@ -160,6 +197,38 @@ impl DifferentialInputSnapshot {
             launch_armed: self.launch_armed,
             flat_shift_armed: self.flat_shift_armed,
         }
+    }
+
+    pub fn to_authority_step_inputs(self) -> AuthorityStepInputs {
+        AuthorityStepInputs {
+            now_us: self.now_us,
+            rpm: self.rpm.get() as u32,
+            load_kpa10: self.load_kpa10.get() as u32,
+            angle_x10: self.angle_x10.get() as i32,
+            authority: authority_from_sync_summary(self.sync),
+            launch_armed: self.launch_armed,
+            flat_shift_armed: self.flat_shift_armed,
+        }
+    }
+}
+
+const fn authority_from_sync_summary(sync: SyncState) -> EngineTimeAuthority {
+    match sync {
+        SyncState::Locked { .. } => EngineTimeAuthority::new(
+            ecu_domain::CrankSyncState::PrimaryLocked,
+            ecu_domain::PhaseSyncState::CrankOnly360,
+            ecu_domain::AbsoluteTimeAuthority::GeometryOnly,
+            EngineTimeAuthority::MAX_CONFIDENCE_X1000,
+            0,
+        ),
+        SyncState::Provisional => EngineTimeAuthority::new(
+            ecu_domain::CrankSyncState::PrimarySearching,
+            ecu_domain::PhaseSyncState::Unknown,
+            ecu_domain::AbsoluteTimeAuthority::None,
+            0,
+            0,
+        ),
+        SyncState::Unsynced => EngineTimeAuthority::none(),
     }
 }
 

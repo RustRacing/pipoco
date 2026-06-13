@@ -45,8 +45,10 @@ transport-can-fd = ["transport-can", "ecu-transport/transport-can-fd"]
 name = "ecu-rp2350b-min"
 path = "src/bin/minimal_ecu.rs"
 required-features = ["example-bins"]
+test = false
 
 [[bin]]
 name = "ecu-rp2350b-demo"
 path = "src/main.rs"
 required-features = ["ve-demo"]
+test = false

@@ -23,6 +23,16 @@ mod timing_island;
 mod traits;
 pub mod wire;
 
+pub mod legacy {
+    //! Compatibility helpers for migration-era callers.
+    //!
+    //! New board/runtime code should use the canonical authority-aware timing
+    //! and output profile APIs from the crate root instead of these shims.
+
+    pub use crate::output_profiles::legacy::single_channel_runtime_output_profile;
+    pub use crate::timing_island::legacy::sync_state_authority;
+}
+
 pub use capabilities::{
     BoardCapabilities, BoardResourceLimits, CalibrationPage, IgnitionProfileId,
     LoadSourceCapabilities, PinMapId, ProfileId, RuntimeBuildId,

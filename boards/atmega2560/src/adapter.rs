@@ -6,10 +6,10 @@ use ecu_board_profiles::{
     BoardBuildMetadata, FirmwareBuildPlan, FirmwareRecipe, FirstRunChecklistItem,
     TunerStudioProfileSelection,
 };
-use ecu_domain::{Degrees10, EngineTimeAuthority, PhaseSyncState};
+use ecu_domain::{Degrees10, EngineTimeAuthority};
 use ecu_runtime::{
-    ActionExecutor, ActionOutputBatchAdapter, ControlInputs, EngineRuntime, EnrichmentInputs,
-    IgnitionInputs, LambdaTrimInputs, StepInputs, TorqueInputs,
+    ActionExecutor, ActionOutputBatchAdapter, AuthorityStepInputs, ControlInputs, EngineRuntime,
+    EnrichmentInputs, IgnitionInputs, LambdaTrimInputs, TorqueInputs,
 };
 
 use crate::errors::{
@@ -172,9 +172,8 @@ impl Atmega2560BoardAdapter {
         input: Atmega2560StepInput,
     ) -> Result<Atmega2560StepOutput, Atmega2560BridgeError> {
         let authority = effective_engine_time_authority(input);
-        self.runtime.set_engine_time_authority(authority);
-        let result = self.runtime.step(
-            step_inputs(input, authority),
+        let result = self.runtime.step_with_authority(
+            authority_step_inputs(input, authority),
             conservative_control_inputs(input),
         );
         let mut output = Atmega2560StepOutput::new(telemetry(input, &self.runtime, &self.profile));
@@ -297,17 +296,16 @@ fn effective_engine_time_authority(input: Atmega2560StepInput) -> EngineTimeAuth
     input.engine_time_authority
 }
 
-fn step_inputs(input: Atmega2560StepInput, authority: EngineTimeAuthority) -> StepInputs {
-    StepInputs {
+fn authority_step_inputs(
+    input: Atmega2560StepInput,
+    authority: EngineTimeAuthority,
+) -> AuthorityStepInputs {
+    AuthorityStepInputs {
         now_us: input.now_us,
         rpm: input.rpm.get() as u32,
         load_kpa10: input.load_kpa10.get() as u32,
         angle_x10: input.crank_angle_x10.get() as i32,
-        trigger_synced: authority.has_primary_lock(),
-        cam_seen: matches!(
-            authority.phase,
-            PhaseSyncState::CamObserved720 | PhaseSyncState::CamValidated720
-        ),
+        authority,
         launch_armed: false,
         flat_shift_armed: false,
     }

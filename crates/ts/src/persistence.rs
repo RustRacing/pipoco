@@ -3,9 +3,9 @@
 use crate::pages::PageCodecError;
 use crate::pages::{
     decode_trusted_expert_trigger_page, encode_expert_trigger_page,
-    expert_trigger_calibration_from_page, expert_trigger_page_from_calibration, ANGLES_PAGE_BYTES,
-    EXPERT_TRIGGER_PAGE_BYTES, PAGE_ANGLES, PAGE_EXPERT_TRIGGER, PAGE_FUEL, PAGE_IGN,
-    TABLE_PAGE_BYTES,
+    expert_trigger_calibration_from_page, expert_trigger_page_from_calibration, ts_page_descriptor,
+    ANGLES_PAGE_BYTES, EXPERT_TRIGGER_PAGE_BYTES, PAGE_ANGLES, PAGE_EXPERT_TRIGGER, PAGE_FUEL,
+    PAGE_IGN, TABLE_PAGE_BYTES,
 };
 use crate::server::{PageError, PageStore, PersistError as ServerPersistError};
 use ecu_calibration::kv::{
@@ -26,17 +26,26 @@ pub const TS_SETUP_PERSISTED_PAGES: [PersistedPageSpec; 3] = [
     PersistedPageSpec {
         page: PAGE_FUEL,
         key: PERSIST_KEY_FUEL,
-        len: TABLE_PAGE_BYTES,
+        len: match ts_page_descriptor(PAGE_FUEL) {
+            Some(descriptor) => descriptor.len,
+            None => 0,
+        },
     },
     PersistedPageSpec {
         page: PAGE_IGN,
         key: PERSIST_KEY_IGN,
-        len: TABLE_PAGE_BYTES,
+        len: match ts_page_descriptor(PAGE_IGN) {
+            Some(descriptor) => descriptor.len,
+            None => 0,
+        },
     },
     PersistedPageSpec {
         page: PAGE_ANGLES,
         key: PERSIST_KEY_ANGLES,
-        len: ANGLES_PAGE_BYTES,
+        len: match ts_page_descriptor(PAGE_ANGLES) {
+            Some(descriptor) => descriptor.len,
+            None => 0,
+        },
     },
 ];
 

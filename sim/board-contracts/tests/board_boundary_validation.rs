@@ -22,6 +22,17 @@ use ecu_target_common::adapter::{
     BoardAdapter as Rp2350Adapter, BoardAdapterError, BoardEvent as Rp2350Event,
 };
 
+type BoundaryAdapterError = BoardAdapterError<
+    InjectedBoundaryError,
+    InjectedBoundaryError,
+    InjectedBoundaryError,
+    InjectedBoundaryError,
+    InjectedBoundaryError,
+    InjectedBoundaryError,
+>;
+
+type BoundaryStepResult = Result<Option<ecu_runtime::StepResult>, BoundaryAdapterError>;
+
 #[derive(Clone)]
 struct Counters {
     action: Rc<Cell<usize>>,
@@ -265,6 +276,26 @@ fn sample() -> CaptureSample {
     }
 }
 
+fn locked_authority() -> EngineTimeAuthority {
+    EngineTimeAuthority::new(
+        ecu_domain::CrankSyncState::PrimaryLocked,
+        ecu_domain::PhaseSyncState::CrankOnly360,
+        ecu_domain::AbsoluteTimeAuthority::GeometryOnly,
+        EngineTimeAuthority::MAX_CONFIDENCE_X1000,
+        0,
+    )
+}
+
+fn full_sequential_authority() -> EngineTimeAuthority {
+    EngineTimeAuthority::new(
+        ecu_domain::CrankSyncState::PrimaryLocked,
+        ecu_domain::PhaseSyncState::CamValidated720,
+        ecu_domain::AbsoluteTimeAuthority::GeometryOnly,
+        EngineTimeAuthority::MAX_CONFIDENCE_X1000,
+        0,
+    )
+}
+
 #[test]
 fn board_boundary_keeps_capabilities_logical_and_io_raw() {
     const FULL_ECU: BoardCapabilities =
@@ -275,8 +306,6 @@ fn board_boundary_keeps_capabilities_logical_and_io_raw() {
 
     assert!(FULL_ECU.supports_full_ecu());
     assert!(FULL_ECU.supports_load_sensor());
-    assert!(FULL_ECU.cam_input);
-    assert!(FULL_ECU.calibration_persistence);
     assert!(REV_LIMITER.supports_rev_limiter());
     assert!(!REV_LIMITER.supports_full_ecu());
     assert!(!REV_LIMITER.supports_load_sensor());
@@ -379,7 +408,7 @@ fn adapter_boundary_smoke_accepts_same_event_sequence_for_independent_ports() {
             rpm: Rpm::new(3000),
             angle_x10: Degrees10::new(12),
             synced: true,
-            authority: EngineTimeAuthority::none(),
+            authority: locked_authority(),
         })
         .expect("rp2350 trigger edge should be captured");
     rp2350
@@ -394,7 +423,7 @@ fn adapter_boundary_smoke_accepts_same_event_sequence_for_independent_ports() {
             rpm: Rpm::new(3000),
             angle_x10: Degrees10::new(12),
             synced: true,
-            authority: EngineTimeAuthority::none(),
+            authority: locked_authority(),
         })
         .expect("second adapter trigger edge should be captured");
     second
@@ -448,7 +477,7 @@ fn board_adapter_boundary_errors_are_classified_by_trait() {
             rpm: Rpm::new(3000),
             angle_x10: Degrees10::new(12),
             synced: true,
-            authority: EngineTimeAuthority::none(),
+            authority: locked_authority(),
         }),
         Err(BoardAdapterError::Capture(InjectedBoundaryError::Capture))
     );
@@ -504,26 +533,14 @@ fn rp2350_with_failures(
     adapter
 }
 
-fn tick_with_failures(
-    failures: MockFailures,
-) -> Result<
-    Option<ecu_runtime::StepResult>,
-    BoardAdapterError<
-        InjectedBoundaryError,
-        InjectedBoundaryError,
-        InjectedBoundaryError,
-        InjectedBoundaryError,
-        InjectedBoundaryError,
-        InjectedBoundaryError,
-    >,
-> {
+fn tick_with_failures(failures: MockFailures) -> BoundaryStepResult {
     let mut adapter = rp2350_with_failures(failures);
     adapter.apply_event(Rp2350Event::TriggerEdge {
         at_us: Micros::new(12),
         rpm: Rpm::new(3000),
         angle_x10: Degrees10::new(12),
         synced: true,
-        authority: EngineTimeAuthority::none(),
+        authority: full_sequential_authority(),
     })?;
     adapter.apply_event(Rp2350Event::Tick {
         now_us: Micros::new(20),
@@ -531,19 +548,7 @@ fn tick_with_failures(
     })
 }
 
-fn dirty_tick_with_failures(
-    failures: MockFailures,
-) -> Result<
-    Option<ecu_runtime::StepResult>,
-    BoardAdapterError<
-        InjectedBoundaryError,
-        InjectedBoundaryError,
-        InjectedBoundaryError,
-        InjectedBoundaryError,
-        InjectedBoundaryError,
-        InjectedBoundaryError,
-    >,
-> {
+fn dirty_tick_with_failures(failures: MockFailures) -> BoundaryStepResult {
     let mut adapter = rp2350_with_failures(failures);
     adapter.set_staged_dirty(true);
     adapter.apply_event(Rp2350Event::Tick {

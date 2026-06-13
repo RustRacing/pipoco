@@ -23,7 +23,9 @@ mod outputs;
 mod queues;
 pub mod semantic;
 pub mod ingress {
-    pub use crate::observations::{ControlInputs, RuntimeAuthorityError, StepInputs, StepResult};
+    pub use crate::observations::{
+        AuthorityStepInputs, ControlInputs, RuntimeAuthorityError, StepInputs, StepResult,
+    };
     pub use ecu_domain::EngineTimeAuthority;
 }
 pub mod support {
@@ -50,10 +52,10 @@ pub use lowering::{
     ActionLoweringStatus, ActionOutputBatchAdapter, BoardApiBatchExecutor,
 };
 pub use observations::{
-    CalibrationState, CamObservation, ControlInputs, ControlPlan, ControlState, DecoderObservation,
-    EngineState, FaultState, RuntimeAfrOverride, RuntimeEngineMode, RuntimeFuelObservations,
-    RuntimeSnapshot, StepInputs, StepResult, TorqueObservations, TriggerObservation,
-    ValidatedInputs,
+    AuthorityStepInputs, CalibrationState, CamObservation, ControlInputs, ControlPlan,
+    ControlState, DecoderObservation, EngineState, FaultState, RuntimeAfrOverride,
+    RuntimeEngineMode, RuntimeFuelObservations, RuntimeSnapshot, StepInputs, StepResult,
+    TorqueObservations, TriggerObservation, ValidatedInputs,
 };
 pub use outputs::runtime_full_sequential_authorized;
 #[cfg(test)]

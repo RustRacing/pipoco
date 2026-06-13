@@ -1475,6 +1475,69 @@ fn fast_and_slow_lanes_are_independent() {
 }
 
 #[test]
+fn queue_pressure_and_degraded_authority_keep_runtime_output_suppressed() {
+    let mut queues: RuntimeQueues<1, 1> = RuntimeQueues::new();
+    assert_eq!(
+        queues.push(Event::Fast(FastEvent::TriggerEdge {
+            at_us: Micros::new(10),
+        })),
+        Ok(QueueResult::Enqueued)
+    );
+    assert_eq!(
+        queues.push(Event::Fast(FastEvent::SensorSample {
+            rpm: Rpm::new(2500),
+            load_kpa10: Kpa10::new(700),
+        })),
+        Err(QueueOverflow::FastFull)
+    );
+    assert_eq!(
+        queues.push(Event::Slow(SlowEvent::SnapshotRequested)),
+        Ok(QueueResult::Enqueued)
+    );
+    assert_eq!(
+        queues.push(Event::Slow(SlowEvent::PersistRequested)),
+        Err(QueueOverflow::SlowFull)
+    );
+
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_full_ecu(inline_sequential_cop_profile());
+
+    let result = runtime.step_with_authority(
+        AuthorityStepInputs::new(
+            Micros::new(10),
+            2500,
+            700,
+            120,
+            authority(
+                CrankSyncState::PrimarySearching,
+                PhaseSyncState::Unknown,
+                AbsoluteTimeAuthority::None,
+            ),
+            false,
+            false,
+        ),
+        running_control_inputs(10, 2500),
+    );
+
+    assert_eq!(result.operating_mode, ControlMode::OpenLoop);
+    assert_eq!(
+        runtime.engine_time_authority().crank,
+        CrankSyncState::PrimarySearching
+    );
+    assert!(!runtime_full_sequential_authorized(
+        runtime.engine_time_authority()
+    ));
+    assert_eq!(arm_injection_count(result.actions), 0);
+    assert_eq!(arm_ignition_count(result.actions), 0);
+    assert_eq!(
+        runtime.snapshot().engine.engine_time_authority,
+        runtime.engine_time_authority()
+    );
+    assert!(!runtime.snapshot().fuel_cut);
+    assert!(!runtime.snapshot().spark_cut);
+}
+
+#[test]
 fn runtime_differential_mapping_matches_oracle_fuel_and_state() {
     let input = canonical_runtime_input();
     let oracle = spec_step(
@@ -1602,7 +1665,7 @@ fn engine_runtime_layout_defaults_cleanly() {
     assert_eq!(runtime.calibration_snapshot, CalibrationSnapshot::default());
     assert_eq!(
         runtime.output_profile(),
-        RuntimeOutputProfile::legacy_single_channel()
+        ecu_board_api::legacy::single_channel_runtime_output_profile()
     );
 }
 
@@ -1776,9 +1839,8 @@ fn step_with_authority_keeps_structured_baseline_when_inputs_match() {
 
     let authority = validated_expert_authority();
     let result = runtime.step_with_authority(
-        running_step_inputs(10, 3000, true, true),
+        AuthorityStepInputs::new(Micros::new(10), 3000, 500, 100, authority, false, false),
         running_control_inputs(10, 3000),
-        authority,
     );
 
     assert_eq!(runtime.engine_time_authority(), authority);

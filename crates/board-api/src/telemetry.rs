@@ -26,7 +26,7 @@ impl EngineTimeAuthorityTelemetry {
     }
 
     pub const fn legacy(sync_state: SyncState) -> Self {
-        Self::new(crate::timing_island::legacy_sync_state_authority(
+        Self::new(crate::timing_island::legacy::sync_state_authority(
             sync_state,
         ))
     }

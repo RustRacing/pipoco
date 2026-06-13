@@ -27,6 +27,23 @@ pub struct ScheduledTransition {
     pub level: ScheduledLevel,
 }
 
+impl Ord for ScheduledTransition {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.at_us
+            .get()
+            .cmp(&other.at_us.get())
+            .then_with(|| self.kind.cmp(&other.kind))
+            .then_with(|| self.channel.get().cmp(&other.channel.get()))
+            .then_with(|| level_rank(self.level).cmp(&level_rank(other.level)))
+    }
+}
+
+impl PartialOrd for ScheduledTransition {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 /// Export of scheduled transitions from a timed plan.
 ///
 /// The scheduler exports deadlines and levels that were already planned
@@ -262,7 +279,9 @@ impl<const N: usize> ScheduledTransitionQueue<N> {
             match selected {
                 None => selected = Some((idx, transition)),
                 Some((_, current)) => {
-                    if is_before(transition.at_us, current.at_us) {
+                    if is_before(transition.at_us, current.at_us)
+                        || (transition.at_us == current.at_us && transition < current)
+                    {
                         selected = Some((idx, transition));
                     }
                 }
@@ -288,6 +307,13 @@ fn is_at_or_after(candidate: Micros, cutoff: Micros) -> bool {
 
 fn is_before(candidate: Micros, current: Micros) -> bool {
     current.get().wrapping_sub(candidate.get()) < (u32::MAX / 2)
+}
+
+const fn level_rank(level: ScheduledLevel) -> u8 {
+    match level {
+        ScheduledLevel::High => 0,
+        ScheduledLevel::Low => 1,
+    }
 }
 
 impl TimedInjectionPlan {

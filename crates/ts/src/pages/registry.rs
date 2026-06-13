@@ -42,6 +42,29 @@ pub const PAGE_AFR_TABLE: u8 = 19;
 
 pub const TS_PAGE_COUNT: usize = 19;
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum PageCodecFamily {
+    FuelTable,
+    IgnitionTable,
+    Sensors,
+    Ae,
+    Dfco,
+    Limits,
+    Diag,
+    DiagLog,
+    Angles,
+    Wue,
+    Ase,
+    Idle,
+    Fan,
+    ClosedLoop,
+    Snapshot,
+    ExpertTrigger,
+    VeTune,
+    VeTable,
+    AfrTable,
+}
+
 /// Descriptor for a TunerStudio page.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct TsPageDescriptor {
@@ -49,6 +72,8 @@ pub struct TsPageDescriptor {
     pub len: usize,
     pub writable: bool,
     pub label: &'static str,
+    pub persisted_setup_page: bool,
+    pub codec_family: PageCodecFamily,
 }
 
 pub const TS_PAGE_DESCRIPTORS: [TsPageDescriptor; TS_PAGE_COUNT] = [
@@ -57,120 +82,163 @@ pub const TS_PAGE_DESCRIPTORS: [TsPageDescriptor; TS_PAGE_COUNT] = [
         len: TABLE_PAGE_BYTES,
         writable: true,
         label: "fuel",
+        persisted_setup_page: true,
+        codec_family: PageCodecFamily::FuelTable,
     },
     TsPageDescriptor {
         page: PAGE_IGN,
         len: TABLE_PAGE_BYTES,
         writable: true,
         label: "ign",
+        persisted_setup_page: true,
+        codec_family: PageCodecFamily::IgnitionTable,
     },
     TsPageDescriptor {
         page: PAGE_SENSORS,
         len: SENSORS_PAGE_BYTES,
         writable: true,
         label: "sensors",
+        persisted_setup_page: false,
+        codec_family: PageCodecFamily::Sensors,
     },
     TsPageDescriptor {
         page: PAGE_AE,
         len: AE_PAGE_BYTES,
         writable: true,
         label: "ae",
+        persisted_setup_page: false,
+        codec_family: PageCodecFamily::Ae,
     },
     TsPageDescriptor {
         page: PAGE_DFCO,
         len: DFCO_PAGE_BYTES,
         writable: true,
         label: "dfco",
+        persisted_setup_page: false,
+        codec_family: PageCodecFamily::Dfco,
     },
     TsPageDescriptor {
         page: PAGE_LIMITS,
         len: LIMITS_PAGE_BYTES,
         writable: true,
         label: "limits",
+        persisted_setup_page: false,
+        codec_family: PageCodecFamily::Limits,
     },
     TsPageDescriptor {
         page: PAGE_DIAG,
         len: DIAG_PAGE_BYTES,
         writable: false,
         label: "diag",
+        persisted_setup_page: false,
+        codec_family: PageCodecFamily::Diag,
     },
     TsPageDescriptor {
         page: PAGE_DIAG_LOG,
         len: DIAG_LOG_PAGE_BYTES,
         writable: false,
         label: "diag_log",
+        persisted_setup_page: false,
+        codec_family: PageCodecFamily::DiagLog,
     },
     TsPageDescriptor {
         page: PAGE_ANGLES,
         len: ANGLES_PAGE_BYTES,
         writable: true,
         label: "angles",
+        persisted_setup_page: true,
+        codec_family: PageCodecFamily::Angles,
     },
     TsPageDescriptor {
         page: PAGE_WUE,
         len: WUE_PAGE_BYTES,
         writable: true,
         label: "wue",
+        persisted_setup_page: false,
+        codec_family: PageCodecFamily::Wue,
     },
     TsPageDescriptor {
         page: PAGE_ASE,
         len: ASE_PAGE_BYTES,
         writable: true,
         label: "ase",
+        persisted_setup_page: false,
+        codec_family: PageCodecFamily::Ase,
     },
     TsPageDescriptor {
         page: PAGE_IDLE,
         len: IDLE_PAGE_BYTES,
         writable: true,
         label: "idle",
+        persisted_setup_page: false,
+        codec_family: PageCodecFamily::Idle,
     },
     TsPageDescriptor {
         page: PAGE_FAN,
         len: FAN_PAGE_BYTES,
         writable: true,
         label: "fan",
+        persisted_setup_page: false,
+        codec_family: PageCodecFamily::Fan,
     },
     TsPageDescriptor {
         page: PAGE_CL,
         len: CLOSED_LOOP_PAGE_BYTES,
         writable: true,
         label: "cl",
+        persisted_setup_page: false,
+        codec_family: PageCodecFamily::ClosedLoop,
     },
     TsPageDescriptor {
         page: PAGE_SNAPSHOT,
         len: SNAPSHOT_PAGE_BYTES,
         writable: false,
         label: "snapshot",
+        persisted_setup_page: false,
+        codec_family: PageCodecFamily::Snapshot,
     },
     TsPageDescriptor {
         page: PAGE_EXPERT_TRIGGER,
         len: EXPERT_TRIGGER_PAGE_BYTES,
         writable: true,
         label: "expert_trigger",
+        persisted_setup_page: false,
+        codec_family: PageCodecFamily::ExpertTrigger,
     },
     TsPageDescriptor {
         page: PAGE_VE_TUNE,
         len: VE_TUNE_PAGE_BYTES,
         writable: true,
         label: "ve_tune",
+        persisted_setup_page: false,
+        codec_family: PageCodecFamily::VeTune,
     },
     TsPageDescriptor {
         page: PAGE_VE_TABLE,
         len: TABLE_PAGE_BYTES,
         writable: true,
         label: "ve_table",
+        persisted_setup_page: false,
+        codec_family: PageCodecFamily::VeTable,
     },
     TsPageDescriptor {
         page: PAGE_AFR_TABLE,
         len: TABLE_PAGE_BYTES,
         writable: true,
         label: "afr_table",
+        persisted_setup_page: false,
+        codec_family: PageCodecFamily::AfrTable,
     },
 ];
 
-pub fn ts_page_descriptor(page: u8) -> Option<TsPageDescriptor> {
-    TS_PAGE_DESCRIPTORS
-        .iter()
-        .copied()
-        .find(|descriptor| descriptor.page == page)
+pub const fn ts_page_descriptor(page: u8) -> Option<TsPageDescriptor> {
+    let mut idx = 0;
+    while idx < TS_PAGE_DESCRIPTORS.len() {
+        let descriptor = TS_PAGE_DESCRIPTORS[idx];
+        if descriptor.page == page {
+            return Some(descriptor);
+        }
+        idx += 1;
+    }
+    None
 }

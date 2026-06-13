@@ -6,8 +6,9 @@ use ecu_calibration::{PersistedCalibrationBlob, PersistedCalibrationStore};
 use ecu_domain::EngineTimeAuthority;
 use ecu_domain::{Degrees10, Micros, Rpm};
 use ecu_runtime::{
-    Action, ActionExecutor, ControlInputs, DecoderObservation, EngineRuntime, RuntimeFuelStrategy,
-    RuntimeSemanticCalibration, RuntimeSemanticState, StepInputs, StepResult, TransportPublisher,
+    Action, ActionExecutor, AuthorityStepInputs, ControlInputs, DecoderObservation, EngineRuntime,
+    RuntimeFuelStrategy, RuntimeSemanticCalibration, RuntimeSemanticState, StepResult,
+    TransportPublisher,
 };
 
 /// Board-like event surface for the runtime-driven board adapters.
@@ -48,14 +49,13 @@ pub enum BoardAdapterError<S, C, A, W, T, P> {
 pub type AdapterResult<S, C, A, W, T, P, Output> =
     Result<Output, BoardAdapterError<S, C, A, W, T, P>>;
 
-fn initial_inputs() -> StepInputs {
-    StepInputs {
+fn initial_inputs() -> AuthorityStepInputs {
+    AuthorityStepInputs {
         now_us: Micros::new(0),
         rpm: 0,
         load_kpa10: 0,
         angle_x10: 0,
-        trigger_synced: false,
-        cam_seen: false,
+        authority: EngineTimeAuthority::none(),
         flat_shift_armed: false,
         launch_armed: false,
     }
@@ -65,7 +65,7 @@ fn initial_inputs() -> StepInputs {
 ///
 /// Invariants:
 /// - board events update runtime input state only
-/// - control decisions come from `EngineRuntime::step`
+/// - control decisions come from `EngineRuntime::step_with_authority`
 /// - action delivery is limited to I/O plumbing and publishing
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BoardAdapter<S, C, A, W, T, P> {
@@ -76,7 +76,7 @@ pub struct BoardAdapter<S, C, A, W, T, P> {
     watchdog: W,
     transport: T,
     store: P,
-    pending_inputs: StepInputs,
+    pending_inputs: AuthorityStepInputs,
 }
 
 impl<S, C, A, W, T, P> BoardAdapter<S, C, A, W, T, P>
@@ -182,7 +182,7 @@ where
                 self.pending_inputs.now_us = at_us;
                 self.pending_inputs.rpm = u32::from(rpm.get());
                 self.pending_inputs.angle_x10 = i32::from(angle_x10.get());
-                self.pending_inputs.trigger_synced = synced;
+                self.pending_inputs.authority = authority;
                 self.capture
                     .capture(CaptureSample {
                         at_us,
@@ -196,16 +196,17 @@ where
                     self.runtime.snapshot().engine.load_kpa10,
                     angle_x10,
                 );
+                let _ = synced;
                 self.runtime.set_engine_time_authority(authority);
                 Ok(None)
             }
             BoardEvent::CamEdge { at_us, cam_seen } => {
                 self.pending_inputs.now_us = at_us;
-                self.pending_inputs.cam_seen = cam_seen;
                 self.runtime
                     .apply_decoder_observation(DecoderObservation::Cam(
                         ecu_runtime::CamObservation { at_us, cam_seen },
                     ));
+                self.pending_inputs.authority = self.runtime.engine_time_authority();
                 Ok(None)
             }
             BoardEvent::SensorSnapshotCapture { capture } => {
@@ -223,11 +224,9 @@ where
             }
             BoardEvent::Tick { now_us, control } => {
                 self.pending_inputs.now_us = now_us;
-                let result = self.runtime.step_with_authority(
-                    self.pending_inputs,
-                    control,
-                    self.runtime.engine_time_authority(),
-                );
+                let result = self
+                    .runtime
+                    .step_with_authority(self.pending_inputs, control);
                 self.execute_step(&result)?;
                 Ok(Some(result))
             }

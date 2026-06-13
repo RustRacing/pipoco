@@ -786,6 +786,78 @@ print("PASS: boards/common ecu-core/EcuState usage is confined to documented com
 PY
 }
 
+check_core_compatibility_consumer_inventory() {
+    python3 - <<'PY'
+from collections import defaultdict
+from pathlib import Path
+import re
+import sys
+
+root = Path(".")
+pattern = re.compile(r"\b(ecu_core|EcuState)\b")
+scan_roots = [Path("boards"), Path("crates"), Path("sim")]
+skip_parts = {
+    ".git",
+    "target",
+    "aidocs",
+    "vendor",
+    "reference",
+    "references",
+    "ref",
+    "__pycache__",
+}
+
+group_counts: dict[str, int] = defaultdict(int)
+violations = []
+
+def classify(rel: Path) -> str:
+    if len(rel.parts) >= 2:
+        return f"{rel.parts[0]}/{rel.parts[1]}"
+    return rel.parts[0]
+
+for scan_root in scan_roots:
+    if not scan_root.exists():
+        continue
+    for path in scan_root.rglob("*.rs"):
+        rel = path.relative_to(root)
+        if any(part in skip_parts for part in rel.parts):
+            continue
+        text = path.read_text(encoding="utf-8")
+        if not pattern.search(text):
+            continue
+        group_counts[classify(rel)] += 1
+        is_testish = any(
+            part in {"tests", "benches", "examples", "fixtures", "fixture"} for part in rel.parts
+        ) or path.name == "tests.rs" or path.name.endswith("_tests.rs")
+        if is_testish:
+            continue
+        if rel.parts[:3] == ("boards", "common", "src"):
+            violations.append(f"{rel}: production board-common source still references ecu_core/EcuState")
+        elif rel.parts[:3] == ("boards", "stm32f4", "src"):
+            violations.append(f"{rel}: production stm32f4 source still references ecu_core/EcuState")
+        elif rel.parts[:3] == ("boards", "rp2040-pico", "src"):
+            violations.append(f"{rel}: production rp2040-pico source still references ecu_core/EcuState")
+
+if group_counts:
+    print("INFO: ecu-core/EcuState compatibility consumer inventory")
+    for group in sorted(group_counts):
+        print(f"  {group}: {group_counts[group]} file(s)")
+else:
+    print("INFO: ecu-core/EcuState compatibility consumer inventory is empty")
+
+if violations:
+    print(
+        "ERROR: new production ecu-core/EcuState dependencies remain in paths already forbidden by architecture policy",
+        file=sys.stderr,
+    )
+    for violation in violations:
+        print(violation, file=sys.stderr)
+    sys.exit(1)
+
+print("PASS: ecu-core/EcuState consumer inventory recorded; no forbidden production references found")
+PY
+}
+
 check_board_api_batch_executor_boundary() {
     python3 - <<'PY'
 from pathlib import Path
@@ -1292,6 +1364,125 @@ print("PASS: ecu-runtime primary ingress/support boundary markers are present")
 PY
 }
 
+check_runtime_stepinputs_product_callers() {
+    python3 - <<'PY'
+from pathlib import Path
+import re
+import sys
+
+root = Path(".")
+production_roots = [Path("boards"), Path("sim")]
+skip_parts = {".git", "target", "aidocs", "vendor", "reference", "references", "ref"}
+allowed_paths = {
+    Path("sim/harness/src/lib.rs"),
+    Path("sim/driver/src/x86_runtime_board/board.rs"),
+}
+stepinputs_pattern = re.compile(r"\bStepInputs\b")
+runtime_step_pattern = re.compile(r"\.\s*step\s*\(")
+
+violations = []
+for prod_root in production_roots:
+    if not prod_root.exists():
+        continue
+    for path in prod_root.rglob("*.rs"):
+        rel = path.relative_to(root)
+        if rel in allowed_paths:
+            continue
+        if any(part in skip_parts for part in rel.parts):
+            continue
+        if "tests" in rel.parts or "benches" in rel.parts:
+            continue
+        text = path.read_text(encoding="utf-8")
+        lines = text.splitlines()
+        file_mentions_stepinputs = bool(stepinputs_pattern.search(text))
+        for line_no, line in enumerate(lines, 1):
+            if stepinputs_pattern.search(line):
+                violations.append(
+                    f"{rel}:{line_no}: StepInputs is compatibility/support-only for product code: {line.strip()}"
+                )
+            if file_mentions_stepinputs and runtime_step_pattern.search(line):
+                violations.append(
+                    f"{rel}:{line_no}: product code must use step_with_authority instead of step(...): {line.strip()}"
+                )
+
+if violations:
+    print(
+        "ERROR: product runtime callers must use AuthorityStepInputs and step_with_authority; StepInputs is compatibility/support-only",
+        file=sys.stderr,
+    )
+    for violation in violations:
+        print(violation, file=sys.stderr)
+    sys.exit(1)
+
+print("PASS: product runtime callers use canonical authority-aware ingress")
+PY
+}
+
+check_board_api_legacy_namespace_boundary() {
+    python3 - <<'PY'
+from pathlib import Path
+import re
+import sys
+
+root = Path(".")
+skip_parts = {".git", "target", "aidocs", "vendor", "reference", "references", "ref"}
+allowed_defs = {
+    Path("crates/board-api/src/lib.rs"),
+    Path("crates/board-api/src/output_profiles.rs"),
+    Path("crates/board-api/src/timing_island.rs"),
+    Path("crates/board-api/src/telemetry.rs"),
+    Path("crates/board-api/src/sensors.rs"),
+}
+legacy_symbol_patterns = (
+    re.compile(r"\blegacy_single_channel\b"),
+    re.compile(r"\blegacy_sync_state_authority\b"),
+)
+preferred_namespace = re.compile(r"\becu_board_api::legacy::")
+
+violations = []
+for path in root.rglob("*.rs"):
+    rel = path.relative_to(root)
+    if any(part in skip_parts for part in rel.parts):
+        continue
+    text = path.read_text(encoding="utf-8")
+    for line_no, line in enumerate(text.splitlines(), 1):
+        if any(pattern.search(line) for pattern in legacy_symbol_patterns):
+            violations.append(
+                f"{rel}:{line_no}: board-api legacy helpers must live under ecu_board_api::legacy only: {line.strip()}"
+            )
+
+for path in [Path("boards"), Path("crates"), Path("sim"), Path("fuzz")]:
+    if not path.exists():
+        continue
+    for file in path.rglob("*.rs"):
+        rel = file.relative_to(root)
+        if rel in allowed_defs:
+            continue
+        if any(part in skip_parts for part in rel.parts):
+            continue
+        if "tests" in rel.parts or "benches" in rel.parts or "examples" in rel.parts:
+            continue
+        for line_no, line in enumerate(file.read_text(encoding="utf-8").splitlines(), 1):
+            if "ecu_board_api::legacy::" in line:
+                continue
+            if re.search(r"\b(sync_state_authority|single_channel_runtime_output_profile)\b", line):
+                violations.append(
+                    f"{rel}:{line_no}: callers must use explicit ecu_board_api::legacy namespace for board-api compatibility helpers: {line.strip()}"
+                )
+
+if violations:
+    print(
+        "ERROR: board-api compatibility helpers must stay confined to the explicit ecu_board_api::legacy namespace",
+        file=sys.stderr,
+    )
+    for violation in violations:
+        print(violation, file=sys.stderr)
+    sys.exit(1)
+
+print("PASS: board-api compatibility helpers stay confined to ecu_board_api::legacy")
+PY
+}
+
 check_no_rg_hits \
     "PR4 generic runtime/scheduler code has no product-specific M50 names" \
     'M50|configure_m50|RuntimeOutputProfile::M50|M50OutputProfile|M50IgnitionMode' \
@@ -1378,6 +1569,14 @@ if ! check_runtime_primary_ingress_boundary; then
     status=1
 fi
 
+if ! check_runtime_stepinputs_product_callers; then
+    status=1
+fi
+
+if ! check_board_api_legacy_namespace_boundary; then
+    status=1
+fi
+
 check_no_rg_hits \
     "PR3 live code does not reintroduce PersistedEcuPageStore" \
     'PersistedEcuPageStore' \
@@ -1389,6 +1588,10 @@ check_no_rg_hits \
     boards/common/tests
 
 if ! check_board_common_legacy_state_scope; then
+    status=1
+fi
+
+if ! check_core_compatibility_consumer_inventory; then
     status=1
 fi
 

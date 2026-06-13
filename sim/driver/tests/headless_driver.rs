@@ -863,6 +863,37 @@ fn hifi_sync_loss_recovery_scenario_detects_loss_and_recovers() {
 }
 
 #[test]
+fn runtime_backend_stress_scenarios_keep_sync_and_restart_outcomes_aligned() {
+    let core_restart = run_hot_restart_scenario_with_backend(ScenarioBackend::Harness).unwrap();
+    let hifi_restart = run_hot_restart_scenario_with_backend(ScenarioBackend::Hifi).unwrap();
+    assert_eq!(
+        core_restart.scenario_signals.hot_restart_count,
+        hifi_restart.scenario_signals.hot_restart_count
+    );
+    assert_eq!(
+        core_restart.scenario_signals.hot_restart_sync_recovered,
+        hifi_restart.scenario_signals.hot_restart_sync_recovered
+    );
+    assert!(core_restart.plant_snapshot.rpm.get() > 0);
+    assert!(hifi_restart.plant_snapshot.rpm.get() > 0);
+
+    let core_sync_loss =
+        run_sync_loss_recovery_scenario_with_backend(ScenarioBackend::Harness).unwrap();
+    let hifi_sync_loss =
+        run_sync_loss_recovery_scenario_with_backend(ScenarioBackend::Hifi).unwrap();
+    assert_eq!(
+        core_sync_loss.scenario_signals.sync_loss_detected,
+        hifi_sync_loss.scenario_signals.sync_loss_detected
+    );
+    assert_eq!(
+        core_sync_loss.scenario_signals.sync_recovered,
+        hifi_sync_loss.scenario_signals.sync_recovered
+    );
+    assert!(core_sync_loss.plant_snapshot.rpm.get() > 0);
+    assert!(hifi_sync_loss.plant_snapshot.rpm.get() > 0);
+}
+
+#[test]
 fn linked_ffi_fault_is_visible_in_driver_observability() {
     let mut client = EcuFfiClient::acquire();
     client.reset();

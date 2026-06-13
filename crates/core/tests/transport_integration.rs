@@ -168,12 +168,13 @@ impl<T: Transport> InjectionModule<T> {
                         "Received engine config: {num_cylinders} cylinders, {displacement_cc}cc"
                     );
                 }
-                Message::CmdReset { target_node_id } => {
-                    if target_node_id == self.node_id || target_node_id == 0xFF {
-                        println!("Reset command received");
-                        // Reset logic here
-                    }
+                Message::CmdReset { target_node_id }
+                    if target_node_id == self.node_id || target_node_id == 0xFF =>
+                {
+                    println!("Reset command received");
+                    // Reset logic here
                 }
+                Message::CmdReset { .. } => {}
                 _ => {}
             }
         }

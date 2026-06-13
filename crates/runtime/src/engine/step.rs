@@ -1,22 +1,23 @@
 use super::*;
+use crate::AuthorityStepInputs;
 
 impl EngineRuntime {
-    fn validate_inputs(&self, inputs: StepInputs) -> ValidatedInputs {
+    fn validate_step_scalars(&self, rpm: u32, load_kpa10: u32, angle_x10: i32) -> ValidatedInputs {
         const MAX_RPM: u32 = 9000;
         const MAX_LOAD: u32 = 2000;
         const MAX_ANGLE_X10: i32 = 7200;
 
-        let clamped_rpm = inputs.rpm.min(MAX_RPM) as u16;
-        let clamped_load = inputs.load_kpa10.min(MAX_LOAD) as u16;
-        let clamped_angle = inputs.angle_x10.clamp(-MAX_ANGLE_X10, MAX_ANGLE_X10) as i16;
+        let clamped_rpm = rpm.min(MAX_RPM) as u16;
+        let clamped_load = load_kpa10.min(MAX_LOAD) as u16;
+        let clamped_angle = angle_x10.clamp(-MAX_ANGLE_X10, MAX_ANGLE_X10) as i16;
 
         ValidatedInputs {
             rpm: Rpm::new(clamped_rpm),
             load_kpa10: Kpa10::new(clamped_load),
             angle_x10: Degrees10::new(clamped_angle),
-            clamped: clamped_rpm as u32 != inputs.rpm
-                || clamped_load as u32 != inputs.load_kpa10
-                || clamped_angle as i32 != inputs.angle_x10,
+            clamped: clamped_rpm as u32 != rpm
+                || clamped_load as u32 != load_kpa10
+                || clamped_angle as i32 != angle_x10,
         }
     }
 
@@ -44,29 +45,26 @@ impl EngineRuntime {
     /// the runtime receives structured engine-time authority instead of deriving
     /// it from boolean sync/cam flags.
     pub fn step(&mut self, inputs: StepInputs, control_inputs: ControlInputs) -> StepResult {
-        let authority = self.engine.engine_time_authority;
-        self.step_with_authority(inputs, control_inputs, authority)
-    }
-
-    /// Step the runtime with structured engine-time authority already supplied by the caller.
-    ///
-    /// This is the canonical product ingress. Board adapters should use this
-    /// when they have a decoder/profile authority snapshot so output gating
-    /// does not fall back to boolean sync/cam inputs.
-    pub fn step_with_authority(
-        &mut self,
-        inputs: StepInputs,
-        control_inputs: ControlInputs,
-        authority: EngineTimeAuthority,
-    ) -> StepResult {
-        let validated = self.validate_inputs(inputs);
+        let validated = self.validate_step_scalars(inputs.rpm, inputs.load_kpa10, inputs.angle_x10);
         let authority = derive_engine_time_authority(
-            authority,
+            self.engine.engine_time_authority,
             inputs.trigger_synced,
             inputs.cam_seen,
             validated.rpm,
         );
         self.step_with_validated(inputs.now_us, validated, control_inputs, authority)
+    }
+
+    /// Step the runtime with canonical authority-aware product inputs.
+    ///
+    /// This is the canonical product ingress.
+    pub fn step_with_authority(
+        &mut self,
+        inputs: AuthorityStepInputs,
+        control_inputs: ControlInputs,
+    ) -> StepResult {
+        let validated = self.validate_step_scalars(inputs.rpm, inputs.load_kpa10, inputs.angle_x10);
+        self.step_with_validated(inputs.now_us, validated, control_inputs, inputs.authority)
     }
 
     fn step_with_validated(

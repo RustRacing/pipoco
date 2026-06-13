@@ -209,23 +209,29 @@ pub const fn engine_time_authorizes_full_sequential(authority: EngineTimeAuthori
         && absolute_time_authorizes_full_sequential(authority.absolute)
 }
 
-pub const fn legacy_sync_state_authority(sync_state: ecu_domain::SyncState) -> EngineTimeAuthority {
-    match sync_state {
-        SyncState::Unsynced => EngineTimeAuthority::none(),
-        SyncState::Provisional => EngineTimeAuthority::new(
-            CrankSyncState::PrimaryLocked,
-            PhaseSyncState::Unknown,
-            AbsoluteTimeAuthority::None,
-            0,
-            0,
-        ),
-        SyncState::Locked { .. } => EngineTimeAuthority::new(
-            CrankSyncState::PrimaryLocked,
-            PhaseSyncState::CrankOnly360,
-            AbsoluteTimeAuthority::GeometryOnly,
-            EngineTimeAuthority::MAX_CONFIDENCE_X1000,
-            0,
-        ),
+pub mod legacy {
+    use super::{
+        AbsoluteTimeAuthority, CrankSyncState, EngineTimeAuthority, PhaseSyncState, SyncState,
+    };
+
+    pub const fn sync_state_authority(sync_state: ecu_domain::SyncState) -> EngineTimeAuthority {
+        match sync_state {
+            SyncState::Unsynced => EngineTimeAuthority::none(),
+            SyncState::Provisional => EngineTimeAuthority::new(
+                CrankSyncState::PrimaryLocked,
+                PhaseSyncState::Unknown,
+                AbsoluteTimeAuthority::None,
+                0,
+                0,
+            ),
+            SyncState::Locked { .. } => EngineTimeAuthority::new(
+                CrankSyncState::PrimaryLocked,
+                PhaseSyncState::CrankOnly360,
+                AbsoluteTimeAuthority::GeometryOnly,
+                EngineTimeAuthority::MAX_CONFIDENCE_X1000,
+                0,
+            ),
+        }
     }
 }
 

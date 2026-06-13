@@ -249,6 +249,16 @@ fn setup_specs_match_current_page_layout() {
 }
 
 #[test]
+fn persisted_setup_specs_match_descriptor_metadata() {
+    for spec in TS_SETUP_PERSISTED_PAGES {
+        let descriptor =
+            ts_page_descriptor(spec.page).expect("persisted setup page must be registered");
+        assert!(descriptor.persisted_setup_page);
+        assert_eq!(descriptor.len, spec.len);
+    }
+}
+
+#[test]
 fn try_load_pages_ignores_missing_short_and_invalid_pages() {
     let mut store = MockPages {
         reject_angles: true,
