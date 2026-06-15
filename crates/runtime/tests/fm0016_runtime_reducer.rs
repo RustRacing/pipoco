@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-#[path = "../../core/tests/formal/fm0016_fixture_matrix.rs"]
+#[path = "../../compat/tests/formal/fm0016_fixture_matrix.rs"]
 mod fm0016_fixture_matrix;
 
 use fm0016_fixture_matrix::{fixture_cases, required_fixture_names};

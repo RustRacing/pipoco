@@ -1,10 +1,10 @@
 [package]
-name = "ecu-core"
+name = "ecu-compat"
 version = "0.1.0"
 edition = "2021"
 
 [lib]
-name = "ecu_core"
+name = "ecu_compat"
 path = "src/lib.rs"
 
 [dependencies]

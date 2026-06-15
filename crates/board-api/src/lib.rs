@@ -34,6 +34,15 @@ pub mod legacy {
     pub use crate::traits::CalibrationStore;
 }
 
+pub mod frontier {
+    pub use crate::safety::SafetyPermitMask;
+    pub use crate::timing_island::{
+        TimingIslandAdmissionReport, TimingIslandHorizonSequenceId, TimingIslandMetricSnapshot,
+        TimingIslandPermitMask, TimingIslandStopReason, TimingIslandSyncLossReason,
+        HEARTBEAT_EXPIRY_US, HORIZON_SEQUENCE_BITS, MAX_HORIZON_US,
+    };
+}
+
 pub use capabilities::{
     BoardCapabilities, BoardResourceLimits, IgnitionProfileId, LoadSourceCapabilities, PinMapId,
     ProfileId, RuntimeBuildId,
@@ -56,8 +65,11 @@ pub use telemetry::{EngineTimeAuthorityTelemetry, IgnitionProfileMode, Telemetry
 pub use timing_island::{
     engine_time_authorizes_full_sequential, AuxCommand, AuxCommandBatch, AuxOutput, AuxValue,
     EcuOutput, EdgeBatch, EdgeKind, OutputLevel, OutputTransition, OutputTransitionBatch,
-    TimingIslandCommand, TimingIslandCommandBatch, TimingIslandEvent, TimingIslandFaultStatus,
-    TimingIslandRejectReason, TriggerEdge,
+    TimingIslandAdmissionReport, TimingIslandCommand, TimingIslandCommandBatch, TimingIslandEvent,
+    TimingIslandFaultStatus, TimingIslandHorizonSequenceId, TimingIslandMetricSnapshot,
+    TimingIslandPermitMask, TimingIslandRejectReason, TimingIslandStopReason,
+    TimingIslandSyncLossReason, TriggerEdge, HEARTBEAT_EXPIRY_US, HORIZON_SEQUENCE_BITS,
+    MAX_HORIZON_US,
 };
 pub use traits::{
     AuxOutputSink, EcuClock, OutputScheduler, SensorSource, TelemetrySink, TriggerEdgeSource,

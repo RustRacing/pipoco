@@ -1,4 +1,4 @@
-use ecu_core::interp::{bilinear_interpolate_i16, bilinear_interpolate_u16};
+use ecu_compat::interp::{bilinear_interpolate_i16, bilinear_interpolate_u16};
 
 #[test]
 fn bilinear_vs_corner_within_bounds_fuel() {

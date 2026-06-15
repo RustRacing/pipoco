@@ -1,6 +1,6 @@
 use ecu_calibration::{FuelRuntimeTune, KvError, KvStore};
-use ecu_core::compat::EcuState;
-use ecu_core::ts::pages::{EcuPageStore, PAGE_ANGLES, PAGE_FUEL, PAGE_IGN};
+use ecu_compat::compat::EcuState;
+use ecu_compat::ts::pages::{EcuPageStore, PAGE_ANGLES, PAGE_FUEL, PAGE_IGN};
 use ecu_ts::persistence::{PageStoreProvider, PersistedTsPageStore};
 use ecu_ts::server::PageStore;
 

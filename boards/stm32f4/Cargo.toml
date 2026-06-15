@@ -30,7 +30,7 @@ path = "src/main.rs"
 test = false
 
 [dev-dependencies]
-ecu-core = { path = "../../crates/core" }
+ecu-compat = { path = "../../crates/compat" }
 
 [features]
 default = ["hardware", "capture-tim"]

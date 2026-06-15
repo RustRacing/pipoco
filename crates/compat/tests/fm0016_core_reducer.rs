@@ -1,11 +1,11 @@
-//! Real-execution FM0016 conformance tests for the root ecu-core boundary.
+//! Real-execution FM0016 conformance tests for the root ecu-compat boundary.
 //!
 //! Drives `EcuState` through public API methods using FM0016 fixture inputs,
 //! then compares observable outputs to `oracle_result(case)` called once per fixture.
 //!
 //! ## Root/Core Boundary Architecture
 //!
-//! ecu-core (EcuState) uses IPW (Injector Pulse Width) table lookup — a direct
+//! ecu-compat (EcuState) uses IPW (Injector Pulse Width) table lookup — a direct
 //! (rpm, load) → pulse-width mapping without volumetric efficiency computation.
 //!
 //! spec oracle_result uses VE model: VE(rpm,load) × displacement × MAP / (BARO × VE_base)
@@ -17,7 +17,7 @@
 
 #![cfg(test)]
 
-use ecu_core::compat::{CoreAdapterContract, EcuState};
+use ecu_compat::compat::{CoreAdapterContract, EcuState};
 use fm0016_fixture_matrix::{assert_fixture_semantics, fixture_cases, oracle_result, FixtureCase};
 use std::panic::catch_unwind;
 

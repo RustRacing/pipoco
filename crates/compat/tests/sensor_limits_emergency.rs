@@ -1,5 +1,5 @@
-use ecu_core::compat::EcuState;
-use ecu_core::{Kpa10, Micros};
+use ecu_compat::compat::EcuState;
+use ecu_compat::{Kpa10, Micros};
 
 #[test]
 fn map_oob_triggers_emergency_and_clears_after_stable() {

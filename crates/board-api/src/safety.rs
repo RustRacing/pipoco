@@ -51,10 +51,14 @@ pub struct SafetyPermitMask(u32);
 
 impl SafetyPermitMask {
     pub const NONE: Self = Self(0);
-    pub const ALL: Self = Self(u32::MAX);
+    pub const IGNITION: u32 = 1 << 0;
+    pub const INJECTOR: u32 = 1 << 1;
+    pub const BOUNDED_AUX: u32 = 1 << 2;
+    pub const KNOWN_BITS: u32 = Self::IGNITION | Self::INJECTOR | Self::BOUNDED_AUX;
+    pub const ALL: Self = Self(Self::KNOWN_BITS);
 
     pub const fn new(bits: u32) -> Self {
-        Self(bits)
+        Self(bits & Self::KNOWN_BITS)
     }
 
     pub const fn bits(self) -> u32 {

@@ -1,7 +1,7 @@
-//! Persisted tune/threshold calibration data extracted from ecu-core.
+//! Persisted tune/threshold calibration data extracted from ecu-compat.
 //!
 //! These are pure calibration structs (integer fields, no heap, no panics).
-//! The associated state machines and logic remain in ecu-core/ecu-control.
+//! The associated state machines and logic remain in ecu-compat/ecu-control.
 
 #![allow(clippy::manual_range_contains)]
 

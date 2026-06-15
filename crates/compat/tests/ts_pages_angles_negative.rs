@@ -1,4 +1,4 @@
-use ecu_core::compat::EcuState;
+use ecu_compat::compat::EcuState;
 use ecu_ts::server::PageStore;
 
 #[test]
@@ -7,7 +7,7 @@ fn angles_page_wrong_size_is_error() {
     let mut pages = state.page_store();
     // Wrong size (short)
     assert!(pages
-        .write_page(ecu_core::ts::pages::PAGE_ANGLES, &[0u8; 10])
+        .write_page(ecu_compat::ts::pages::PAGE_ANGLES, &[0u8; 10])
         .is_err());
 }
 
@@ -29,27 +29,27 @@ fn angles_page_range_validation() {
     ang[66..68].copy_from_slice(&500u16.to_le_bytes());
     // First, valid write works
     pages
-        .write_page(ecu_core::ts::pages::PAGE_ANGLES, &ang)
+        .write_page(ecu_compat::ts::pages::PAGE_ANGLES, &ang)
         .expect("valid angles write");
 
     // Now set an invalid inj angle > 3600
     let mut bad = ang;
     bad[0..2].copy_from_slice(&(3601u16).to_le_bytes());
     assert!(pages
-        .write_page(ecu_core::ts::pages::PAGE_ANGLES, &bad)
+        .write_page(ecu_compat::ts::pages::PAGE_ANGLES, &bad)
         .is_err());
 
     // Invalid tdc angle > 7200
     let mut bad2 = ang;
     bad2[32..34].copy_from_slice(&(7201u16).to_le_bytes());
     assert!(pages
-        .write_page(ecu_core::ts::pages::PAGE_ANGLES, &bad2)
+        .write_page(ecu_compat::ts::pages::PAGE_ANGLES, &bad2)
         .is_err());
 
     // Invalid tooth0 angle > 3600
     let mut bad3 = ang;
     bad3[64..66].copy_from_slice(&(3605u16).to_le_bytes());
     assert!(pages
-        .write_page(ecu_core::ts::pages::PAGE_ANGLES, &bad3)
+        .write_page(ecu_compat::ts::pages::PAGE_ANGLES, &bad3)
         .is_err());
 }

@@ -1,7 +1,7 @@
 //! Transport abstraction for ECU inter-component communication.
 //!
 //! This crate owns the transport-agnostic message protocol plus concrete
-//! transport adapters that do not need legacy `ecu-core` state.
+//! transport adapters that do not need legacy `ecu-compat` state.
 
 #![cfg_attr(not(test), no_std)]
 

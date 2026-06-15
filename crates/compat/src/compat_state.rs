@@ -3,7 +3,7 @@ use crate::{diag, lambda};
 
 /// Adapter contracts for root/core boundary fields.
 ///
-/// These document the model differences between legacy ecu-core compatibility
+/// These document the model differences between legacy ecu-compat compatibility
 /// table helpers and runtime/spec-oracle fuel models.
 ///
 /// DO NOT add new variants without a corresponding test in fm0016_core_reducer.rs.
@@ -60,7 +60,7 @@ pub struct SafetyStatus {
 /// Global ECU state configuration.
 ///
 /// Relocated to `ecu-calibration`; re-exported here so existing
-/// `ecu_core::EcuConfig` / `compat_state::EcuConfig` paths resolve unchanged.
+/// `ecu_compat::EcuConfig` / `compat_state::EcuConfig` paths resolve unchanged.
 pub use ecu_calibration::EcuConfig;
 
 /// Trigger-derived live inputs that are in the process of being separated

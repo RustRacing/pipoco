@@ -5,8 +5,8 @@
 //! - Excessive dwell (coil overheating)
 //! - Incorrect timing during cranking
 
-use ecu_core::constants::ignition::*;
-use ecu_core::{calculate_dwell, calculate_timing, compat::EcuState, IgnitionCorrections};
+use ecu_compat::constants::ignition::*;
+use ecu_compat::{calculate_dwell, calculate_timing, compat::EcuState, IgnitionCorrections};
 
 // =============================================================================
 // TIMING SAFETY TESTS

@@ -46,7 +46,7 @@ path = "src/bin/pio_capture_example.rs"
 required-features = ["example-bins", "capture-pio"]
 
 [dev-dependencies]
-ecu-core = { path = "../../crates/core", default-features = false }
+ecu-compat = { path = "../../crates/compat", default-features = false }
 
 [features]
 default = []

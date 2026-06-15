@@ -2,7 +2,7 @@
 
 use ecu_calibration::kv::{PERSIST_KEY_ANGLES, PERSIST_KEY_FUEL, PERSIST_KEY_IGN};
 use ecu_calibration::{FuelRuntimeTune, KvError, KvStore};
-use ecu_core::ts::pages::{
+use ecu_compat::ts::pages::{
     EcuPageStore, PAGE_AE, PAGE_DFCO, PAGE_DIAG, PAGE_EXPERT_TRIGGER, PAGE_FUEL, PAGE_IGN,
     PAGE_SENSORS, TS_DIAG_BYTES, TS_EXPERT_TRIGGER_BYTES, TS_PAGE_DESCRIPTORS,
 };
@@ -84,7 +84,7 @@ use ecu_calibration::{
     ExpertUnlock, PrimaryTriggerSpeed, SecondaryTriggerMode, TriggerAuthority, TriggerEdge,
     TriggerFilter, TriggerPattern,
 };
-use ecu_core::compat::EcuState;
+use ecu_compat::compat::EcuState;
 use ecu_domain::{
     AbsoluteTimeAuthority, ChannelId, CrankSyncState, CylinderId, EngineTimeAuthority, Kpa10,
     Micros, PhaseSyncState, Rpm,
@@ -154,11 +154,11 @@ fn sensors_ae_dfco_read_write() {
     ldata[8] = 0b11; // both triggers on
     ldata[9] = 0; // reserved
     pages
-        .write_page(ecu_core::ts::pages::PAGE_LIMITS, &ldata)
+        .write_page(ecu_compat::ts::pages::PAGE_LIMITS, &ldata)
         .expect("write limits");
     let mut lread = [0u8; 10];
     let n = pages
-        .read_page(ecu_core::ts::pages::PAGE_LIMITS, &mut lread)
+        .read_page(ecu_compat::ts::pages::PAGE_LIMITS, &mut lread)
         .expect("read limits");
     assert_eq!(n, 10);
     assert_eq!(&lread[..], &ldata[..]);
@@ -197,11 +197,11 @@ fn sensors_ae_dfco_read_write() {
     idle[1..3].copy_from_slice(&(450u16).to_le_bytes()); // 45.0%
     idle[3..5].copy_from_slice(&(100u16).to_le_bytes()); // 100Hz
     pages
-        .write_page(ecu_core::ts::pages::PAGE_IDLE, &idle)
+        .write_page(ecu_compat::ts::pages::PAGE_IDLE, &idle)
         .expect("write idle");
     let mut idread = [0u8; 6];
     let n = pages
-        .read_page(ecu_core::ts::pages::PAGE_IDLE, &mut idread)
+        .read_page(ecu_compat::ts::pages::PAGE_IDLE, &mut idread)
         .expect("read idle");
     assert_eq!(n, 6);
     assert_eq!(&idle[..], &idread[..]);
@@ -212,11 +212,11 @@ fn sensors_ae_dfco_read_write() {
     fan[1..3].copy_from_slice(&(95i16).to_le_bytes()); // on at 95C
     fan[3..5].copy_from_slice(&(90i16).to_le_bytes()); // off at 90C
     pages
-        .write_page(ecu_core::ts::pages::PAGE_FAN, &fan)
+        .write_page(ecu_compat::ts::pages::PAGE_FAN, &fan)
         .expect("write fan");
     let mut fnread = [0u8; 6];
     let n = pages
-        .read_page(ecu_core::ts::pages::PAGE_FAN, &mut fnread)
+        .read_page(ecu_compat::ts::pages::PAGE_FAN, &mut fnread)
         .expect("read fan");
     assert_eq!(n, 6);
     assert_eq!(&fan[..], &fnread[..]);
@@ -228,11 +228,11 @@ fn sensors_ae_dfco_read_write() {
     cl[4..6].copy_from_slice(&(10u16).to_le_bytes());
     cl[6..8].copy_from_slice(&(2u16).to_le_bytes());
     pages
-        .write_page(ecu_core::ts::pages::PAGE_CL, &cl)
+        .write_page(ecu_compat::ts::pages::PAGE_CL, &cl)
         .expect("write cl");
     let mut clread = [0u8; 8];
     let n = pages
-        .read_page(ecu_core::ts::pages::PAGE_CL, &mut clread)
+        .read_page(ecu_compat::ts::pages::PAGE_CL, &mut clread)
         .expect("read cl");
     assert_eq!(n, 8);
     assert_eq!(&cl[..], &clread[..]);
@@ -244,11 +244,11 @@ fn sensors_ae_dfco_read_write() {
     wue[2..4].copy_from_slice(&(-10i16).to_le_bytes()); // start_c
     wue[4..6].copy_from_slice(&(60i16).to_le_bytes()); // end_c
     pages
-        .write_page(ecu_core::ts::pages::PAGE_WUE, &wue)
+        .write_page(ecu_compat::ts::pages::PAGE_WUE, &wue)
         .expect("write wue");
     let mut wread = [0u8; 8];
     let n = pages
-        .read_page(ecu_core::ts::pages::PAGE_WUE, &mut wread)
+        .read_page(ecu_compat::ts::pages::PAGE_WUE, &mut wread)
         .expect("read wue");
     assert_eq!(n, 8);
     assert_eq!(&wue[..], &wread[..]);
@@ -259,11 +259,11 @@ fn sensors_ae_dfco_read_write() {
     ase[2..6].copy_from_slice(&(3000u32).to_le_bytes()); // taper 3s
     ase[6..8].copy_from_slice(&(1000u16).to_le_bytes()); // lockout 1s
     pages
-        .write_page(ecu_core::ts::pages::PAGE_ASE, &ase)
+        .write_page(ecu_compat::ts::pages::PAGE_ASE, &ase)
         .expect("write ase");
     let mut aread = [0u8; 8];
     let n = pages
-        .read_page(ecu_core::ts::pages::PAGE_ASE, &mut aread)
+        .read_page(ecu_compat::ts::pages::PAGE_ASE, &mut aread)
         .expect("read ase");
     assert_eq!(n, 8);
     assert_eq!(&ase[..], &aread[..]);
@@ -285,28 +285,28 @@ fn sensors_ae_dfco_negative_sizes_and_ranges() {
     bad[8] = 0;
     bad[9] = 0;
     assert!(pages
-        .write_page(ecu_core::ts::pages::PAGE_LIMITS, &bad)
+        .write_page(ecu_compat::ts::pages::PAGE_LIMITS, &bad)
         .is_err());
 
     // map_max <= map_min invalid
     bad[0..2].copy_from_slice(&100u16.to_le_bytes());
     bad[2..4].copy_from_slice(&100u16.to_le_bytes());
     assert!(pages
-        .write_page(ecu_core::ts::pages::PAGE_LIMITS, &bad)
+        .write_page(ecu_compat::ts::pages::PAGE_LIMITS, &bad)
         .is_err());
 
     // tps_max > 100 invalid
     bad[2..4].copy_from_slice(&2000u16.to_le_bytes());
     bad[5] = 150;
     assert!(pages
-        .write_page(ecu_core::ts::pages::PAGE_LIMITS, &bad)
+        .write_page(ecu_compat::ts::pages::PAGE_LIMITS, &bad)
         .is_err());
 
     // tps_max <= tps_min invalid
     bad[4] = 90;
     bad[5] = 80;
     assert!(pages
-        .write_page(ecu_core::ts::pages::PAGE_LIMITS, &bad)
+        .write_page(ecu_compat::ts::pages::PAGE_LIMITS, &bad)
         .is_err());
 
     // clear_time_s == 0 invalid
@@ -314,7 +314,7 @@ fn sensors_ae_dfco_negative_sizes_and_ranges() {
     bad[5] = 2;
     bad[6..8].copy_from_slice(&0u16.to_le_bytes());
     assert!(pages
-        .write_page(ecu_core::ts::pages::PAGE_LIMITS, &bad)
+        .write_page(ecu_compat::ts::pages::PAGE_LIMITS, &bad)
         .is_err());
 
     // Wrong size payloads
@@ -374,11 +374,11 @@ fn angles_page_roundtrip() {
     ang[64..66].copy_from_slice(&123u16.to_le_bytes());
     ang[66..68].copy_from_slice(&750u16.to_le_bytes()); // cam timeout ms
     pages
-        .write_page(ecu_core::ts::pages::PAGE_ANGLES, &ang)
+        .write_page(ecu_compat::ts::pages::PAGE_ANGLES, &ang)
         .expect("write angles");
     let mut out = [0u8; 68];
     let n = pages
-        .read_page(ecu_core::ts::pages::PAGE_ANGLES, &mut out)
+        .read_page(ecu_compat::ts::pages::PAGE_ANGLES, &mut out)
         .expect("read angles");
     assert_eq!(n, 68);
     assert_eq!(&out[..], &ang[..]);
@@ -908,14 +908,14 @@ fn ts_ve_afr_pages_feed_runtime_semantic_fuel_strategy() {
             chunk.copy_from_slice(&60u16.to_le_bytes());
         }
         store
-            .write_page(ecu_core::ts::pages::PAGE_VE_TABLE, &ve_page)
+            .write_page(ecu_compat::ts::pages::PAGE_VE_TABLE, &ve_page)
             .expect("write VE page");
         let mut afr_page = [0u8; 512];
         for chunk in afr_page.chunks_exact_mut(2) {
             chunk.copy_from_slice(&180u16.to_le_bytes());
         }
         store
-            .write_page(ecu_core::ts::pages::PAGE_AFR_TABLE, &afr_page)
+            .write_page(ecu_compat::ts::pages::PAGE_AFR_TABLE, &afr_page)
             .expect("write AFR page");
     }
 
@@ -936,7 +936,7 @@ fn ts_ve_afr_pages_feed_runtime_semantic_fuel_strategy() {
             chunk.copy_from_slice(&120u16.to_le_bytes());
         }
         store
-            .write_page(ecu_core::ts::pages::PAGE_VE_TABLE, &ve_page)
+            .write_page(ecu_compat::ts::pages::PAGE_VE_TABLE, &ve_page)
             .expect("write richer VE");
     }
     runtime.configure_speed_density_ve(

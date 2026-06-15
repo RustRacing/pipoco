@@ -3,7 +3,7 @@
 //! evidence for runtime-owned fields.
 use std::collections::BTreeSet;
 
-#[path = "../../core/tests/formal/fm0016_fixture_matrix.rs"]
+#[path = "../../compat/tests/formal/fm0016_fixture_matrix.rs"]
 #[allow(dead_code)]
 mod fm0016_fixture_matrix;
 

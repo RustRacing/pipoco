@@ -1,7 +1,7 @@
 //! Page stores for fuel/ignition tables
 //!
 //! The `SystemSnapshot` and `EcuPageStore` definitions now live in
-//! `ecu_ts::pages`; they are re-exported here so `ecu_core::ts::pages::*` and
+//! `ecu_ts::pages`; they are re-exported here so `ecu_compat::ts::pages::*` and
 //! the core builder (`EcuState::page_store`) keep resolving unchanged.
 pub use ecu_ts::pages::{
     ts_page_descriptor, ExpertTriggerPageState, TsPageDescriptor, PAGE_AE, PAGE_AFR_TABLE,

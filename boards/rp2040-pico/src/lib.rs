@@ -9,7 +9,7 @@ pub const TARGET_TRIPLE: &str = "thumbv6m-none-eabi";
 pub const BOARD_ID_RP2040_PICO: BoardId = BoardId::new("rp2040-pico");
 pub const PIN_MAP_RP2040_PICO_TS_ECU_BRINGUP: PinMapId = PinMapId::new(0x2040);
 pub const RUNTIME_BUILD_ID_RP2040_PICO_TS_ECU: RuntimeBuildId = RuntimeBuildId::new(1);
-pub const RP2040_PICO_TS_ECU_DEFAULT_TS_PROFILE: &str = "crates/core/tests/assets/IPW-ECU.ini";
+pub const RP2040_PICO_TS_ECU_DEFAULT_TS_PROFILE: &str = "crates/compat/tests/assets/IPW-ECU.ini";
 
 /// Conservative recipe-level capabilities for the `ts-ecu` Pico bringup binary.
 ///

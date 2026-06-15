@@ -1,6 +1,31 @@
 use ecu_domain::Rpm;
 
 use crate::{ChannelId, Degrees10, DwellUs, EngineTimeAuthority, Micros, PulseWidthUs};
+use ecu_board_api::frontier::{
+    TimingIslandAdmissionReport, TimingIslandHorizonSequenceId, TimingIslandMetricSnapshot,
+    TimingIslandPermitMask, TimingIslandStopReason, TimingIslandSyncLossReason,
+    HEARTBEAT_EXPIRY_US, HORIZON_SEQUENCE_BITS, MAX_HORIZON_US,
+};
+
+#[allow(dead_code)]
+pub(crate) type FrontierHorizonSequenceId = TimingIslandHorizonSequenceId;
+#[allow(dead_code)]
+pub(crate) type FrontierPermitMask = TimingIslandPermitMask;
+#[allow(dead_code)]
+pub(crate) type FrontierStopReason = TimingIslandStopReason;
+#[allow(dead_code)]
+pub(crate) type FrontierSyncLossReason = TimingIslandSyncLossReason;
+#[allow(dead_code)]
+pub(crate) type FrontierAdmissionReport = TimingIslandAdmissionReport;
+#[allow(dead_code)]
+pub(crate) type FrontierMetricSnapshot = TimingIslandMetricSnapshot;
+
+#[allow(dead_code)]
+pub(crate) const FRONTIER_HEARTBEAT_EXPIRY_US: Micros = HEARTBEAT_EXPIRY_US;
+#[allow(dead_code)]
+pub(crate) const FRONTIER_MAX_HORIZON_US: Micros = MAX_HORIZON_US;
+#[allow(dead_code)]
+pub(crate) const FRONTIER_HORIZON_SEQUENCE_BITS: u8 = HORIZON_SEQUENCE_BITS;
 
 /// Output group used to express exclusivity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]

@@ -1,4 +1,4 @@
-use ecu_core::compat::EcuState;
+use ecu_compat::compat::EcuState;
 use ecu_ts::outpc::Outpc;
 use ecu_ts::pages::FuelIgnPageStore;
 use ecu_ts::proto::{self, Cmd};

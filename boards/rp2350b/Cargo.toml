@@ -5,7 +5,7 @@ edition = "2021"
 autobins = false
 
 [dependencies]
-ecu-core = { path = "../../crates/core", default-features = false }
+ecu-compat = { path = "../../crates/compat", default-features = false }
 ecu-transport = { path = "../../crates/transport", default-features = false }
 ecu-ts = { path = "../../crates/ts", default-features = false }
 ecu-board-api = { path = "../../crates/board-api" }

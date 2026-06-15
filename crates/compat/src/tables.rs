@@ -53,7 +53,7 @@ impl IpwTable {
     ///
     /// # Example
     /// ```
-    /// use ecu_core::IpwTable;
+    /// use ecu_compat::IpwTable;
     /// let table = IpwTable::new();
     /// let pw = table.lookup(3000, 60);  // 3000 RPM, 60 kPa
     /// ```

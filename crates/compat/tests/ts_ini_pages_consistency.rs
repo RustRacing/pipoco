@@ -1,5 +1,5 @@
-use ecu_core::compat::EcuState;
-use ecu_core::ts::pages::{
+use ecu_compat::compat::EcuState;
+use ecu_compat::ts::pages::{
     PAGE_AFR_TABLE, PAGE_ANGLES, PAGE_ASE, PAGE_CL, PAGE_DIAG, PAGE_DIAG_LOG, PAGE_EXPERT_TRIGGER,
     PAGE_FAN, PAGE_IDLE, PAGE_LIMITS, PAGE_SNAPSHOT, PAGE_VE_TABLE, PAGE_VE_TUNE, PAGE_WUE,
 };

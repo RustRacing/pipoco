@@ -2,7 +2,7 @@
 
 //! Integration-test crate for board conformance checks.
 //!
-//! This keeps concrete board dependencies out of `ecu-core` while preserving
+//! This keeps concrete board dependencies out of `ecu-compat` while preserving
 //! cross-board contract coverage.
 
 /// Check that a no-watchdog recipe carries an explicit justification.

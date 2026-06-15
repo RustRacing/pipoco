@@ -27,7 +27,7 @@ use ecu_scheduler::{
 
 mod fm0016_fixture_matrix {
     #![allow(dead_code)]
-    include!("../../core/tests/formal/fm0016_fixture_matrix.rs");
+    include!("../../compat/tests/formal/fm0016_fixture_matrix.rs");
 }
 
 // Re-export runtime semantic types needed for product observation building

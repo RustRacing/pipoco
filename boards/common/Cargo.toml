@@ -27,4 +27,4 @@ ts-usb = ["dep:usb-device", "dep:usbd-serial"]
 test-support = []
 
 [dev-dependencies]
-ecu-core = { path = "../../crates/core", default-features = false }
+ecu-compat = { path = "../../crates/compat", default-features = false }

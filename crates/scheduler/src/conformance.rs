@@ -1,6 +1,12 @@
+use crate::types::{
+    FrontierAdmissionReport, FrontierHorizonSequenceId, FrontierMetricSnapshot, FrontierPermitMask,
+    FrontierStopReason, FrontierSyncLossReason, FRONTIER_HEARTBEAT_EXPIRY_US,
+    FRONTIER_HORIZON_SEQUENCE_BITS, FRONTIER_MAX_HORIZON_US,
+};
 use crate::{
     ChannelId, Micros, SchedulerMode, SchedulerState, TimedIgnitionPlan, TimedInjectionPlan,
 };
+use ecu_domain::SyncState;
 
 /// Observable surface for scheduler conformance.
 /// Fields read from SchedulerState and product scheduler APIs only.
@@ -15,6 +21,52 @@ pub struct SchedulerObservedSurface {
     pub last_ignition_end: Option<Micros>,
     pub injection_count: u8,
     pub ignition_count: u8,
+}
+
+/// Canonical frontier contract surface for scheduler conformance checks.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct FrontierContractSurface {
+    pub horizon_sequence_bits: u8,
+    pub heartbeat_expiry_us: Micros,
+    pub max_horizon_us: Micros,
+    pub horizon_sequence_id: FrontierHorizonSequenceId,
+    pub default_permit_mask: FrontierPermitMask,
+    pub default_stop_reason: FrontierStopReason,
+    pub admission_report: FrontierAdmissionReport,
+    pub metric_snapshot: FrontierMetricSnapshot,
+}
+
+#[allow(dead_code)]
+pub(crate) const fn frontier_contract_surface() -> FrontierContractSurface {
+    FrontierContractSurface {
+        horizon_sequence_bits: FRONTIER_HORIZON_SEQUENCE_BITS,
+        heartbeat_expiry_us: FRONTIER_HEARTBEAT_EXPIRY_US,
+        max_horizon_us: FRONTIER_MAX_HORIZON_US,
+        horizon_sequence_id: 0,
+        default_permit_mask: FrontierPermitMask::NONE,
+        default_stop_reason: FrontierStopReason::None,
+        admission_report: FrontierAdmissionReport::new(
+            0,
+            false,
+            FrontierStopReason::None,
+            FrontierPermitMask::NONE,
+            Micros::new(0),
+            Micros::new(0),
+        ),
+        metric_snapshot: FrontierMetricSnapshot::new(
+            SyncState::Unsynced,
+            FrontierSyncLossReason::None,
+            false,
+            None,
+            None,
+            None,
+            FrontierPermitMask::NONE,
+            FrontierStopReason::None,
+            0,
+            0,
+        ),
+    }
 }
 
 /// Adapter contracts for scheduler fields that cannot be directly compared.

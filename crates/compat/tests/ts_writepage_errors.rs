@@ -1,7 +1,7 @@
 //! Verify TS server returns ERR on wrong-sized WritePage payloads
 
-use ecu_core::compat::EcuState;
-use ecu_core::ts::pages::{
+use ecu_compat::compat::EcuState;
+use ecu_compat::ts::pages::{
     EcuPageStore, PAGE_AE, PAGE_DFCO, PAGE_DIAG, PAGE_DIAG_LOG, PAGE_FUEL, PAGE_IGN, PAGE_LIMITS,
     PAGE_SENSORS, PAGE_SNAPSHOT,
 };

@@ -248,7 +248,7 @@ pub trait PageStoreProvider {
 /// load/burn mechanics, expert-trigger read/write/transition handling, and
 /// runtime fuel-tune update reporting. The page bodies and the live
 /// `FuelRuntimeTune` snapshot come from the generic [`PageStoreProvider`], so
-/// this type has no dependency on `ecu-core` or `EcuState`.
+/// this type has no dependency on `ecu-compat` or `EcuState`.
 pub struct PersistedTsPageStore<P, KV> {
     provider: P,
     kv: KV,

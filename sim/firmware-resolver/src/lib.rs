@@ -90,7 +90,7 @@ const FIRMWARE_METADATA_RP2040_PICO_TS_ECU: BoardBuildMetadata = BoardBuildMetad
     pin_map_id: FIRMWARE_PIN_MAP_RP2040_PICO_TS_ECU_BRINGUP,
     runtime_build_id: FIRMWARE_RUNTIME_BUILD_ID_RP2040_PICO_TS_ECU,
     feature_bindings: FIRMWARE_FEATURE_BINDINGS_RP2040_PICO_TS_ECU,
-    default_ts_profile: Some("crates/core/tests/assets/IPW-ECU.ini"),
+    default_ts_profile: Some("crates/compat/tests/assets/IPW-ECU.ini"),
 };
 
 const FIRMWARE_METADATA_RP2350B_REV_LIMITER_BRINGUP: BoardBuildMetadata = BoardBuildMetadata {

@@ -1,8 +1,8 @@
 //! Integration test for TunerStudio server and pages
 
 use ecu_calibration::{FuelRuntimeTune, KvError, KvStore};
-use ecu_core::compat::EcuState;
-use ecu_core::ts::pages::{
+use ecu_compat::compat::EcuState;
+use ecu_compat::ts::pages::{
     EcuPageStore, PAGE_AFR_TABLE, PAGE_FUEL, PAGE_IGN, PAGE_VE_TABLE, PAGE_VE_TUNE,
 };
 use ecu_target_common::kv::ram::RamKv512;

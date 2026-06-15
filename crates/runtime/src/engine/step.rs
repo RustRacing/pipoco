@@ -1,5 +1,24 @@
 use super::*;
 use crate::AuthorityStepInputs;
+use ecu_board_api::frontier::{
+    TimingIslandHorizonSequenceId, TimingIslandPermitMask, TimingIslandStopReason,
+    HEARTBEAT_EXPIRY_US, HORIZON_SEQUENCE_BITS, MAX_HORIZON_US,
+};
+
+#[allow(dead_code)]
+pub(crate) type FrontierHorizonSequenceId = TimingIslandHorizonSequenceId;
+#[allow(dead_code)]
+pub(crate) const FRONTIER_HORIZON_SEQUENCE_BITS: u8 = HORIZON_SEQUENCE_BITS;
+#[allow(dead_code)]
+pub(crate) const FRONTIER_HEARTBEAT_EXPIRY_US: Micros = HEARTBEAT_EXPIRY_US;
+#[allow(dead_code)]
+pub(crate) const FRONTIER_MAX_HORIZON_US: Micros = MAX_HORIZON_US;
+#[allow(dead_code)]
+pub(crate) const FRONTIER_DEFAULT_PERMIT_MASK: TimingIslandPermitMask =
+    TimingIslandPermitMask::NONE;
+#[allow(dead_code)]
+pub(crate) const FRONTIER_DEFAULT_STOP_REASON: TimingIslandStopReason =
+    TimingIslandStopReason::None;
 
 impl EngineRuntime {
     fn validate_step_scalars(&self, rpm: u32, load_kpa10: u32, angle_x10: i32) -> ValidatedInputs {

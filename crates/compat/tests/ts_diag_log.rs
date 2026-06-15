@@ -1,6 +1,6 @@
-use ecu_core::compat::EcuState;
-use ecu_core::ts::pages::PAGE_DIAG_LOG;
-use ecu_core::{Kpa10, Micros};
+use ecu_compat::compat::EcuState;
+use ecu_compat::ts::pages::PAGE_DIAG_LOG;
+use ecu_compat::{Kpa10, Micros};
 use ecu_ts::server::PageStore;
 
 #[test]
@@ -31,10 +31,10 @@ fn diag_log_contains_events_after_fault() {
 fn diag_log_encodes_cam_missing_event() {
     let mut state = EcuState::new();
     // Manually push a cam-missing event into the log
-    state.diag_log_mut().push(ecu_core::diag::DiagEvent {
-        code: ecu_core::diag::DiagCode::CamMissing,
-        timestamp: ecu_core::Micros::new(100),
-        source: ecu_core::diag::DiagSource::User,
+    state.diag_log_mut().push(ecu_compat::diag::DiagEvent {
+        code: ecu_compat::diag::DiagCode::CamMissing,
+        timestamp: ecu_compat::Micros::new(100),
+        source: ecu_compat::diag::DiagSource::User,
         context: Some(42),
         start_us: 100,
         end_us: 200,

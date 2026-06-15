@@ -1,12 +1,117 @@
 //! Typed timing island commands/events and fixed-capacity batch helpers.
 
+use crate::safety::SafetyPermitMask;
 use crate::telemetry::EngineTimeAuthorityTelemetry;
 use ecu_domain::{
-    AbsoluteTimeAuthority, CancelReason, ChannelId, CrankSyncState, EngineTimeAuthority, Percent,
-    PhaseSyncState, SyncState, Ticks,
+    AbsoluteTimeAuthority, CancelReason, ChannelId, CrankSyncState, EngineTimeAuthority, Micros,
+    Percent, PhaseSyncState, SyncState, Ticks,
 };
 
 use ecu_domain::{FaultCode, FaultSeverity};
+
+pub type TimingIslandHorizonSequenceId = u32;
+pub type TimingIslandPermitMask = SafetyPermitMask;
+
+pub const HEARTBEAT_EXPIRY_US: Micros = Micros::new(20_000);
+pub const MAX_HORIZON_US: Micros = Micros::new(10_000);
+pub const HORIZON_SEQUENCE_BITS: u8 = 32;
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub enum TimingIslandStopReason {
+    #[default]
+    None = 0,
+    SyncLost = 1,
+    HeartbeatExpired = 2,
+    HorizonExpired = 3,
+    PermitDenied = 4,
+    TimingFault = 5,
+    AdmittedEventRejected = 6,
+    BoardOutputFault = 7,
+}
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub enum TimingIslandSyncLossReason {
+    #[default]
+    None = 0,
+    SignalLost = 1,
+    DecoderFault = 2,
+    TimingFault = 3,
+    Unknown = 4,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct TimingIslandAdmissionReport {
+    pub horizon_sequence_id: TimingIslandHorizonSequenceId,
+    pub accepted: bool,
+    pub stop_reason: TimingIslandStopReason,
+    pub permit_mask: TimingIslandPermitMask,
+    pub horizon_start_us: Micros,
+    pub horizon_end_us: Micros,
+}
+
+impl TimingIslandAdmissionReport {
+    pub const fn new(
+        horizon_sequence_id: TimingIslandHorizonSequenceId,
+        accepted: bool,
+        stop_reason: TimingIslandStopReason,
+        permit_mask: TimingIslandPermitMask,
+        horizon_start_us: Micros,
+        horizon_end_us: Micros,
+    ) -> Self {
+        Self {
+            horizon_sequence_id,
+            accepted,
+            stop_reason,
+            permit_mask,
+            horizon_start_us,
+            horizon_end_us,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct TimingIslandMetricSnapshot {
+    pub sync_state: SyncState,
+    pub sync_loss_reason: TimingIslandSyncLossReason,
+    pub phase_freshness: bool,
+    pub last_accepted_horizon_id: Option<TimingIslandHorizonSequenceId>,
+    pub last_accepted_horizon_age_us: Option<Micros>,
+    pub heartbeat_age_us: Option<Micros>,
+    pub active_permit_mask: TimingIslandPermitMask,
+    pub active_stop_reason: TimingIslandStopReason,
+    pub dropped_or_rejected_event_count: u32,
+    pub late_event_count: u32,
+}
+
+impl TimingIslandMetricSnapshot {
+    pub const fn new(
+        sync_state: SyncState,
+        sync_loss_reason: TimingIslandSyncLossReason,
+        phase_freshness: bool,
+        last_accepted_horizon_id: Option<TimingIslandHorizonSequenceId>,
+        last_accepted_horizon_age_us: Option<Micros>,
+        heartbeat_age_us: Option<Micros>,
+        active_permit_mask: TimingIslandPermitMask,
+        active_stop_reason: TimingIslandStopReason,
+        dropped_or_rejected_event_count: u32,
+        late_event_count: u32,
+    ) -> Self {
+        Self {
+            sync_state,
+            sync_loss_reason,
+            phase_freshness,
+            last_accepted_horizon_id,
+            last_accepted_horizon_age_us,
+            heartbeat_age_us,
+            active_permit_mask,
+            active_stop_reason,
+            dropped_or_rejected_event_count,
+            late_event_count,
+        }
+    }
+}
 
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]

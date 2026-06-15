@@ -1,6 +1,6 @@
 //! Legacy `EcuState` to runtime calibration adapters.
 //!
-//! These helpers intentionally stay in `ecu-core` because they depend on the
+//! These helpers intentionally stay in `ecu-compat` because they depend on the
 //! legacy `EcuState` layout. Board-common should remain generic runtime/IO
 //! plumbing and not depend on `EcuState`.
 

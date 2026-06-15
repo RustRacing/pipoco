@@ -1,6 +1,6 @@
-//! ECU Core Library
+//! ECU Compatibility Library
 //!
-//! Legacy/compatibility ECU core facade for shared no_std-safe building blocks.
+//! Legacy/compatibility ECU facade for shared no_std-safe building blocks.
 //! This crate still hosts trigger decoding, safety, TunerStudio/page storage,
 //! diagnostics, calibration compatibility, tables, and small embedded support
 //! modules used by board and simulation crates.
@@ -10,7 +10,7 @@
 //! Runtime fuel and output behavior has moved out of the historical root app
 //! shape. Direct pulse-width fuel strategies live in the split runtime/fuel
 //! crates, and scheduled output execution is maintained in `ecu-scheduler`
-//! plus the target-common/board adapter path. `ecu-core` remains a
+//! plus the target-common/board adapter path. `ecu-compat` remains a
 //! no_std-compatible compatibility boundary for code that still depends on
 //! legacy `EcuState` pages, safety helpers, trigger primitives, or
 //! TunerStudio-facing data.
@@ -34,7 +34,7 @@
 //!
 //! ## Ownership
 //!
-//! `ecu-core` is a shrinking compatibility shell. New canonical product
+//! `ecu-compat` is a shrinking compatibility shell. New canonical product
 //! behavior belongs in the split crates (`ecu-runtime`, `ecu-control`,
 //! `ecu-scheduler`, `ecu-calibration`) rather than here. Compatibility-owned
 //! surfaces are grouped under [`compat`] and remain public only to support

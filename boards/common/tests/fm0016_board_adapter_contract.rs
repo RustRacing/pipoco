@@ -3,9 +3,9 @@
 #![cfg(test)]
 
 use ecu_calibration::FuelRuntimeTune;
-use ecu_core::compat::EcuState;
-use ecu_core::constants::{fuel as fuel_consts, ignition as ign_consts};
-use ecu_core::ts::pages::{
+use ecu_compat::compat::EcuState;
+use ecu_compat::constants::{fuel as fuel_consts, ignition as ign_consts};
+use ecu_compat::ts::pages::{
     EcuPageStore, PAGE_AE, PAGE_ANGLES, PAGE_ASE, PAGE_CL, PAGE_DFCO, PAGE_DIAG, PAGE_DIAG_LOG,
     PAGE_FAN, PAGE_FUEL, PAGE_IDLE, PAGE_IGN, PAGE_LIMITS, PAGE_SENSORS, PAGE_SNAPSHOT, PAGE_WUE,
 };

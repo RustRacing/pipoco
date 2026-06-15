@@ -4,11 +4,11 @@
 //! damage if not working correctly. All tests in this file MUST PASS before
 //! any release or hardware deployment.
 
-use ecu_core::constants::safety::{
+use ecu_compat::constants::safety::{
     CRANKING_RPM_THRESHOLD, SYNC_RECOVERY_ATTEMPTS, SYNC_RECOVERY_WINDOW_US, WOT_TPS_THRESHOLD,
 };
-use ecu_core::hal::TimeSource;
-use ecu_core::{
+use ecu_compat::hal::TimeSource;
+use ecu_compat::{
     compat::EcuState, scale_u16, should_allow_injection, update_flood_clear, FloodClearState,
     IpwTable, SyncLossTracker, TriggerDecoder,
 };

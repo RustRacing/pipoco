@@ -14,7 +14,7 @@ use crate::constants::corrections::UNITY_CORRECTION;
 ///
 /// # Example
 /// ```
-/// use ecu_core::scale_u16;
+/// use ecu_compat::scale_u16;
 ///
 /// assert_eq!(scale_u16(1000, 150), 1500);  // 1.5x
 /// assert_eq!(scale_u16(1000, 80), 800);    // 0.8x
