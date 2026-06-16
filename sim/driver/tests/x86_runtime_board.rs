@@ -17,7 +17,11 @@ use ecu_domain::{
     EngineTimeAuthority, FaultCode, FaultSeverity, Kpa10, Lambda100, Micros, Percent,
     PhaseSyncState, PulseWidthUs, Rpm, Ticks,
 };
-use ecu_runtime::{Action, BaseFuelModel};
+use ecu_runtime::{
+    Action, BaseFuelModel, RuntimeFuelStrategy, RuntimeSemanticAxis16, RuntimeSemanticCalibration,
+    RuntimeSemanticCurve16U16, RuntimeSemanticState, RuntimeSemanticTable2dU16,
+    RUNTIME_SEMANTIC_TABLE_LEN,
+};
 use ecu_sim_core as core_plant;
 use ecu_sim_core::config::{
     BurnCurve, CombustionConfig, KnockConfig, LossConfig, ResidualGasConfig, ThermoConfig,
@@ -70,13 +74,9 @@ fn unsynced_sensor_snapshot() -> ecu_board_api::SensorSnapshot {
 }
 
 fn synced_board() -> X86RuntimeBoard {
-    let mut board = X86RuntimeBoard::new();
-    board
-        .runtime_mut()
-        .configure_full_ecu(m50_runtime_output_profile(M50B25TU_MEGA_COMPAT));
-    board
-        .runtime_mut()
-        .configure_fuel_model(test_base_fuel_model());
+    let mut board = X86RuntimeBoard::default();
+    board.configure_full_ecu(m50_runtime_output_profile(M50B25TU_MEGA_COMPAT));
+    board.configure_fuel_model(test_base_fuel_model());
     board.set_clock(Micros::new(1_000));
     board.set_sensor_snapshot(synced_sensor_snapshot());
     board
@@ -94,6 +94,86 @@ fn test_base_fuel_model() -> BaseFuelModel {
         [Kpa10::new(0); 16],
         [[PulseWidthUs::new(1_000); 16]; 16],
     )
+}
+
+fn semantic_axis2() -> RuntimeSemanticAxis16 {
+    RuntimeSemanticAxis16 {
+        len: 2,
+        values: [0, 2_000, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    }
+}
+
+fn semantic_curve_u16(value: u16) -> RuntimeSemanticCurve16U16 {
+    RuntimeSemanticCurve16U16 {
+        axis: semantic_axis2(),
+        values: [value; RUNTIME_SEMANTIC_TABLE_LEN],
+    }
+}
+
+fn semantic_table_u16(value: u16) -> RuntimeSemanticTable2dU16 {
+    RuntimeSemanticTable2dU16 {
+        rpm_axis: semantic_axis2(),
+        load_axis: semantic_axis2(),
+        values: [[value; RUNTIME_SEMANTIC_TABLE_LEN]; RUNTIME_SEMANTIC_TABLE_LEN],
+    }
+}
+
+fn semantic_shift_strategy(launch_rpm_limit: u16, flat_shift_rpm_min: u16) -> RuntimeFuelStrategy {
+    RuntimeFuelStrategy::SpeedDensityVe {
+        calibration: RuntimeSemanticCalibration {
+            ve_table: semantic_table_u16(7_000),
+            afr_target_table: semantic_table_u16(1_470),
+            deadtime_table_us: semantic_table_u16(0),
+            clt_corr_curve: semantic_curve_u16(1_000),
+            iat_corr_curve: semantic_curve_u16(1_000),
+            baro_corr_curve: semantic_curve_u16(1_000),
+            vbat_corr_curve: semantic_curve_u16(1_000),
+            cranking_curve: semantic_curve_u16(1_000),
+            afterstart_table: semantic_table_u16(1_000),
+            warmup_curve: semantic_curve_u16(1_000),
+            ae_tps_threshold_curve: semantic_curve_u16(1_000),
+            ae_map_threshold_curve: semantic_curve_u16(1_000),
+            ae_shot_curve_us: semantic_curve_u16(0),
+            ae_decay_steps_curve: semantic_curve_u16(1),
+            ae_decay_ratio_curve_x1000: semantic_curve_u16(1_000),
+            required_fuel_us: 1_000,
+            pref_kpa10: 1_000,
+            stoich_afr_x100: 1_470,
+            pw_max_us: 20_000,
+            afterstart_window_cycles: 0,
+            dfco_entry_rpm: 9_000,
+            dfco_exit_rpm: 8_900,
+            dfco_entry_tps_x100: 1,
+            dfco_exit_tps_x100: 2,
+            dfco_entry_map_kpa10: 20,
+            dfco_delay_cycles: 1,
+            soft_rev_rpm: 9_000,
+            hard_rev_rpm: 10_000,
+            rev_hysteresis_rpm: 100,
+            soft_retard_max_deg10: 0,
+            launch_rpm_limit,
+            launch_cut_cycles: 0,
+            flat_shift_rpm_min,
+            flat_shift_cut_cycles: 0,
+            knock_threshold_x100: 10_000,
+            knock_retard_step_deg10: 0,
+            knock_retard_max_deg10: 0,
+            knock_recovery_step_deg10: 0,
+            knock_recovery_delay_cycles: 0,
+            lambda_kp_x1000: 0,
+            lambda_ki_x1000: 0,
+        },
+        state: RuntimeSemanticState::default(),
+    }
+}
+
+fn semantic_shift_board(launch_rpm_limit: u16, flat_shift_rpm_min: u16) -> X86RuntimeBoard {
+    let mut board = synced_board();
+    board.configure_runtime_fuel_strategy(semantic_shift_strategy(
+        launch_rpm_limit,
+        flat_shift_rpm_min,
+    ));
+    board
 }
 
 fn transition(output: EcuOutput, level: OutputLevel, at_us: u32) -> OutputTransition {
@@ -412,7 +492,7 @@ fn synced_m50_mega_profile_emits_expected_channels_and_telemetry_identity() {
 #[test]
 fn injection_only_profile_schedules_injectors_without_spark_outputs() {
     let mut board = synced_board();
-    board.runtime_mut().configure_batch_injection(2);
+    board.configure_batch_injection(2);
 
     let result = run_x86_runtime_tick(&mut board).unwrap();
 
@@ -443,7 +523,7 @@ fn injection_only_profile_schedules_injectors_without_spark_outputs() {
 #[test]
 fn ignition_only_profile_schedules_spark_without_injector_outputs() {
     let mut board = synced_board();
-    board.runtime_mut().configure_crank_only_wasted_spark(4);
+    board.configure_crank_only_wasted_spark(4);
 
     let result = run_x86_runtime_tick(&mut board).unwrap();
 
@@ -474,7 +554,7 @@ fn ignition_only_profile_schedules_spark_without_injector_outputs() {
 #[test]
 fn wasted_spark_profile_identity_uses_normalized_event_count() {
     let mut board = synced_board();
-    board.runtime_mut().configure_crank_only_wasted_spark(40);
+    board.configure_crank_only_wasted_spark(40);
 
     let result = run_x86_runtime_tick(&mut board).unwrap();
 
@@ -522,6 +602,81 @@ fn synced_m50_runtime_outputs_bridge_into_clean_core_plant_commands() {
             .any(|c| c.misfire.is_none()),
         "{:?}",
         output.combustion
+    );
+}
+
+#[test]
+fn default_shift_arming_leaves_semantic_cuts_inactive() {
+    let mut board = semantic_shift_board(2_500, 9_000);
+
+    let result = run_x86_runtime_tick(&mut board).unwrap();
+
+    assert!(!result.step_result.control.fuel_intent.fuel_cut);
+    assert!(!result.step_result.control.fuel_intent.spark_cut);
+}
+
+#[test]
+fn launch_shift_arming_can_trigger_semantic_cut() {
+    let mut board = semantic_shift_board(2_500, 9_000);
+    board.set_shift_arming(true, false);
+
+    let result = run_x86_runtime_tick(&mut board).unwrap();
+
+    assert!(result.step_result.control.fuel_intent.fuel_cut);
+    assert!(result.step_result.control.fuel_intent.spark_cut);
+}
+
+#[test]
+fn flat_shift_arming_can_trigger_semantic_cut() {
+    let mut board = semantic_shift_board(9_000, 2_500);
+    board.set_shift_arming(false, true);
+
+    let result = run_x86_runtime_tick(&mut board).unwrap();
+
+    assert!(result.step_result.control.fuel_intent.fuel_cut);
+    assert!(result.step_result.control.fuel_intent.spark_cut);
+}
+
+#[test]
+fn authority_aware_ingress_preserves_sensor_authority() {
+    let mut board = X86RuntimeBoard::default();
+    board
+        .runtime_mut()
+        .configure_full_ecu(m50_runtime_output_profile(M50B25TU_FULL_COP));
+
+    let authority = EngineTimeAuthority::new(
+        CrankSyncState::PrimaryLocked,
+        PhaseSyncState::CamObserved720,
+        AbsoluteTimeAuthority::GeometryOnly,
+        EngineTimeAuthority::MAX_CONFIDENCE_X1000,
+        0,
+    );
+    board.set_clock(Micros::new(1_000));
+    board.set_sensor_snapshot(
+        ecu_board_api::SensorSnapshot::new_with_engine_time_authority(
+            Micros::new(1_000),
+            Rpm::new(3_000),
+            Kpa10::new(450),
+            Percent::new(12),
+            840,
+            550,
+            12_500,
+            Lambda100::new(100),
+            authority,
+            EnginePhase::Running,
+        ),
+    );
+    board
+        .set_trigger_edges(&[TriggerEdge::new(EdgeKind::Rising, Ticks::new(0))])
+        .unwrap();
+
+    let result = run_x86_runtime_tick(&mut board).unwrap();
+
+    assert_eq!(result.sensor_snapshot.engine_time.authority, authority);
+    assert_eq!(board.diagnostics().engine_time.authority, authority);
+    assert_eq!(
+        board.diagnostics().engine_time.source(),
+        AbsoluteTimeAuthority::GeometryOnly
     );
 }
 
@@ -751,7 +906,7 @@ fn repeated_runs_are_byte_identical() {
 #[test]
 fn independent_instances_do_not_share_state() {
     let mut synced = synced_board();
-    let mut unsynced = X86RuntimeBoard::new();
+    let mut unsynced = X86RuntimeBoard::default();
     unsynced.set_clock(Micros::new(1_000));
     unsynced.set_sensor_snapshot(unsynced_sensor_snapshot());
 
@@ -767,7 +922,7 @@ fn independent_instances_do_not_share_state() {
 #[test]
 fn fault_shutdown_triggers_cancel_all_and_safe_state() {
     let mut board = synced_board();
-    board.runtime_mut().set_fault_state(
+    board.set_fault_state(
         FaultCode::SafetyCut,
         FaultSeverity::Critical,
         CancelReason::SafetyShutdown,
@@ -786,7 +941,7 @@ fn fault_shutdown_triggers_cancel_all_and_safe_state() {
 
 #[test]
 fn unsynced_state_reaches_safe_state_diagnostics() {
-    let mut board = X86RuntimeBoard::new();
+    let mut board = X86RuntimeBoard::default();
     board.set_clock(Micros::new(1_000));
     board.set_sensor_snapshot(unsynced_sensor_snapshot());
 
@@ -800,7 +955,7 @@ fn unsynced_state_reaches_safe_state_diagnostics() {
 #[test]
 fn limp_home_routes_aux_fan_command() {
     let mut board = synced_board();
-    board.runtime_mut().set_fault_state(
+    board.set_fault_state(
         FaultCode::SensorOutOfRange,
         FaultSeverity::Warning,
         CancelReason::Manual,
@@ -822,7 +977,7 @@ fn limp_home_routes_aux_fan_command() {
 
 #[test]
 fn authority_telemetry_gates_outputs_and_sync_loss_cancels() {
-    let mut board = X86RuntimeBoard::new();
+    let mut board = X86RuntimeBoard::default();
     board
         .runtime_mut()
         .configure_full_ecu(m50_runtime_output_profile(M50B25TU_FULL_COP));
@@ -897,7 +1052,7 @@ fn authority_telemetry_gates_outputs_and_sync_loss_cancels() {
 
 #[test]
 fn force_safe_state_records_low_transition_for_already_high_output() {
-    let mut board = X86RuntimeBoard::new();
+    let mut board = X86RuntimeBoard::default();
     board
         .runtime_mut()
         .configure_full_ecu(m50_runtime_output_profile(M50B25TU_FULL_COP));
@@ -946,13 +1101,9 @@ fn force_safe_state_records_low_transition_for_already_high_output() {
 
 #[test]
 fn hifi_runtime_tick_feeds_runtime_board_from_adapter_step() {
-    let mut board = X86RuntimeBoard::new();
-    board
-        .runtime_mut()
-        .configure_full_ecu(m50_runtime_output_profile(M50B25TU_MEGA_COMPAT));
-    board
-        .runtime_mut()
-        .configure_fuel_model(test_base_fuel_model());
+    let mut board = X86RuntimeBoard::default();
+    board.configure_full_ecu(m50_runtime_output_profile(M50B25TU_MEGA_COMPAT));
+    board.configure_fuel_model(test_base_fuel_model());
 
     let outputs = transition_batch([
         transition(
@@ -1028,7 +1179,7 @@ fn software_readiness_report_aggregates_profile_simulator_ts_and_metadata_gates(
     let mut second = synced_board();
     let second_result = run_x86_runtime_tick(&mut second).unwrap();
     let mut faulted = synced_board();
-    faulted.runtime_mut().set_fault_state(
+    faulted.set_fault_state(
         FaultCode::SafetyCut,
         FaultSeverity::Critical,
         CancelReason::SafetyShutdown,

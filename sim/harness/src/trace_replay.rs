@@ -306,6 +306,7 @@ fn default_control_inputs(now_us: Micros) -> ControlInputs {
         },
         torque: TorqueInputs::new(90, 90, 90, 90, 90),
         ignition: IgnitionInputs::new(Degrees10::new(100), 0, 0, 0, false, Rpm::new(1000)),
+        knock_intensity_x100: 0,
     }
 }
 

@@ -27,6 +27,7 @@ fn runtime_step_input() -> (EngineRuntime, StepInputs, ControlInputs) {
         cam_seen: false,
         flat_shift_armed: false,
         launch_armed: false,
+        safety_latch_request: false,
     };
     let control_inputs = ControlInputs {
         enrichment: EnrichmentInputs {

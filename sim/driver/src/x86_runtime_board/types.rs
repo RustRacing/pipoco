@@ -69,6 +69,7 @@ pub(super) fn baseline_control_inputs(now_us: Micros, rpm: Rpm) -> ControlInputs
         },
         torque: TorqueInputs::new(500, 0, 1_000, 1_000, 1_000),
         ignition: IgnitionInputs::new(Degrees10::new(120), 0, 0, 0, false, rpm),
+        knock_intensity_x100: 0,
     }
 }
 

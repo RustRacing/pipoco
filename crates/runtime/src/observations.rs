@@ -1,4 +1,4 @@
-use crate::{Action, ActionBatch, RUNTIME_ACTION_CAP};
+use crate::{ActionBatch, RUNTIME_ACTION_CAP};
 use ecu_calibration::CalibrationSnapshot;
 use ecu_control::{
     AllowedTorque, EnrichmentInputs, EnrichmentResult, FuelIntent, IgnitionInputs, IgnitionPlan,
@@ -60,9 +60,29 @@ pub struct RuntimeSnapshot {
     pub launch_active: bool,
     /// Flat-shift limiter is currently active.
     pub flat_shift_active: bool,
+    /// Safety latch is currently active.
+    pub safety_latched: bool,
     /// Fuel cut is currently active.
     pub fuel_cut: bool,
     /// Spark cut is currently active.
+    pub spark_cut: bool,
+    /// FM0016-compatible legacy cut reason code derived from runtime-owned state.
+    pub legacy_cut_reason_code: u8,
+    /// Last knock intensity ingressed on the runtime product step path.
+    pub knock_intensity_x100: u16,
+    /// Semantic knock retard currently retained by the selected fuel strategy.
+    pub knock_retard_deg10: i16,
+}
+
+/// Compatibility projection of runtime cut state into the FM0016 legacy view.
+///
+/// This is not the native runtime cut model. Native runtime state keeps
+/// channel-specific `fuel_cut` and `spark_cut` ownership separate. The legacy
+/// projection exists only for compatibility with FM0016 oracle rows that still
+/// use older cut-active semantics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RuntimeLegacyCutFlags {
+    pub fuel_cut: bool,
     pub spark_cut: bool,
 }
 
@@ -109,6 +129,8 @@ pub struct StepInputs {
     pub launch_armed: bool,
     /// Flat-shift arming input flag from the fixture.
     pub flat_shift_armed: bool,
+    /// Explicit safety-latch request on the live step ingress.
+    pub safety_latch_request: bool,
 }
 
 /// Canonical product ingress for one runtime step.
@@ -124,6 +146,7 @@ pub struct AuthorityStepInputs {
     pub authority: EngineTimeAuthority,
     pub launch_armed: bool,
     pub flat_shift_armed: bool,
+    pub safety_latch_request: bool,
 }
 
 impl AuthorityStepInputs {
@@ -135,6 +158,7 @@ impl AuthorityStepInputs {
         authority: EngineTimeAuthority,
         launch_armed: bool,
         flat_shift_armed: bool,
+        safety_latch_request: bool,
     ) -> Self {
         Self {
             now_us,
@@ -144,6 +168,7 @@ impl AuthorityStepInputs {
             authority,
             launch_armed,
             flat_shift_armed,
+            safety_latch_request,
         }
     }
 }
@@ -165,6 +190,11 @@ pub enum RuntimeAfrOverride {
 }
 
 /// Expanded runtime input surface for FM0016 differential fixture representability.
+///
+/// `mode`, `fuel_cut`, and `spark_cut` are formal-only fields. They are honored
+/// by [`crate::EngineRuntime::step_with_differential_input`], not by
+/// [`DifferentialInputSnapshot::to_step_inputs`] or
+/// [`DifferentialInputSnapshot::to_authority_step_inputs`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DifferentialInputSnapshot {
     pub now_us: Micros,
@@ -183,6 +213,7 @@ pub struct DifferentialInputSnapshot {
     pub target_afr_override_x100: RuntimeAfrOverride,
     pub launch_armed: bool,
     pub flat_shift_armed: bool,
+    pub safety_latch_request: bool,
 }
 
 impl DifferentialInputSnapshot {
@@ -196,6 +227,7 @@ impl DifferentialInputSnapshot {
             cam_seen: matches!(self.sync, SyncState::Locked { .. }),
             launch_armed: self.launch_armed,
             flat_shift_armed: self.flat_shift_armed,
+            safety_latch_request: self.safety_latch_request,
         }
     }
 
@@ -208,6 +240,7 @@ impl DifferentialInputSnapshot {
             authority: authority_from_sync_summary(self.sync),
             launch_armed: self.launch_armed,
             flat_shift_armed: self.flat_shift_armed,
+            safety_latch_request: self.safety_latch_request,
         }
     }
 }
@@ -239,6 +272,7 @@ pub struct ControlInputs {
     pub lambda: LambdaTrimInputs,
     pub torque: TorqueInputs,
     pub ignition: IgnitionInputs,
+    pub knock_intensity_x100: u16,
 }
 
 impl ControlInputs {
@@ -260,6 +294,7 @@ impl ControlInputs {
             },
             torque: TorqueInputs::new(100, 100, 100, 100, 100),
             ignition,
+            knock_intensity_x100: 0,
         }
     }
 }
@@ -288,34 +323,36 @@ pub struct TorqueObservations {
     /// This is emitted by runtime product code, not a conformance helper.
     pub request_x1000: u16,
     /// Torque allowed in x1000, derived from the product x100 limiter output.
-    /// The live step path zeroes this for either `EnginePhase::Off` or
-    /// `ControlMode::Shutdown`.
+    /// The live step path zeroes this for `EnginePhase::Off`,
+    /// `ControlMode::Shutdown`, or an active product hard-rev cut.
     pub allowed_x1000: u16,
     /// Torque actuated in x1000, gated by the product cut state visible on the
     /// step path.
     ///
-    /// The runtime still does not own the full safety_latched/fuel_cut/
-    /// spark_cut/launch_cut/flat_shift_cut lattice as step inputs, so this is
-    /// a partial observation surface rather than a full conformance row.
+    /// This is derived from the current-step product fuel/spark cut outputs,
+    /// not from action-shape heuristics or semantic scaffolding.
     pub actuated_x1000: u16,
 }
 
 impl TorqueObservations {
-    pub fn from_step<const N: usize>(
+    pub fn from_step(
         torque: AllowedTorque,
         operating_mode: ControlMode,
         engine_phase: EnginePhase,
-        actions: ActionBatch<N>,
+        rev_hard_active: bool,
+        fuel_cut: bool,
+        spark_cut: bool,
     ) -> Self {
-        let request_x1000 = torque.requested_x100.saturating_mul(10);
+        let request_x1000 = torque.requested_x1000;
         let allowed_x1000 = if matches!(operating_mode, ControlMode::Shutdown)
             || matches!(engine_phase, EnginePhase::Off)
+            || rev_hard_active
         {
             0
         } else {
-            torque.allowed_x100.saturating_mul(10)
+            torque.allowed_x1000
         };
-        let actuated_x1000 = if torque_cut_gated(actions) {
+        let actuated_x1000 = if fuel_cut || spark_cut {
             0
         } else {
             allowed_x1000
@@ -356,6 +393,9 @@ pub struct RuntimeObservedSurface {
     pub sync: bool,
     pub fuel_cut: bool,
     pub spark_cut: bool,
+    pub legacy_cut_reason_code: u8,
+    pub knock_intensity_x100: u16,
+    pub knock_retard_deg10: i16,
     pub torque_request_x100: u16,
     pub torque_allowed_x100: u16,
     pub torque_actuated_x100: u16,
@@ -418,17 +458,20 @@ pub enum RuntimeAdapterContract {
     /// Knock intensity - runtime does not expose knock sensor output.
     KnockIntensity,
     /// Torque allowed - `StepResult::torque_observations` exposes a partial
-    /// x1000 limiter surface; Off/Shutdown zeroing is product-owned, but the
-    /// row stays grouped with torque until actuated torque owns every cut.
+    /// x1000 limiter surface from the product step path, including
+    /// Off/Shutdown and hard-rev zeroing. The row stays adapter-contract until
+    /// the FM0016 runtime harness is updated to compare against the same
+    /// product-owned torque path.
     TorqueAllowed,
-    /// Torque request - `StepResult::torque_observations` exposes a partial
+    /// Torque request - `StepResult::torque_observations` exposes a
     /// product-owned x1000 request surface; the row stays adapter-contract
-    /// only because the torque group is not closed until actuated torque owns
-    /// the full cut lattice.
+    /// until the FM0016 runtime harness is updated to compare against the same
+    /// product-owned torque path.
     TorqueRequest,
-    /// Torque actuated - `StepResult::torque_observations` exposes partial
-    /// cut-gated x1000 actuation, but not the full safety/fuel/spark/launch/
-    /// flat-shift cut lattice required by the frozen oracle.
+    /// Torque actuated - `StepResult::torque_observations` now uses the
+    /// current-step product fuel/spark cut outputs instead of action-shape
+    /// heuristics, but the row stays adapter-contract until the FM0016 runtime
+    /// harness is updated to compare against the same product-owned torque path.
     TorqueActuated,
     /// Idle integrator state - runtime idle integrator not exposed in public API.
     IdleIntegratorState,
@@ -465,36 +508,4 @@ pub struct RuntimeFuelObservations {
 #[inline]
 pub fn extract_torque_observations(result: &StepResult) -> TorqueObservations {
     result.torque_observations
-}
-
-#[allow(deprecated)]
-fn torque_cut_gated<const N: usize>(actions: ActionBatch<N>) -> bool {
-    for action in actions.iter() {
-        match action {
-            Action::CancelScheduler(_) => return true,
-            Action::ArmScheduler {
-                injection,
-                ignition,
-            } => {
-                if injection.plan.pulse_width.get() == 0 || ignition.plan.dwell.get() == 0 {
-                    return true;
-                }
-            }
-            Action::ArmInjection(injection) => {
-                if injection.plan.pulse_width.get() == 0 {
-                    return true;
-                }
-            }
-            Action::ArmIgnition(ignition) => {
-                if ignition.plan.dwell.get() == 0 {
-                    return true;
-                }
-            }
-            Action::PublishSnapshot
-            | Action::PersistCalibration
-            | Action::ApplyAux(_)
-            | Action::Idle => {}
-        }
-    }
-    false
 }

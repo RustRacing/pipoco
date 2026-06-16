@@ -352,8 +352,8 @@ fn replay_authority_gates_x86_outputs_before_sync_loss_cancels() {
         .find(|frame| frame.allows_full_sequential_authority())
         .expect("fixture should produce a validated authority frame");
 
-    let mut board = X86RuntimeBoard::new();
-    board.runtime_mut().configure_full_ecu(
+    let mut board = X86RuntimeBoard::default();
+    board.configure_full_ecu(
         ecu_board_profiles::profiles::m50b25tu::m50_runtime_output_profile(
             ecu_board_profiles::profiles::m50b25tu::M50B25TU_FULL_COP,
         ),

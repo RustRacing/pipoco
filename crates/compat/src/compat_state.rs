@@ -20,6 +20,65 @@ pub enum CoreAdapterContract {
     CorrectedPwIncomparable,
 }
 
+/// Product-owned observable surface for the root `EcuState` compatibility
+/// boundary.
+///
+/// This is the narrow FM0016-facing view that legacy compatibility tests should
+/// consume instead of reconstructing the same state ad hoc in test code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CoreObservedSurface {
+    pub rpm: u16,
+    pub synced: bool,
+    pub tooth_count: u8,
+    pub battery_voltage_mv: u16,
+    pub clt_x10: i16,
+    pub iat_x10: i16,
+    pub tps_percent: u8,
+    pub map_kpa_x10: u16,
+    pub last_enrichment_update_us: u32,
+    pub last_enrichment_tps_percent: u8,
+    pub last_enrichment_map_kpa_x10: u16,
+    pub base_pw_us: u16,
+    pub final_pw_us: u16,
+    pub final_pw_output_us: u32,
+    pub fuel_mult_x100: u16,
+    pub wue_percent: u8,
+    pub ase_percent: u8,
+    pub ae_percent: u8,
+    pub enrich_mult_x100: u16,
+    pub stft_x10: i16,
+    pub clt_enrich_pct: u16,
+    pub iat_enrich_pct: u16,
+    pub vbatt_enrich_pct: u16,
+    pub ign_clt_correction_deg: i16,
+    pub ign_iat_correction_deg: i16,
+    pub ign_knock_retard_deg: i16,
+    pub spark_base_timing_deg: i16,
+    pub spark_advance_deg: i16,
+    pub spark_advance_with_limiter_deg: i16,
+    pub commanded_advance_x10_output: i16,
+    pub dwell_us: u32,
+    pub rev_limiter_active: bool,
+    pub rev_limiter_fuel_cut_pct: u8,
+    pub rev_limiter_ign_retard_deg: i16,
+    pub ltft_learning: bool,
+    pub ltft_learned_cell_count: u8,
+    pub knock_retard_active: bool,
+    pub total_knock_count: u32,
+    pub torque_limited: bool,
+    pub emergency_trigger_map_oob: bool,
+    pub emergency_trigger_tps_oob: bool,
+    pub emergency_mode: bool,
+    pub last_fault_code: u8,
+    pub isr_count: u32,
+    pub isr_max_us: u32,
+    pub isr_avg_us: u32,
+    pub has_fault: bool,
+    pub inject_fuel_allowed: bool,
+    pub fuel_cut: bool,
+    pub spark_cut: bool,
+}
+
 /// Runtime mirror of the live scalar inputs that are still duplicated on `EcuState`.
 ///
 /// Compatibility-only surface: keep stable for migration, but do not add new

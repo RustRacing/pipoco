@@ -1,11 +1,13 @@
 use crate::compat::StepInputs;
 use crate::ingress::RuntimeAuthorityError;
+use crate::observations::DifferentialInputSnapshot;
 use crate::{
     runtime_full_sequential_authorized, Action, ActionBatch, CalibrationState, ControlInputs,
-    ControlPlan, ControlState, DecoderObservation, EngineState, FaultState, RuntimeOutputProfile,
-    RuntimeSemanticAfrOverride, RuntimeSemanticCalibration, RuntimeSemanticEngineMode,
-    RuntimeSemanticInputSnapshot, RuntimeSemanticState, RuntimeSnapshot, StepResult,
-    TorqueObservations, ValidatedInputs, RUNTIME_ACTION_CAP, RUNTIME_AUX_COMMAND_CAP,
+    ControlPlan, ControlState, DecoderObservation, EngineState, FaultState, RuntimeEngineMode,
+    RuntimeLegacyCutFlags, RuntimeOutputProfile, RuntimeSemanticAfrOverride,
+    RuntimeSemanticCalibration, RuntimeSemanticEngineMode, RuntimeSemanticInputSnapshot,
+    RuntimeSemanticState, RuntimeSnapshot, StepResult, TorqueObservations, ValidatedInputs,
+    RUNTIME_ACTION_CAP, RUNTIME_AUX_COMMAND_CAP,
 };
 use ecu_board_api::{AuxCommand, AuxCommandBatch, AuxOutput, AuxValue, OutputLevel};
 use ecu_calibration::CalibrationSnapshot;
@@ -13,7 +15,7 @@ use ecu_control::{
     AccelerationConfig, AfterStartConfig, BaseFuelModel, DwellConfig, EnrichmentController,
     FuelAfrOverride, FuelEngineMode, FuelInputSnapshot, FuelIntent, FuelLoadSource,
     FuelObservations, IgnitionPlanner, LambdaTrimConfig, LambdaTrimPlanner, StartupConfig,
-    TorqueArbiter, WarmupConfig,
+    TorqueArbiter, TorqueLimitReason, WarmupConfig,
 };
 use ecu_domain::{
     AbsoluteTimeAuthority, CancelReason, ChannelId, ControlMode, CrankSyncState, Degrees10,
@@ -26,7 +28,7 @@ use ecu_scheduler::{
     TimedIgnitionPlan, TimedInjectionPlan,
 };
 
-use crate::{semantic::runtime_semantic_evaluate_fuel, FullEcuOutputProfile};
+use crate::{semantic::runtime_semantic_evaluate_fuel_with_state, FullEcuOutputProfile};
 
 fn engine_phase_from_authority(authority: EngineTimeAuthority, rpm: Rpm) -> EnginePhase {
     if rpm.get() == 0 {
@@ -121,10 +123,28 @@ pub struct EngineRuntime {
     pub(crate) runtime_snapshot: RuntimeSnapshot,
     pub(crate) calibration_snapshot: CalibrationSnapshot,
     pub(crate) output_profile: RuntimeOutputProfile,
+    /// Soft rev limiter active flag from last step.
+    pub(crate) rev_soft_active: bool,
+    /// Hard rev limiter active flag from last step.
+    pub(crate) rev_hard_active: bool,
+    /// Launch limiter active flag from last step.
+    pub(crate) launch_active: bool,
+    /// Flat-shift limiter active flag from last step.
+    pub(crate) flat_shift_active: bool,
+    /// Direct fuel cut request for the next step.
+    pub(crate) direct_fuel_cut_request: bool,
+    /// Direct spark cut request for the next step.
+    pub(crate) direct_spark_cut_request: bool,
+    /// Safety latch active flag from last step.
+    pub(crate) safety_latched: bool,
     /// Fuel cut active flag from last step.
     pub(crate) fuel_cut: bool,
     /// Spark cut active flag from last step.
     pub(crate) spark_cut: bool,
+    /// Last knock intensity ingressed on the runtime step path.
+    pub(crate) knock_intensity_x100: u16,
+    /// Last semantic knock retard retained by the selected fuel strategy.
+    pub(crate) knock_retard_deg10: i16,
 }
 
 /// Owned control planner state kept by the runtime.

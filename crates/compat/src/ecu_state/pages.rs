@@ -52,7 +52,10 @@ impl EcuState {
         let trigger_inputs = self.trigger_inputs();
         let base_pw = self.calculate_fuel(trigger_inputs.rpm, self.map_kpa_x10 / 10);
         let final_pw = self.final_pw(Rpm::new(trigger_inputs.rpm), Kpa10::new(self.map_kpa_x10));
+        let commanded_advance_x10 =
+            self.calculate_ignition_timing_with_limiter(trigger_inputs.rpm, self.map_kpa_x10) * 10;
         self.outputs.final_pw = final_pw;
+        self.outputs.commanded_advance_x10 = commanded_advance_x10;
         let enrich_mult_x100 = [
             self.derived.wue_percent,
             self.derived.ase_percent,

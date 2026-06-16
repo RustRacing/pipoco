@@ -1,6 +1,21 @@
 use super::*;
 
 impl EngineRuntime {
+    fn legacy_knock_reason_active(&self) -> bool {
+        if self.knock_retard_deg10 > 0 {
+            return true;
+        }
+
+        match &self.planners.fuel_strategy {
+            RuntimeFuelStrategy::SpeedDensityVe { calibration, .. }
+            | RuntimeFuelStrategy::AlphaN { calibration, .. }
+            | RuntimeFuelStrategy::Maf { calibration, .. } => {
+                self.knock_intensity_x100 >= calibration.knock_threshold_x100
+            }
+            RuntimeFuelStrategy::DirectPulseWidthTable(_) => false,
+        }
+    }
+
     pub fn new() -> Self {
         Self {
             engine: EngineState {
@@ -56,18 +71,77 @@ impl EngineRuntime {
                 rev_hard_active: false,
                 launch_active: false,
                 flat_shift_active: false,
+                safety_latched: false,
                 fuel_cut: false,
                 spark_cut: false,
+                legacy_cut_reason_code: 0,
+                knock_intensity_x100: 0,
+                knock_retard_deg10: 0,
             },
             calibration_snapshot: CalibrationSnapshot::default(),
             output_profile: RuntimeOutputProfile::default(),
+            rev_soft_active: false,
+            rev_hard_active: false,
+            launch_active: false,
+            flat_shift_active: false,
+            direct_fuel_cut_request: false,
+            direct_spark_cut_request: false,
+            safety_latched: false,
             fuel_cut: false,
             spark_cut: false,
+            knock_intensity_x100: 0,
+            knock_retard_deg10: 0,
         }
     }
 
     pub fn snapshot(&self) -> RuntimeSnapshot {
         self.runtime_snapshot
+    }
+
+    pub fn legacy_cut_flags(&self) -> RuntimeLegacyCutFlags {
+        let paired_cut = self.direct_fuel_cut_request
+            || self.direct_spark_cut_request
+            || self.engine.mode == ControlMode::Shutdown
+            || self.safety_latched
+            || self.rev_hard_active
+            || self.launch_active
+            || self.flat_shift_active;
+
+        if paired_cut {
+            RuntimeLegacyCutFlags {
+                fuel_cut: true,
+                spark_cut: true,
+            }
+        } else {
+            RuntimeLegacyCutFlags {
+                fuel_cut: self.fuel_cut,
+                spark_cut: self.spark_cut,
+            }
+        }
+    }
+
+    pub fn legacy_cut_reason_code(&self) -> u8 {
+        if self.safety_latched
+            || self.direct_fuel_cut_request
+            || self.direct_spark_cut_request
+            || self.engine.mode == ControlMode::Shutdown
+        {
+            1
+        } else if self.rev_hard_active {
+            2
+        } else if self.launch_active {
+            3
+        } else if self.flat_shift_active {
+            4
+        } else if self.fuel_cut && !self.spark_cut {
+            5
+        } else if self.spark_cut {
+            6
+        } else if self.legacy_knock_reason_active() {
+            7
+        } else {
+            0
+        }
     }
 
     pub fn calibration_snapshot(&self) -> CalibrationSnapshot {
@@ -76,6 +150,15 @@ impl EngineRuntime {
 
     pub fn scheduler_state(&self) -> SchedulerState {
         self.scheduler
+    }
+
+    pub fn fuel_strategy(&self) -> &RuntimeFuelStrategy {
+        &self.planners.fuel_strategy
+    }
+
+    pub fn set_direct_cut_requests(&mut self, fuel_cut_request: bool, spark_cut_request: bool) {
+        self.direct_fuel_cut_request = fuel_cut_request;
+        self.direct_spark_cut_request = spark_cut_request;
     }
 
     pub fn configure_fuel_model(&mut self, fuel_model: BaseFuelModel) {
@@ -147,6 +230,7 @@ impl EngineRuntime {
         load_source: FuelLoadSource,
         sync: SyncState,
         mode: FuelEngineMode,
+        safety_latch_request: bool,
     ) -> RuntimeSemanticInputSnapshot {
         let selected_load = match load_source {
             FuelLoadSource::Map => input.map_kpa10,
@@ -158,16 +242,19 @@ impl EngineRuntime {
             map_kpa10: input.map_kpa10,
             load_kpa10: selected_load,
             tps_x100: input.tps_x100,
+            knock_intensity_x100: input.knock_intensity_x100,
             clt_c10: input.clt_c10,
             iat_c10: input.iat_c10,
             baro_kpa10: input.baro_kpa10,
             vbatt_mv: input.vbatt_mv,
-            knock_intensity_x100: 0,
-            launch_armed: false,
-            flat_shift_armed: false,
+            launch_armed: input.launch_armed,
+            flat_shift_armed: input.flat_shift_armed,
             sync,
-            fuel_cut: input.fuel_cut_request,
+            fuel_cut: false,
             spark_cut: false,
+            direct_fuel_cut_request: input.fuel_cut_request,
+            direct_spark_cut_request: input.spark_cut_request,
+            safety_latch_request,
             mode: match mode {
                 FuelEngineMode::Off => RuntimeSemanticEngineMode::Off,
                 FuelEngineMode::Cranking => RuntimeSemanticEngineMode::Cranking,

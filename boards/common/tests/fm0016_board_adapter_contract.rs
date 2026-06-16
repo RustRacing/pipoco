@@ -10,6 +10,11 @@ use ecu_compat::ts::pages::{
     PAGE_FAN, PAGE_FUEL, PAGE_IDLE, PAGE_IGN, PAGE_LIMITS, PAGE_SENSORS, PAGE_SNAPSHOT, PAGE_WUE,
 };
 use ecu_target_common::kv::ram::RamKv512;
+use ecu_target_common::{
+    factory_reset, persist_decode, persist_encode, persist_migrate, EncodedPersistRecord,
+    PersistPage, PersistPageId, PERSIST_ANGLES_PAGE_BYTES, PERSIST_MAX_PAYLOAD_BYTES,
+    PERSIST_SCHEMA_VERSION_CURRENT,
+};
 use ecu_ts::pages::TABLE_PAGE_BYTES;
 use ecu_ts::persistence::{PageStoreProvider, PersistedTsPageStore};
 use ecu_ts::server::{PageError, PageStore, PersistError};
@@ -62,6 +67,25 @@ fn default_ignition_page() -> [u8; TABLE_PAGE_BYTES] {
         cell.copy_from_slice(&ign_consts::DEFAULT_TIMING_BTDC.to_le_bytes());
     }
     page
+}
+
+#[allow(clippy::manual_unwrap_or_default)]
+fn must_ok<T: Default, E>(result: Result<T, E>) -> T {
+    assert!(result.is_ok(), "expected Ok(..)");
+    match result {
+        Ok(value) => value,
+        Err(_) => T::default(),
+    }
+}
+
+fn payload_with_seed(len: usize, seed: u8) -> [u8; PERSIST_MAX_PAYLOAD_BYTES] {
+    let mut payload = [0u8; PERSIST_MAX_PAYLOAD_BYTES];
+    let mut idx = 0usize;
+    while idx < len {
+        payload[idx] = seed.wrapping_add((idx & 0xff) as u8);
+        idx += 1;
+    }
+    payload
 }
 
 struct TestEcuStatePageStoreProvider {
@@ -359,6 +383,55 @@ fn persist_empty_kv_try_load_is_noop() {
         state.config.ipw_table[0][0], 0xCAFE,
         "try_load with empty KV must not overwrite"
     );
+}
+
+#[test]
+fn target_common_persist_encode_decode_roundtrip() {
+    let payload = payload_with_seed(PERSIST_ANGLES_PAGE_BYTES, 17);
+    let page = must_ok(PersistPage::new(
+        PERSIST_SCHEMA_VERSION_CURRENT,
+        PersistPageId::Angles,
+        &payload[..PERSIST_ANGLES_PAGE_BYTES],
+    ));
+
+    let encoded = must_ok(persist_encode(&page));
+    let decoded = must_ok(persist_decode(&encoded.bytes[..encoded.len as usize]));
+    assert_eq!(decoded, page);
+}
+
+#[test]
+fn target_common_persist_migrate_supported_path() {
+    let payload = payload_with_seed(PERSIST_ANGLES_PAGE_BYTES, 29);
+    let migrated = must_ok(persist_migrate(
+        PersistPageId::Angles,
+        1,
+        PERSIST_SCHEMA_VERSION_CURRENT,
+        &payload[..PERSIST_ANGLES_PAGE_BYTES],
+    ));
+
+    assert_eq!(migrated.schema_version, PERSIST_SCHEMA_VERSION_CURRENT);
+    assert_eq!(migrated.page_id, PersistPageId::Angles);
+    assert_eq!(
+        migrated.payload_slice(),
+        &payload[..PERSIST_ANGLES_PAGE_BYTES]
+    );
+}
+
+#[test]
+fn target_common_factory_reset_sets_current_schema_and_zero_payload() {
+    let payload = payload_with_seed(PERSIST_ANGLES_PAGE_BYTES, 61);
+    let page = must_ok(PersistPage::new(
+        1,
+        PersistPageId::Angles,
+        &payload[..PERSIST_ANGLES_PAGE_BYTES],
+    ));
+    let encoded: EncodedPersistRecord = must_ok(persist_encode(&page));
+
+    let reset = must_ok(factory_reset(&encoded.bytes[..encoded.len as usize]));
+    let decoded = must_ok(persist_decode(&reset.bytes[..reset.len as usize]));
+    assert_eq!(decoded.schema_version, PERSIST_SCHEMA_VERSION_CURRENT);
+    assert_eq!(decoded.page_id, PersistPageId::Angles);
+    assert_eq!(decoded.payload_slice(), &[0u8; PERSIST_ANGLES_PAGE_BYTES]);
 }
 
 #[test]

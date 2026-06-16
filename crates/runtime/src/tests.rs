@@ -626,6 +626,7 @@ fn running_step_inputs(now_us: u32, rpm: u32, trigger_synced: bool, cam_seen: bo
         cam_seen,
         launch_armed: false,
         flat_shift_armed: false,
+        safety_latch_request: false,
     }
 }
 
@@ -654,6 +655,7 @@ fn running_control_inputs(now_us: u32, rpm: u16) -> ControlInputs {
             false,
             Rpm::new(rpm),
         ),
+        knock_intensity_x100: 0,
     }
 }
 
@@ -662,6 +664,28 @@ fn spark_only_control_inputs(now_us: u32, rpm: u16) -> ControlInputs {
         Micros::new(now_us),
         IgnitionInputs::new(Degrees10::new(100), 0, 0, 0, false, Rpm::new(rpm)),
     )
+}
+
+fn differential_running_input(mode: RuntimeEngineMode) -> DifferentialInputSnapshot {
+    DifferentialInputSnapshot {
+        now_us: Micros::new(1_000),
+        rpm: Rpm::new(3_000),
+        map_kpa10: Kpa10::new(700),
+        load_kpa10: Kpa10::new(700),
+        angle_x10: Degrees10::new(2_000),
+        clt_c10: 200,
+        iat_c10: 250,
+        baro_kpa10: Kpa10::new(1_010),
+        vbatt_mv: 12_000,
+        sync: SyncState::Locked { cam_ref: false },
+        fuel_cut: false,
+        spark_cut: false,
+        mode,
+        target_afr_override_x100: RuntimeAfrOverride::None,
+        launch_armed: false,
+        flat_shift_armed: false,
+        safety_latch_request: false,
+    }
 }
 
 fn arm_scheduler_count<const N: usize>(actions: ActionBatch<N>) -> usize {
@@ -726,6 +750,7 @@ fn differential_input_snapshot_represents_fm0016_fields() {
         target_afr_override_x100: RuntimeAfrOverride::Some(4000),
         launch_armed: false,
         flat_shift_armed: false,
+        safety_latch_request: false,
     };
 
     let mapped = snapshot.to_step_inputs();
@@ -815,6 +840,9 @@ fn semantic_schedule_input(rpm: u16, sync: SyncState) -> RuntimeSemanticInputSna
         sync,
         fuel_cut: false,
         spark_cut: false,
+        direct_fuel_cut_request: false,
+        direct_spark_cut_request: false,
+        safety_latch_request: false,
         mode: RuntimeSemanticEngineMode::Running,
         target_afr_override_x100: RuntimeSemanticAfrOverride::None,
     }
@@ -869,6 +897,10 @@ fn semantic_fuel_calibration_with_ve_cells(
         hard_rev_rpm: 10_000,
         rev_hysteresis_rpm: 100,
         soft_retard_max_deg10: 0,
+        idle_target_rpm: 0,
+        idle_base_duty_x1000: 0,
+        idle_kp_x1000: 0,
+        idle_ki_x1000: 0,
         launch_rpm_limit: 9_000,
         launch_cut_cycles: 0,
         flat_shift_rpm_min: 9_000,
@@ -898,8 +930,24 @@ fn semantic_fuel_observations(
         spark_cut,
         lambda_correction_x1000: 1000,
         lambda_integrator_state: RuntimeSemanticPiIntegratorState::default(),
+        idle_duty_x1000: 0,
+        idle_integrator_state: RuntimeSemanticPiIntegratorState {
+            acc: 0,
+            min_acc: -2000,
+            max_acc: 2000,
+            frozen: false,
+        },
         advance_deg10_trim: 0,
     }
+}
+
+fn semantic_launch_and_flat_shift_calibration() -> RuntimeSemanticCalibration {
+    let mut calibration = semantic_fuel_calibration_with_ve_cells(7000, 7000);
+    calibration.launch_rpm_limit = 2_500;
+    calibration.launch_cut_cycles = 0;
+    calibration.flat_shift_rpm_min = 2_500;
+    calibration.flat_shift_cut_cycles = 0;
+    calibration
 }
 
 #[test]
@@ -1038,6 +1086,540 @@ fn runtime_snapshot_cut_state_follows_last_control_plan() {
 }
 
 #[test]
+fn semantic_step_direct_fuel_cut_request_sets_snapshot_and_zeroes_actuated_torque() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_speed_density_ve(
+        semantic_fuel_calibration_with_ve_cells(7000, 9000),
+        RuntimeSemanticState::default(),
+    );
+    runtime.set_direct_cut_requests(true, false);
+
+    let result = runtime.step(
+        running_step_inputs(1_250, 3_000, true, true),
+        running_control_inputs(1_250, 3_000),
+    );
+
+    assert!(runtime.snapshot().fuel_cut);
+    assert!(!runtime.snapshot().spark_cut);
+    assert_eq!(result.torque_observations.actuated_x1000, 0);
+}
+
+#[test]
+fn semantic_step_direct_spark_cut_request_sets_snapshot_and_zeroes_actuated_torque() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_speed_density_ve(
+        semantic_fuel_calibration_with_ve_cells(7000, 9000),
+        RuntimeSemanticState::default(),
+    );
+    runtime.set_direct_cut_requests(false, true);
+
+    let result = runtime.step(
+        running_step_inputs(1_500, 3_000, true, true),
+        running_control_inputs(1_500, 3_000),
+    );
+
+    assert!(!runtime.snapshot().fuel_cut);
+    assert!(runtime.snapshot().spark_cut);
+    assert_eq!(result.torque_observations.actuated_x1000, 0);
+}
+
+#[test]
+fn differential_step_off_mode_produces_off_phase_snapshot() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_speed_density_ve(
+        semantic_fuel_calibration_with_ve_cells(7000, 9000),
+        RuntimeSemanticState::default(),
+    );
+
+    let result = runtime.step_with_differential_input(
+        DifferentialInputSnapshot {
+            mode: RuntimeEngineMode::Off,
+            rpm: Rpm::new(3_000),
+            sync: SyncState::Locked { cam_ref: false },
+            ..differential_running_input(RuntimeEngineMode::Running)
+        },
+        running_control_inputs(1_000, 3_000),
+    );
+
+    assert_eq!(result.operating_mode, ControlMode::OpenLoop);
+    assert_eq!(runtime.snapshot().engine.phase, EnginePhase::Off);
+}
+
+#[test]
+fn differential_step_shutdown_mode_emits_cancel_and_snapshot() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_speed_density_ve(
+        semantic_fuel_calibration_with_ve_cells(7000, 9000),
+        RuntimeSemanticState::default(),
+    );
+
+    let result = runtime.step_with_differential_input(
+        DifferentialInputSnapshot {
+            mode: RuntimeEngineMode::Shutdown,
+            ..differential_running_input(RuntimeEngineMode::Running)
+        },
+        running_control_inputs(1_000, 3_000),
+    );
+
+    let mut actions = result.actions.iter();
+    assert_eq!(
+        actions.next(),
+        Some(Action::CancelScheduler(CancelReason::SafetyShutdown))
+    );
+    assert_eq!(actions.next(), Some(Action::PublishSnapshot));
+    assert!(actions.next().is_none());
+    assert_eq!(result.operating_mode, ControlMode::Shutdown);
+    assert_eq!(runtime.snapshot().faults.fault, FaultCode::SafetyCut);
+    assert_eq!(runtime.snapshot().faults.severity, FaultSeverity::Critical);
+    assert!(runtime.legacy_cut_flags().fuel_cut);
+    assert!(runtime.legacy_cut_flags().spark_cut);
+    assert_eq!(runtime.snapshot().legacy_cut_reason_code, 1);
+}
+
+#[test]
+fn differential_step_fuel_cut_sets_snapshot_without_forcing_spark_cut() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_speed_density_ve(
+        semantic_fuel_calibration_with_ve_cells(7000, 9000),
+        RuntimeSemanticState::default(),
+    );
+
+    let result = runtime.step_with_differential_input(
+        DifferentialInputSnapshot {
+            fuel_cut: true,
+            ..differential_running_input(RuntimeEngineMode::Running)
+        },
+        running_control_inputs(1_250, 3_000),
+    );
+
+    assert!(runtime.snapshot().fuel_cut);
+    assert!(!runtime.snapshot().spark_cut);
+    assert!(runtime.legacy_cut_flags().fuel_cut);
+    assert!(runtime.legacy_cut_flags().spark_cut);
+    assert_eq!(result.torque_observations.actuated_x1000, 0);
+    assert_eq!(runtime.snapshot().legacy_cut_reason_code, 1);
+}
+
+#[test]
+fn differential_step_spark_cut_sets_snapshot_without_forcing_fuel_cut() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_speed_density_ve(
+        semantic_fuel_calibration_with_ve_cells(7000, 9000),
+        RuntimeSemanticState::default(),
+    );
+
+    let result = runtime.step_with_differential_input(
+        DifferentialInputSnapshot {
+            spark_cut: true,
+            ..differential_running_input(RuntimeEngineMode::Running)
+        },
+        running_control_inputs(1_500, 3_000),
+    );
+
+    assert!(!runtime.snapshot().fuel_cut);
+    assert!(runtime.snapshot().spark_cut);
+    assert!(runtime.legacy_cut_flags().fuel_cut);
+    assert!(runtime.legacy_cut_flags().spark_cut);
+    assert_eq!(result.torque_observations.actuated_x1000, 0);
+}
+
+#[test]
+fn differential_step_safety_latch_request_sets_snapshot_and_legacy_cut_flags() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_speed_density_ve(
+        semantic_fuel_calibration_with_ve_cells(7000, 9000),
+        RuntimeSemanticState::default(),
+    );
+
+    let result = runtime.step_with_differential_input(
+        DifferentialInputSnapshot {
+            safety_latch_request: true,
+            ..differential_running_input(RuntimeEngineMode::Running)
+        },
+        running_control_inputs(1_750, 3_000),
+    );
+
+    assert!(runtime.snapshot().safety_latched);
+    assert!(runtime.snapshot().fuel_cut);
+    assert!(runtime.snapshot().spark_cut);
+    assert!(runtime.legacy_cut_flags().fuel_cut);
+    assert!(runtime.legacy_cut_flags().spark_cut);
+    assert_eq!(result.torque_observations.actuated_x1000, 0);
+}
+
+#[test]
+fn semantic_step_clearing_direct_cut_requests_removes_cut_on_next_step() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_speed_density_ve(
+        semantic_fuel_calibration_with_ve_cells(7000, 9000),
+        RuntimeSemanticState::default(),
+    );
+    runtime.set_direct_cut_requests(true, false);
+
+    let _ = runtime.step(
+        running_step_inputs(1_750, 3_000, true, true),
+        running_control_inputs(1_750, 3_000),
+    );
+
+    runtime.set_direct_cut_requests(false, false);
+
+    let result = runtime.step(
+        running_step_inputs(2_000, 3_000, true, true),
+        running_control_inputs(2_000, 3_000),
+    );
+
+    assert!(!result.control.fuel_cut);
+    assert!(!result.control.spark_cut);
+    assert!(!runtime.snapshot().fuel_cut);
+    assert!(!runtime.snapshot().spark_cut);
+}
+
+#[test]
+fn semantic_step_safety_latch_request_sets_snapshot_and_zeroes_actuated_torque() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_speed_density_ve(
+        semantic_fuel_calibration_with_ve_cells(7000, 9000),
+        RuntimeSemanticState::default(),
+    );
+
+    let result = runtime.step(
+        StepInputs {
+            safety_latch_request: true,
+            ..running_step_inputs(1_250, 3_000, true, true)
+        },
+        running_control_inputs(1_250, 3_000),
+    );
+
+    assert!(runtime.snapshot().safety_latched);
+    assert!(runtime.snapshot().fuel_cut);
+    assert!(runtime.snapshot().spark_cut);
+    assert_eq!(result.torque_observations.actuated_x1000, 0);
+}
+
+#[test]
+fn semantic_step_safety_latch_holds_after_clear_attempt_while_running() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_speed_density_ve(
+        semantic_fuel_calibration_with_ve_cells(7000, 9000),
+        RuntimeSemanticState::default(),
+    );
+
+    let _ = runtime.step(
+        StepInputs {
+            safety_latch_request: true,
+            ..running_step_inputs(1_250, 3_000, true, true)
+        },
+        running_control_inputs(1_250, 3_000),
+    );
+
+    let held = runtime.step(
+        StepInputs {
+            safety_latch_request: false,
+            ..running_step_inputs(1_500, 3_000, true, true)
+        },
+        running_control_inputs(1_500, 3_000),
+    );
+
+    assert!(runtime.snapshot().safety_latched);
+    assert!(held.control.fuel_cut);
+    assert!(held.control.spark_cut);
+}
+
+#[test]
+fn semantic_step_safety_latch_releases_after_off_clear() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_speed_density_ve(
+        semantic_fuel_calibration_with_ve_cells(7000, 9000),
+        RuntimeSemanticState::default(),
+    );
+
+    let _ = runtime.step(
+        StepInputs {
+            safety_latch_request: true,
+            ..running_step_inputs(1_250, 3_000, true, true)
+        },
+        running_control_inputs(1_250, 3_000),
+    );
+
+    let _ = runtime.step(
+        StepInputs {
+            safety_latch_request: false,
+            ..running_step_inputs(1_750, 0, false, false)
+        },
+        running_control_inputs(1_750, 0),
+    );
+
+    let cleared = runtime.step(
+        StepInputs {
+            safety_latch_request: false,
+            ..running_step_inputs(2_000, 3_000, true, true)
+        },
+        running_control_inputs(2_000, 3_000),
+    );
+
+    assert!(!runtime.snapshot().safety_latched);
+    assert!(!cleared.control.fuel_cut);
+    assert!(!cleared.control.spark_cut);
+}
+
+#[test]
+fn semantic_hard_rev_sets_snapshot_flag_and_zeroes_allowed_torque() {
+    let mut runtime = EngineRuntime::new();
+    let mut calibration = semantic_fuel_calibration_with_ve_cells(7000, 9000);
+    calibration.hard_rev_rpm = 2_500;
+    runtime.configure_speed_density_ve(calibration, RuntimeSemanticState::default());
+
+    let result = runtime.step(
+        running_step_inputs(1_500, 3_000, true, true),
+        running_control_inputs(1_500, 3_000),
+    );
+    let snapshot = runtime.snapshot();
+
+    assert!(snapshot.rev_hard_active);
+    assert!(!snapshot.rev_soft_active);
+    assert_eq!(result.torque_observations.request_x1000, 900);
+    assert_eq!(result.torque_observations.allowed_x1000, 0);
+    assert_eq!(result.torque_observations.actuated_x1000, 0);
+}
+
+#[test]
+fn semantic_soft_rev_sets_snapshot_flag_and_zeroes_actuated_torque() {
+    let mut runtime = EngineRuntime::new();
+    let mut calibration = semantic_fuel_calibration_with_ve_cells(7000, 9000);
+    calibration.soft_rev_rpm = 2_500;
+    calibration.hard_rev_rpm = 10_000;
+    calibration.soft_retard_max_deg10 = 150;
+    runtime.configure_speed_density_ve(calibration, RuntimeSemanticState::default());
+
+    let result = runtime.step(
+        running_step_inputs(1_750, 3_000, true, true),
+        running_control_inputs(1_750, 3_000),
+    );
+    let snapshot = runtime.snapshot();
+
+    assert!(snapshot.rev_soft_active);
+    assert!(!snapshot.rev_hard_active);
+    assert_eq!(result.torque_observations.request_x1000, 900);
+    assert_eq!(result.torque_observations.allowed_x1000, 900);
+    assert_eq!(result.torque_observations.actuated_x1000, 0);
+}
+
+#[test]
+fn semantic_step_publishes_knock_snapshot_fields() {
+    let mut runtime = EngineRuntime::new();
+    let mut calibration = semantic_fuel_calibration_with_ve_cells(7000, 9000);
+    calibration.knock_threshold_x100 = 500;
+    calibration.knock_retard_step_deg10 = 40;
+    calibration.knock_retard_max_deg10 = 120;
+    calibration.knock_recovery_step_deg10 = 40;
+    calibration.knock_recovery_delay_cycles = 0;
+    runtime.configure_speed_density_ve(calibration, RuntimeSemanticState::default());
+
+    let mut inputs = running_control_inputs(1_800, 3_000);
+    inputs.knock_intensity_x100 = 600;
+
+    let _ = runtime.step(running_step_inputs(1_800, 3_000, true, true), inputs);
+    let snapshot = runtime.snapshot();
+
+    assert_eq!(snapshot.knock_intensity_x100, 600);
+    assert_eq!(snapshot.knock_retard_deg10, 40);
+    assert_eq!(snapshot.legacy_cut_reason_code, 7);
+    assert!(!snapshot.fuel_cut);
+    assert!(!snapshot.spark_cut);
+}
+
+#[test]
+fn semantic_step_detects_knock_legacy_reason_without_retard_accumulation() {
+    let mut runtime = EngineRuntime::new();
+    let mut calibration = semantic_fuel_calibration_with_ve_cells(7000, 9000);
+    calibration.knock_threshold_x100 = 500;
+    calibration.knock_retard_step_deg10 = 0;
+    calibration.knock_retard_max_deg10 = 120;
+    calibration.knock_recovery_step_deg10 = 40;
+    calibration.knock_recovery_delay_cycles = 0;
+    runtime.configure_speed_density_ve(calibration, RuntimeSemanticState::default());
+
+    let mut inputs = running_control_inputs(1_850, 3_000);
+    inputs.knock_intensity_x100 = 600;
+
+    let _ = runtime.step(running_step_inputs(1_850, 3_000, true, true), inputs);
+    let snapshot = runtime.snapshot();
+
+    assert_eq!(snapshot.knock_intensity_x100, 600);
+    assert_eq!(snapshot.knock_retard_deg10, 0);
+    assert_eq!(snapshot.legacy_cut_reason_code, 7);
+}
+
+#[test]
+fn semantic_step_below_threshold_does_not_emit_knock_legacy_reason() {
+    let mut runtime = EngineRuntime::new();
+    let mut calibration = semantic_fuel_calibration_with_ve_cells(7000, 9000);
+    calibration.knock_threshold_x100 = 500;
+    calibration.knock_retard_step_deg10 = 40;
+    calibration.knock_retard_max_deg10 = 120;
+    calibration.knock_recovery_step_deg10 = 40;
+    calibration.knock_recovery_delay_cycles = 0;
+    runtime.configure_speed_density_ve(calibration, RuntimeSemanticState::default());
+
+    let mut inputs = running_control_inputs(1_860, 3_000);
+    inputs.knock_intensity_x100 = 400;
+
+    let _ = runtime.step(running_step_inputs(1_860, 3_000, true, true), inputs);
+    let snapshot = runtime.snapshot();
+
+    assert_eq!(snapshot.knock_intensity_x100, 400);
+    assert_eq!(snapshot.knock_retard_deg10, 0);
+    assert_eq!(snapshot.legacy_cut_reason_code, 0);
+}
+
+#[test]
+fn runtime_step_preserves_explicit_high_resolution_torque_request_observation() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_speed_density_ve(
+        semantic_fuel_calibration_with_ve_cells(7000, 9000),
+        RuntimeSemanticState::default(),
+    );
+
+    let result = runtime.step(
+        running_step_inputs(1_900, 3_000, true, true),
+        ControlInputs {
+            enrichment: EnrichmentInputs {
+                now_us: Micros::new(1_900),
+                clt_c: 20,
+                cranking: false,
+                just_started: false,
+                tpsdot_pct_s: 0,
+                mapdot_kpa_s: 0,
+            },
+            lambda: LambdaTrimInputs {
+                clt_c: 80,
+                lambda_valid: true,
+                measured_lambda100: ecu_domain::Lambda100::new(100),
+                requested_open_loop: false,
+            },
+            torque: TorqueInputs::new(53, 0, 100, 100, 100).with_driver_request_x1000(537),
+            ignition: IgnitionInputs::new(
+                ecu_domain::Degrees10::new(100),
+                0,
+                0,
+                0,
+                false,
+                Rpm::new(3_000),
+            ),
+            knock_intensity_x100: 0,
+        },
+    );
+
+    assert_eq!(result.control.torque.requested_x100, 53);
+    assert_eq!(result.control.torque.requested_x1000, 537);
+    assert_eq!(result.torque_observations.request_x1000, 537);
+    assert_eq!(result.control.torque.allowed_x1000, 537);
+    assert_eq!(result.torque_observations.allowed_x1000, 537);
+}
+
+#[test]
+fn authority_step_launch_arming_triggers_semantic_cut() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_speed_density_ve(
+        semantic_launch_and_flat_shift_calibration(),
+        RuntimeSemanticState::default(),
+    );
+
+    let result = runtime.step_with_authority(
+        AuthorityStepInputs::new(
+            Micros::new(1_000),
+            3_000,
+            700,
+            2_000,
+            EngineTimeAuthority::new(
+                CrankSyncState::PrimaryLocked,
+                PhaseSyncState::CrankOnly360,
+                AbsoluteTimeAuthority::GeometryOnly,
+                EngineTimeAuthority::MAX_CONFIDENCE_X1000,
+                0,
+            ),
+            true,
+            false,
+            false,
+        ),
+        running_control_inputs(1_000, 3_000),
+    );
+
+    assert!(result.control.fuel_intent.fuel_cut);
+    assert!(result.control.fuel_intent.spark_cut);
+    assert!(runtime.snapshot().launch_active);
+    assert!(!runtime.snapshot().flat_shift_active);
+}
+
+#[test]
+fn authority_step_flat_shift_arming_triggers_semantic_cut() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_speed_density_ve(
+        semantic_launch_and_flat_shift_calibration(),
+        RuntimeSemanticState::default(),
+    );
+
+    let result = runtime.step_with_authority(
+        AuthorityStepInputs::new(
+            Micros::new(2_000),
+            3_000,
+            700,
+            2_000,
+            EngineTimeAuthority::new(
+                CrankSyncState::PrimaryLocked,
+                PhaseSyncState::CrankOnly360,
+                AbsoluteTimeAuthority::GeometryOnly,
+                EngineTimeAuthority::MAX_CONFIDENCE_X1000,
+                0,
+            ),
+            false,
+            true,
+            false,
+        ),
+        running_control_inputs(2_000, 3_000),
+    );
+
+    assert!(result.control.fuel_intent.fuel_cut);
+    assert!(result.control.fuel_intent.spark_cut);
+    assert!(runtime.snapshot().flat_shift_active);
+    assert!(!runtime.snapshot().launch_active);
+}
+
+#[test]
+fn authority_step_without_shift_arming_leaves_semantic_cuts_inactive() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_speed_density_ve(
+        semantic_launch_and_flat_shift_calibration(),
+        RuntimeSemanticState::default(),
+    );
+
+    let result = runtime.step_with_authority(
+        AuthorityStepInputs::new(
+            Micros::new(3_000),
+            3_000,
+            700,
+            2_000,
+            EngineTimeAuthority::new(
+                CrankSyncState::PrimaryLocked,
+                PhaseSyncState::CrankOnly360,
+                AbsoluteTimeAuthority::GeometryOnly,
+                EngineTimeAuthority::MAX_CONFIDENCE_X1000,
+                0,
+            ),
+            false,
+            false,
+            false,
+        ),
+        running_control_inputs(3_000, 3_000),
+    );
+
+    assert!(!result.control.fuel_intent.fuel_cut);
+    assert!(!result.control.fuel_intent.spark_cut);
+    assert!(!runtime.snapshot().launch_active);
+    assert!(!runtime.snapshot().flat_shift_active);
+}
+
+#[test]
 fn speed_density_vs_alpha_n_strategy_switches_map_vs_tps_lookup() {
     let mut runtime = EngineRuntime::new();
     let calibration = semantic_fuel_calibration_with_ve_cells(5000, 10000);
@@ -1083,6 +1665,7 @@ fn typed_fuel_input_propagates_mode_and_afr_override_into_semantic_input() {
         map_kpa10: Kpa10::new(980),
         load_kpa10: Kpa10::new(980),
         tps_x100: 250,
+        knock_intensity_x100: 0,
         maf_x100: 420,
         clt_c10: 700,
         iat_c10: 300,
@@ -1092,7 +1675,10 @@ fn typed_fuel_input_propagates_mode_and_afr_override_into_semantic_input() {
         lambda_measured: Lambda100::new(97),
         sync: SyncState::Locked { cam_ref: false },
         mode: FuelEngineMode::Running,
+        launch_armed: true,
+        flat_shift_armed: false,
         fuel_cut_request: false,
+        spark_cut_request: true,
         target_afr_override_x100: FuelAfrOverride::Some(1320),
     };
     let semantic = EngineRuntime::semantic_input_for_strategy(
@@ -1100,9 +1686,17 @@ fn typed_fuel_input_propagates_mode_and_afr_override_into_semantic_input() {
         FuelLoadSource::Map,
         input.sync,
         input.mode,
+        true,
     );
 
     assert_eq!(semantic.mode, RuntimeSemanticEngineMode::Running);
+    assert!(semantic.launch_armed);
+    assert!(!semantic.flat_shift_armed);
+    assert!(!semantic.fuel_cut);
+    assert!(!semantic.spark_cut);
+    assert!(!semantic.direct_fuel_cut_request);
+    assert!(semantic.direct_spark_cut_request);
+    assert!(semantic.safety_latch_request);
     assert_eq!(
         semantic.target_afr_override_x100,
         RuntimeSemanticAfrOverride::Some(1320)
@@ -1235,6 +1829,223 @@ fn fuel_cut_forces_zero_or_clamped_min_pulse_path() {
 }
 
 #[test]
+fn runtime_semantic_idle_integrates_to_expected_duty() {
+    let mut calibration = semantic_fuel_calibration_with_ve_cells(7000, 7000);
+    calibration.idle_target_rpm = 1000;
+    calibration.idle_base_duty_x1000 = 350;
+    calibration.idle_kp_x1000 = 300;
+    calibration.idle_ki_x1000 = 500;
+
+    let out = runtime_semantic_evaluate_fuel(
+        &calibration,
+        RuntimeSemanticInputSnapshot {
+            rpm: Rpm::new(700),
+            clt_c10: 800,
+            ..semantic_schedule_input(700, SyncState::Locked { cam_ref: false })
+        },
+        RuntimeSemanticState::default(),
+    )
+    .expect("idle integrate eval");
+
+    assert_eq!(out.idle_duty_x1000, 590);
+    assert_eq!(out.idle_integrator_state.acc, 150);
+    assert_eq!(out.idle_integrator_state.min_acc, -2000);
+    assert_eq!(out.idle_integrator_state.max_acc, 2000);
+    assert!(!out.idle_integrator_state.frozen);
+}
+
+#[test]
+fn runtime_semantic_idle_freezes_when_cold() {
+    let mut calibration = semantic_fuel_calibration_with_ve_cells(7000, 7000);
+    calibration.idle_target_rpm = 1000;
+    calibration.idle_base_duty_x1000 = 350;
+    calibration.idle_kp_x1000 = 300;
+    calibration.idle_ki_x1000 = 500;
+
+    let out = runtime_semantic_evaluate_fuel(
+        &calibration,
+        RuntimeSemanticInputSnapshot {
+            rpm: Rpm::new(700),
+            clt_c10: 650,
+            ..semantic_schedule_input(700, SyncState::Locked { cam_ref: false })
+        },
+        RuntimeSemanticState {
+            idle_integrator_acc: 123,
+            ..RuntimeSemanticState::default()
+        },
+    )
+    .expect("idle cold eval");
+
+    assert_eq!(out.idle_duty_x1000, 563);
+    assert_eq!(out.idle_integrator_state.acc, 123);
+    assert!(out.idle_integrator_state.frozen);
+}
+
+#[test]
+fn runtime_semantic_idle_anti_windup_freezes_saturated() {
+    let mut calibration = semantic_fuel_calibration_with_ve_cells(7000, 7000);
+    calibration.idle_target_rpm = 3000;
+    calibration.idle_base_duty_x1000 = 1000;
+    calibration.idle_kp_x1000 = 0;
+    calibration.idle_ki_x1000 = 1000;
+
+    let out = runtime_semantic_evaluate_fuel(
+        &calibration,
+        RuntimeSemanticInputSnapshot {
+            rpm: Rpm::new(2500),
+            clt_c10: 800,
+            ..semantic_schedule_input(2500, SyncState::Locked { cam_ref: false })
+        },
+        RuntimeSemanticState {
+            idle_integrator_acc: 200,
+            ..RuntimeSemanticState::default()
+        },
+    )
+    .expect("idle saturated eval");
+
+    assert_eq!(out.idle_duty_x1000, 1000);
+    assert_eq!(out.idle_integrator_state.acc, 200);
+    assert!(out.idle_integrator_state.frozen);
+}
+
+#[test]
+fn runtime_semantic_idle_freezes_on_post_arbiter_shutdown_cut() {
+    let mut calibration = semantic_fuel_calibration_with_ve_cells(7000, 7000);
+    calibration.idle_target_rpm = 1000;
+    calibration.idle_base_duty_x1000 = 350;
+    calibration.idle_kp_x1000 = 300;
+    calibration.idle_ki_x1000 = 500;
+
+    let out = runtime_semantic_evaluate_fuel(
+        &calibration,
+        RuntimeSemanticInputSnapshot {
+            rpm: Rpm::new(700),
+            clt_c10: 800,
+            mode: RuntimeSemanticEngineMode::Shutdown,
+            ..semantic_schedule_input(700, SyncState::Locked { cam_ref: false })
+        },
+        RuntimeSemanticState {
+            idle_integrator_acc: 123,
+            ..RuntimeSemanticState::default()
+        },
+    )
+    .expect("idle shutdown eval");
+
+    assert!(out.fuel_cut);
+    assert!(out.spark_cut);
+    assert_eq!(out.pw_corr_us, 0);
+    assert_eq!(out.idle_duty_x1000, 563);
+    assert_eq!(out.idle_integrator_state.acc, 123);
+    assert!(out.idle_integrator_state.frozen);
+}
+
+#[test]
+fn runtime_semantic_idle_freezes_when_ae_was_active_before_step() {
+    let mut calibration = semantic_fuel_calibration_with_ve_cells(7000, 7000);
+    calibration.idle_target_rpm = 1000;
+    calibration.idle_base_duty_x1000 = 350;
+    calibration.idle_kp_x1000 = 300;
+    calibration.idle_ki_x1000 = 500;
+
+    let out = runtime_semantic_evaluate_fuel(
+        &calibration,
+        RuntimeSemanticInputSnapshot {
+            rpm: Rpm::new(700),
+            clt_c10: 800,
+            ..semantic_schedule_input(700, SyncState::Locked { cam_ref: false })
+        },
+        RuntimeSemanticState {
+            ae_active: true,
+            idle_integrator_acc: 123,
+            ..RuntimeSemanticState::default()
+        },
+    )
+    .expect("idle pre-ae-freeze eval");
+
+    assert_eq!(out.idle_duty_x1000, 563);
+    assert_eq!(out.idle_integrator_state.acc, 123);
+    assert!(out.idle_integrator_state.frozen);
+    assert!(!out.lambda_integrator_state.frozen);
+}
+
+#[test]
+fn semantic_fuel_advance_trim_defaults_to_zero_without_soft_rev_or_knock() {
+    let calibration = semantic_fuel_calibration_with_ve_cells(7000, 7000);
+    let out = runtime_semantic_evaluate_fuel(
+        &calibration,
+        semantic_schedule_input(3_000, SyncState::Locked { cam_ref: false }),
+        RuntimeSemanticState::default(),
+    )
+    .expect("baseline semantic eval");
+
+    assert_eq!(out.advance_deg10_trim, 0);
+}
+
+#[test]
+fn semantic_fuel_advance_trim_applies_soft_rev_retard() {
+    let mut calibration = semantic_fuel_calibration_with_ve_cells(7000, 7000);
+    calibration.soft_rev_rpm = 2_500;
+    calibration.rev_hysteresis_rpm = 100;
+    calibration.soft_retard_max_deg10 = 120;
+
+    let out = runtime_semantic_evaluate_fuel(
+        &calibration,
+        semantic_schedule_input(3_000, SyncState::Locked { cam_ref: false }),
+        RuntimeSemanticState::default(),
+    )
+    .expect("soft-rev semantic eval");
+
+    assert_eq!(out.advance_deg10_trim, -120);
+}
+
+#[test]
+fn semantic_fuel_advance_trim_applies_knock_retard() {
+    let mut calibration = semantic_fuel_calibration_with_ve_cells(7000, 7000);
+    calibration.knock_threshold_x100 = 500;
+    calibration.knock_retard_step_deg10 = 40;
+    calibration.knock_retard_max_deg10 = 120;
+    calibration.knock_recovery_step_deg10 = 20;
+    calibration.knock_recovery_delay_cycles = 1;
+
+    let out = runtime_semantic_evaluate_fuel(
+        &calibration,
+        RuntimeSemanticInputSnapshot {
+            knock_intensity_x100: 600,
+            ..semantic_schedule_input(3_000, SyncState::Locked { cam_ref: false })
+        },
+        RuntimeSemanticState::default(),
+    )
+    .expect("knock semantic eval");
+
+    assert_eq!(out.advance_deg10_trim, -40);
+}
+
+#[test]
+fn semantic_fuel_advance_trim_combines_soft_rev_and_knock_retard() {
+    let mut calibration = semantic_fuel_calibration_with_ve_cells(7000, 7000);
+    calibration.soft_rev_rpm = 2_500;
+    calibration.rev_hysteresis_rpm = 100;
+    calibration.soft_retard_max_deg10 = 120;
+    calibration.knock_threshold_x100 = 500;
+    calibration.knock_retard_step_deg10 = 40;
+    calibration.knock_retard_max_deg10 = 120;
+    calibration.knock_recovery_step_deg10 = 20;
+    calibration.knock_recovery_delay_cycles = 1;
+
+    let out = runtime_semantic_evaluate_fuel(
+        &calibration,
+        RuntimeSemanticInputSnapshot {
+            knock_intensity_x100: 600,
+            ..semantic_schedule_input(3_000, SyncState::Locked { cam_ref: false })
+        },
+        RuntimeSemanticState::default(),
+    )
+    .expect("combined trim semantic eval");
+
+    assert_eq!(out.advance_deg10_trim, -160);
+}
+
+#[test]
 fn semantic_fuel_correction_order_matches_spec_pipeline() {
     let mut calibration = semantic_fuel_calibration_with_ve_cells(8000, 8000);
     calibration.required_fuel_us = 2000;
@@ -1272,6 +2083,9 @@ fn semantic_fuel_correction_order_matches_spec_pipeline() {
         sync: SyncState::Locked { cam_ref: false },
         fuel_cut: false,
         spark_cut: false,
+        direct_fuel_cut_request: false,
+        direct_spark_cut_request: false,
+        safety_latch_request: false,
         mode: RuntimeSemanticEngineMode::Running,
         target_afr_override_x100: RuntimeSemanticAfrOverride::None,
     };
@@ -1517,6 +2331,7 @@ fn queue_pressure_and_degraded_authority_keep_runtime_output_suppressed() {
             ),
             false,
             false,
+            false,
         ),
         running_control_inputs(10, 2500),
     );
@@ -1600,6 +2415,7 @@ fn runtime_differential_mapping_matches_oracle_fuel_and_state() {
             cam_seen: true,
             launch_armed: false,
             flat_shift_armed: false,
+            safety_latch_request: false,
         },
         ControlInputs {
             enrichment: EnrichmentInputs {
@@ -1625,6 +2441,7 @@ fn runtime_differential_mapping_matches_oracle_fuel_and_state() {
                 false,
                 ecu_domain::Rpm::new(1000),
             ),
+            knock_intensity_x100: 0,
         },
     );
 
@@ -1841,7 +2658,16 @@ fn step_with_authority_keeps_structured_baseline_when_inputs_match() {
 
     let authority = validated_expert_authority();
     let result = runtime.step_with_authority(
-        AuthorityStepInputs::new(Micros::new(10), 3000, 500, 100, authority, false, false),
+        AuthorityStepInputs::new(
+            Micros::new(10),
+            3000,
+            500,
+            100,
+            authority,
+            false,
+            false,
+            false,
+        ),
         running_control_inputs(10, 3000),
     );
 
@@ -1871,6 +2697,7 @@ fn runtime_step_validates_inputs_and_orders_derivation() {
             cam_seen: true,
             launch_armed: false,
             flat_shift_armed: false,
+            safety_latch_request: false,
         },
         ControlInputs {
             enrichment: EnrichmentInputs {
@@ -1896,6 +2723,7 @@ fn runtime_step_validates_inputs_and_orders_derivation() {
                 false,
                 Rpm::new(2800),
             ),
+            knock_intensity_x100: 0,
         },
     );
 
@@ -1956,6 +2784,7 @@ fn runtime_full_ecu_limp_home_emits_fan_and_profile_aux_commands() {
             cam_seen: true,
             launch_armed: false,
             flat_shift_armed: false,
+            safety_latch_request: false,
         },
         ControlInputs {
             enrichment: EnrichmentInputs {
@@ -1981,6 +2810,7 @@ fn runtime_full_ecu_limp_home_emits_fan_and_profile_aux_commands() {
                 false,
                 Rpm::new(3000),
             ),
+            knock_intensity_x100: 0,
         },
     );
 
@@ -2083,6 +2913,7 @@ fn runtime_unsynced_path_emits_idle_and_snapshot() {
             cam_seen: false,
             launch_armed: false,
             flat_shift_armed: false,
+            safety_latch_request: false,
         },
         ControlInputs {
             enrichment: EnrichmentInputs {
@@ -2108,6 +2939,7 @@ fn runtime_unsynced_path_emits_idle_and_snapshot() {
                 false,
                 Rpm::new(0),
             ),
+            knock_intensity_x100: 0,
         },
     );
 
@@ -2137,6 +2969,7 @@ fn runtime_shutdown_path_emits_cancel_and_snapshot() {
             cam_seen: true,
             launch_armed: false,
             flat_shift_armed: false,
+            safety_latch_request: false,
         },
         ControlInputs {
             enrichment: EnrichmentInputs {
@@ -2162,6 +2995,7 @@ fn runtime_shutdown_path_emits_cancel_and_snapshot() {
                 false,
                 Rpm::new(3000),
             ),
+            knock_intensity_x100: 0,
         },
     );
 
@@ -2535,6 +3369,7 @@ fn runtime_full_ecu_validated_authority_emits_six_injectors_and_wasted_spark() {
             cam_seen: true,
             launch_armed: false,
             flat_shift_armed: false,
+            safety_latch_request: false,
         },
         ControlInputs {
             enrichment: EnrichmentInputs {
@@ -2560,6 +3395,7 @@ fn runtime_full_ecu_validated_authority_emits_six_injectors_and_wasted_spark() {
                 false,
                 Rpm::new(3000),
             ),
+            knock_intensity_x100: 0,
         },
     );
 
@@ -2631,6 +3467,7 @@ fn runtime_full_ecu_cop_profile_with_validated_authority_emits_ignition_channel_
             cam_seen: true,
             launch_armed: false,
             flat_shift_armed: false,
+            safety_latch_request: false,
         },
         ControlInputs {
             enrichment: EnrichmentInputs {
@@ -2656,6 +3493,7 @@ fn runtime_full_ecu_cop_profile_with_validated_authority_emits_ignition_channel_
                 false,
                 Rpm::new(3000),
             ),
+            knock_intensity_x100: 0,
         },
     );
 
@@ -2746,6 +3584,7 @@ fn runtime_snapshot_matches_state_after_step() {
             cam_seen: true,
             launch_armed: false,
             flat_shift_armed: false,
+            safety_latch_request: false,
         },
         ControlInputs {
             enrichment: EnrichmentInputs {
@@ -2771,6 +3610,7 @@ fn runtime_snapshot_matches_state_after_step() {
                 false,
                 Rpm::new(3000),
             ),
+            knock_intensity_x100: 0,
         },
     );
 
@@ -2795,6 +3635,7 @@ fn sync_loss_cancels_pending_outputs() {
             cam_seen: true,
             launch_armed: false,
             flat_shift_armed: false,
+            safety_latch_request: false,
         },
         ControlInputs {
             enrichment: EnrichmentInputs {
@@ -2820,6 +3661,7 @@ fn sync_loss_cancels_pending_outputs() {
                 false,
                 Rpm::new(3000),
             ),
+            knock_intensity_x100: 0,
         },
     );
 
@@ -2833,6 +3675,7 @@ fn sync_loss_cancels_pending_outputs() {
             cam_seen: false,
             launch_armed: false,
             flat_shift_armed: false,
+            safety_latch_request: false,
         },
         ControlInputs {
             enrichment: EnrichmentInputs {
@@ -2858,6 +3701,7 @@ fn sync_loss_cancels_pending_outputs() {
                 false,
                 Rpm::new(0),
             ),
+            knock_intensity_x100: 0,
         },
     );
 
@@ -2904,6 +3748,7 @@ fn runtime_full_ecu_cop_sync_loss_cancels_pending_outputs() {
             cam_seen: false,
             launch_armed: false,
             flat_shift_armed: false,
+            safety_latch_request: false,
         },
         running_control_inputs(2_000, 0),
     );
@@ -2939,6 +3784,7 @@ fn torque_observations_zero_allowed_when_engine_is_off() {
             cam_seen: false,
             launch_armed: false,
             flat_shift_armed: false,
+            safety_latch_request: false,
         },
         ControlInputs {
             enrichment: EnrichmentInputs {
@@ -2964,6 +3810,7 @@ fn torque_observations_zero_allowed_when_engine_is_off() {
                 false,
                 ecu_domain::Rpm::new(0),
             ),
+            knock_intensity_x100: 0,
         },
     );
 
@@ -2998,6 +3845,7 @@ fn differential_input_snapshot_preserves_all_fixture_fields() {
                 target_afr_override_x100: RuntimeAfrOverride::None,
                 launch_armed: false,
                 flat_shift_armed: false,
+                safety_latch_request: false,
             },
             "running synced",
         ),
@@ -3019,6 +3867,7 @@ fn differential_input_snapshot_preserves_all_fixture_fields() {
                 target_afr_override_x100: RuntimeAfrOverride::Some(1470),
                 launch_armed: false,
                 flat_shift_armed: false,
+                safety_latch_request: false,
             },
             "cut with negative temps and AFR override",
         ),
@@ -3040,6 +3889,7 @@ fn differential_input_snapshot_preserves_all_fixture_fields() {
                 target_afr_override_x100: RuntimeAfrOverride::None,
                 launch_armed: false,
                 flat_shift_armed: false,
+                safety_latch_request: false,
             },
             "cranking with cold temps and syncing",
         ),

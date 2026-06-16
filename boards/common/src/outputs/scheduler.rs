@@ -1,3 +1,6 @@
+use ecu_board_api::frontier::{
+    TimingIslandHorizonSequenceId, TimingIslandPermitMask, TimingIslandStopReason,
+};
 use ecu_board_api::{
     EcuOutput, OutputLevel as BoardOutputLevel, OutputScheduler, OutputTransition,
     OutputTransitionBatch,
@@ -7,8 +10,8 @@ use ecu_runtime::{
     RUNTIME_AUX_COMMAND_CAP,
 };
 use ecu_scheduler::{
-    ScheduleError, ScheduledLevel, ScheduledTransition, ScheduledTransitionKind,
-    ScheduledTransitionQueue, TransitionDrainBuffer,
+    ExclusiveChannel, ScheduleError, ScheduledLevel, ScheduledTimingMetrics, ScheduledTransition,
+    ScheduledTransitionKind, ScheduledTransitionQueue, SchedulerState, TransitionDrainBuffer,
 };
 
 use super::pins::{apply_drained_transitions, RawScheduledOutputPin, TransitionApplyError};
@@ -18,12 +21,14 @@ pub const ACTION_OUTPUT_SCRATCH_CAP: usize = 4;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScheduledQueueAdapter<const N: usize> {
     queue: ScheduledTransitionQueue<N>,
+    frontier: SchedulerState,
 }
 
 impl<const N: usize> ScheduledQueueAdapter<N> {
     pub const fn new() -> Self {
         Self {
             queue: ScheduledTransitionQueue::new(),
+            frontier: SchedulerState::new(),
         }
     }
 
@@ -31,8 +36,55 @@ impl<const N: usize> ScheduledQueueAdapter<N> {
         &self.queue
     }
 
+    pub const fn timing_metrics(&self) -> ScheduledTimingMetrics {
+        self.queue.timing_metrics()
+    }
+
     pub fn queue_mut(&mut self) -> &mut ScheduledTransitionQueue<N> {
         &mut self.queue
+    }
+
+    pub const fn frontier(&self) -> &SchedulerState {
+        &self.frontier
+    }
+
+    pub fn frontier_mut(&mut self) -> &mut SchedulerState {
+        &mut self.frontier
+    }
+
+    pub fn commit_frontier_horizon(
+        &mut self,
+        horizon_id: TimingIslandHorizonSequenceId,
+        horizon_start_us: ecu_scheduler::Micros,
+        horizon_end_us: ecu_scheduler::Micros,
+        heartbeat_deadline_us: ecu_scheduler::Micros,
+        permit_mask: TimingIslandPermitMask,
+    ) -> bool {
+        self.frontier.commit_horizon(
+            horizon_id,
+            horizon_start_us,
+            horizon_end_us,
+            heartbeat_deadline_us,
+            permit_mask,
+        )
+    }
+
+    pub fn note_frontier_heartbeat(&mut self, now: ecu_scheduler::Micros) {
+        self.frontier.note_heartbeat(now);
+    }
+
+    pub fn expire_frontier(&mut self, now: ecu_scheduler::Micros) {
+        self.frontier.expire_frontier(now);
+    }
+
+    pub fn on_sync_loss(&mut self) {
+        self.frontier.on_sync_loss();
+        self.queue.on_sync_loss();
+    }
+
+    pub fn on_hard_safety_shutdown(&mut self) {
+        self.frontier.on_hard_safety_shutdown();
+        self.queue.on_hard_safety_shutdown();
     }
 
     pub fn into_inner(self) -> ScheduledTransitionQueue<N> {
@@ -40,6 +92,11 @@ impl<const N: usize> ScheduledQueueAdapter<N> {
     }
 
     pub fn cancel_all(&mut self) {
+        self.cancel_all_with_reason(TimingIslandStopReason::PermitDenied);
+    }
+
+    fn cancel_all_with_reason(&mut self, reason: TimingIslandStopReason) {
+        self.frontier.clear_live_frontier_state(reason);
         self.queue.cancel_all();
     }
 
@@ -51,6 +108,15 @@ impl<const N: usize> ScheduledQueueAdapter<N> {
         self.queue.drain_due(now, out)
     }
 
+    pub fn drain_due_with_frontier<const M: usize>(
+        &mut self,
+        now: ecu_scheduler::Micros,
+        out: &mut TransitionDrainBuffer<M>,
+    ) -> usize {
+        self.queue
+            .drain_due_with_frontier(now, &mut self.frontier, out)
+    }
+
     pub fn schedule_output_batch<const M: usize>(
         &mut self,
         batch: &OutputTransitionBatch<M>,
@@ -59,10 +125,14 @@ impl<const N: usize> ScheduledQueueAdapter<N> {
             return Err(ScheduleError::QueueFull);
         }
 
+        let mut scratch = *self;
         for transition in batch.iter() {
-            self.queue
+            scratch.note_output_ownership(*transition)?;
+            scratch
+                .queue
                 .enqueue_transition(scheduled_transition(*transition))?;
         }
+        *self = scratch;
         Ok(())
     }
 
@@ -71,12 +141,30 @@ impl<const N: usize> ScheduledQueueAdapter<N> {
         lowered: &ActionOutputBatchAdapter<OUT, AUX>,
     ) -> Result<(), ScheduleError> {
         let mut scratch = *self;
-        if lowered.status().cancel_scheduled_outputs() {
-            scratch.cancel_all();
+        if let Some(reason) = lowered.status().cancel_scheduler {
+            scratch.cancel_all_with_reason(map_cancel_reason(reason));
         }
         scratch.schedule_output_batch(lowered.output_transitions())?;
         *self = scratch;
         Ok(())
+    }
+}
+
+impl<const N: usize> ScheduledQueueAdapter<N> {
+    fn note_output_ownership(&mut self, transition: OutputTransition) -> Result<(), ScheduleError> {
+        if transition.level != BoardOutputLevel::High {
+            return Ok(());
+        }
+
+        let output = match transition.output {
+            EcuOutput::Injector(channel) => {
+                ExclusiveChannel::new(ecu_scheduler::OutputGroup::Injector, channel)
+            }
+            EcuOutput::Ignition(channel) => {
+                ExclusiveChannel::new(ecu_scheduler::OutputGroup::Ignition, channel)
+            }
+        };
+        self.frontier.reserve_channel(output)
     }
 }
 
@@ -121,8 +209,61 @@ impl<const N: usize> ScheduledActionExecutor<N> {
         self.scheduler.queue()
     }
 
+    pub const fn timing_metrics(&self) -> ScheduledTimingMetrics {
+        self.scheduler.timing_metrics()
+    }
+
     pub fn queue_mut(&mut self) -> &mut ScheduledTransitionQueue<N> {
         self.scheduler.queue_mut()
+    }
+
+    pub const fn frontier(&self) -> &SchedulerState {
+        self.scheduler.frontier()
+    }
+
+    pub fn frontier_mut(&mut self) -> &mut SchedulerState {
+        self.scheduler.frontier_mut()
+    }
+
+    pub fn commit_frontier_horizon(
+        &mut self,
+        horizon_id: TimingIslandHorizonSequenceId,
+        horizon_start_us: ecu_scheduler::Micros,
+        horizon_end_us: ecu_scheduler::Micros,
+        heartbeat_deadline_us: ecu_scheduler::Micros,
+        permit_mask: TimingIslandPermitMask,
+    ) -> bool {
+        self.scheduler.commit_frontier_horizon(
+            horizon_id,
+            horizon_start_us,
+            horizon_end_us,
+            heartbeat_deadline_us,
+            permit_mask,
+        )
+    }
+
+    pub fn note_frontier_heartbeat(&mut self, now: ecu_scheduler::Micros) {
+        self.scheduler.note_frontier_heartbeat(now);
+    }
+
+    pub fn expire_frontier(&mut self, now: ecu_scheduler::Micros) {
+        self.scheduler.expire_frontier(now);
+    }
+
+    pub fn on_sync_loss(&mut self) {
+        self.scheduler.on_sync_loss();
+    }
+
+    pub fn on_hard_safety_shutdown(&mut self) {
+        self.scheduler.on_hard_safety_shutdown();
+    }
+
+    pub fn drain_due_with_frontier<const M: usize>(
+        &mut self,
+        now: ecu_scheduler::Micros,
+        out: &mut TransitionDrainBuffer<M>,
+    ) -> usize {
+        self.scheduler.drain_due_with_frontier(now, out)
     }
 
     pub fn drain_due<const M: usize>(
@@ -140,7 +281,16 @@ impl<const N: usize> ScheduledActionExecutor<N> {
         injectors: &mut [&mut dyn RawScheduledOutputPin],
         ignition: &mut [&mut dyn RawScheduledOutputPin],
     ) -> Result<usize, TransitionApplyError> {
-        self.drain_due(now, out);
+        if self
+            .scheduler
+            .frontier()
+            .last_accepted_horizon_id()
+            .is_some()
+        {
+            self.drain_due_with_frontier(now, out);
+        } else {
+            self.drain_due(now, out);
+        }
         apply_drained_transitions(out, injectors, ignition)
     }
 }
@@ -150,6 +300,16 @@ fn map_action_lowering_error(error: ActionLoweringError) -> ScheduleError {
         ActionLoweringError::OutputBatchFull
         | ActionLoweringError::AuxBatchFull
         | ActionLoweringError::TimingIslandBatchFull => ScheduleError::QueueFull,
+    }
+}
+
+fn map_cancel_reason(reason: ecu_domain::CancelReason) -> TimingIslandStopReason {
+    match reason {
+        ecu_domain::CancelReason::Manual => TimingIslandStopReason::PermitDenied,
+        ecu_domain::CancelReason::SyncLoss => TimingIslandStopReason::SyncLost,
+        ecu_domain::CancelReason::SafetyShutdown => TimingIslandStopReason::TimingFault,
+        ecu_domain::CancelReason::Commit => TimingIslandStopReason::HorizonExpired,
+        ecu_domain::CancelReason::Timeout => TimingIslandStopReason::HeartbeatExpired,
     }
 }
 

@@ -624,3 +624,52 @@ fn speeduino_m5x_explicit_engine_time_authority_is_preserved() {
 
     assert_eq!(input.engine_time_authority, authority);
 }
+
+#[test]
+fn speeduino_m5x_bench_synced_defaults_shift_arming_flags_to_false() {
+    let input =
+        Atmega2560StepInput::bench_synced(Micros::new(1_000), Rpm::new(3_000), Kpa10::new(800));
+
+    assert!(!input.launch_armed);
+    assert!(!input.flat_shift_armed);
+}
+
+#[test]
+fn speeduino_m5x_with_engine_time_authority_preserves_existing_shift_arming_flags() {
+    let authority = EngineTimeAuthority::new(
+        CrankSyncState::PrimaryLocked,
+        PhaseSyncState::CamValidated720,
+        AbsoluteTimeAuthority::GeometryOnly,
+        EngineTimeAuthority::MAX_CONFIDENCE_X1000,
+        0,
+    );
+    let input =
+        Atmega2560StepInput::bench_synced(Micros::new(1_000), Rpm::new(3_000), Kpa10::new(800))
+            .with_launch_armed(true)
+            .with_flat_shift_armed(false)
+            .with_engine_time_authority(authority);
+
+    assert_eq!(input.engine_time_authority, authority);
+    assert!(input.launch_armed);
+    assert!(!input.flat_shift_armed);
+}
+
+#[test]
+fn speeduino_m5x_with_launch_armed_sets_only_launch_arming() {
+    let input =
+        Atmega2560StepInput::bench_synced(Micros::new(1_000), Rpm::new(3_000), Kpa10::new(800))
+            .with_launch_armed(true);
+
+    assert!(input.launch_armed);
+    assert!(!input.flat_shift_armed);
+}
+
+#[test]
+fn speeduino_m5x_with_flat_shift_armed_sets_only_flat_shift_arming() {
+    let input =
+        Atmega2560StepInput::bench_synced(Micros::new(1_000), Rpm::new(3_000), Kpa10::new(800))
+            .with_flat_shift_armed(true);
+
+    assert!(!input.launch_armed);
+    assert!(input.flat_shift_armed);
+}

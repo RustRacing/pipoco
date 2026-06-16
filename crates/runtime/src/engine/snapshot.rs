@@ -48,12 +48,16 @@ impl EngineRuntime {
             engine: self.engine,
             control: self.control,
             faults: self.faults,
-            rev_soft_active: false,
-            rev_hard_active: false,
-            launch_active: false,
-            flat_shift_active: false,
+            rev_soft_active: self.rev_soft_active,
+            rev_hard_active: self.rev_hard_active,
+            launch_active: self.launch_active,
+            flat_shift_active: self.flat_shift_active,
+            safety_latched: self.safety_latched,
             fuel_cut: self.fuel_cut,
             spark_cut: self.spark_cut,
+            legacy_cut_reason_code: self.legacy_cut_reason_code(),
+            knock_intensity_x100: self.knock_intensity_x100,
+            knock_retard_deg10: self.knock_retard_deg10,
         };
         self.calibration_snapshot = self.calibration.active;
     }

@@ -1,5 +1,5 @@
 use ecu_domain::{Kpa10, PulseWidthUs, Rpm};
-use ecu_runtime::{BaseFuelModel, EngineRuntime, RuntimeScheduledOutputKind};
+use ecu_runtime::{BaseFuelModel, RuntimeScheduledOutputKind};
 use ecu_sim::SimulationHarness;
 
 use crate::{
@@ -280,9 +280,9 @@ impl Default for EcuSimHandle {
 }
 
 fn new_sim_harness() -> SimulationHarness<FAST_QUEUE_CAP, SLOW_QUEUE_CAP> {
-    let mut runtime = EngineRuntime::new();
-    runtime.configure_fuel_model(default_ffi_fuel_model());
-    SimulationHarness::new(runtime)
+    let mut sim = SimulationHarness::default();
+    sim.configure_fuel_model(default_ffi_fuel_model());
+    sim
 }
 
 fn default_ffi_fuel_model() -> BaseFuelModel {

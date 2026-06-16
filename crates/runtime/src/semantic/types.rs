@@ -89,6 +89,10 @@ pub struct RuntimeSemanticCalibration {
     pub hard_rev_rpm: u16,
     pub rev_hysteresis_rpm: u16,
     pub soft_retard_max_deg10: u16,
+    pub idle_target_rpm: u16,
+    pub idle_base_duty_x1000: u16,
+    pub idle_kp_x1000: u16,
+    pub idle_ki_x1000: u16,
     pub launch_rpm_limit: u16,
     pub launch_cut_cycles: u16,
     pub flat_shift_rpm_min: u16,
@@ -188,6 +192,10 @@ pub fn runtime_semantic_calibration_from_fuel_tune(
         hard_rev_rpm: 20_500,
         rev_hysteresis_rpm: 100,
         soft_retard_max_deg10: 0,
+        idle_target_rpm: 0,
+        idle_base_duty_x1000: 0,
+        idle_kp_x1000: 0,
+        idle_ki_x1000: 0,
         launch_rpm_limit: 0,
         launch_cut_cycles: 0,
         flat_shift_rpm_min: 0,
@@ -229,6 +237,9 @@ pub struct RuntimeSemanticInputSnapshot {
     pub sync: SyncState,
     pub fuel_cut: bool,
     pub spark_cut: bool,
+    pub direct_fuel_cut_request: bool,
+    pub direct_spark_cut_request: bool,
+    pub safety_latch_request: bool,
     pub mode: RuntimeSemanticEngineMode,
     pub target_afr_override_x100: RuntimeSemanticAfrOverride,
 }
@@ -237,7 +248,7 @@ pub struct RuntimeSemanticInputSnapshot {
 // v11 Runtime Semantic Lambda PI Types
 // ---------------------------------------------------------------------------
 
-/// PI integrator state for the semantic lambda closed-loop evaluator.
+/// PI integrator state for runtime semantic controllers.
 /// This is the runtime-owned equivalent of `ecu_spec::PiIntegratorState`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RuntimeSemanticPiIntegratorState {
@@ -271,6 +282,7 @@ pub struct RuntimeSemanticState {
     pub ae_active: bool,
     pub ae_pulse_us: u32,
     pub ae_decay_steps_remaining: u16,
+    pub idle_integrator_acc: i32,
     pub lambda_integrator_acc: i32,
     pub dfco_active: bool,
     pub dfco_qualify_counter: u16,
@@ -300,6 +312,10 @@ pub struct RuntimeSemanticFuelObservations {
     pub lambda_correction_x1000: u16,
     /// Lambda PI integrator state after this step.
     pub lambda_integrator_state: RuntimeSemanticPiIntegratorState,
+    /// Idle duty command in x1000 from the semantic idle PI controller.
+    pub idle_duty_x1000: u16,
+    /// Idle PI integrator state after this step.
+    pub idle_integrator_state: RuntimeSemanticPiIntegratorState,
     /// Final ignition advance trim in deg10 from runtime semantic cut/knock logic.
     pub advance_deg10_trim: i16,
 }
@@ -485,6 +501,16 @@ pub(crate) const RUNTIME_SEMANTIC_LAMBDA_CORR_MIN_X1000: u16 = 750;
 pub(crate) const RUNTIME_SEMANTIC_LAMBDA_CORR_MAX_X1000: u16 = 1250;
 /// Fixed lambda error for the v11 frozen oracle path (always zero).
 pub(super) const RUNTIME_SEMANTIC_LAMBDA_ERROR_X1000: i32 = 0;
+/// Idle closed-loop deadband in RPM.
+pub(super) const RUNTIME_SEMANTIC_IDLE_DEADBAND_RPM: i32 = 20;
+/// Minimum idle PI integrator accumulator value.
+pub(super) const RUNTIME_SEMANTIC_IDLE_MIN_ACC: i32 = -2000;
+/// Maximum idle PI integrator accumulator value.
+pub(super) const RUNTIME_SEMANTIC_IDLE_MAX_ACC: i32 = 2000;
+/// Minimum idle duty command in x1000.
+pub(crate) const RUNTIME_SEMANTIC_IDLE_DUTY_MIN_X1000: u16 = 0;
+/// Maximum idle duty command in x1000.
+pub(crate) const RUNTIME_SEMANTIC_IDLE_DUTY_MAX_X1000: u16 = 1000;
 
 /// Field-by-field conformance status for runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

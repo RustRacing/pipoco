@@ -275,6 +275,7 @@ fn torque_arbiter_prefers_requested_torque_when_unlimited() {
 
     assert_eq!(result.requested_x100, 90);
     assert_eq!(result.allowed_x100, 90);
+    assert_eq!(result.allowed_x1000, 900);
     assert_eq!(result.reason, TorqueLimitReason::None);
 }
 
@@ -285,6 +286,7 @@ fn torque_arbiter_applies_limp_cap_over_other_limits() {
 
     assert_eq!(result.requested_x100, 120);
     assert_eq!(result.allowed_x100, 70);
+    assert_eq!(result.allowed_x1000, 700);
     assert_eq!(result.reason, TorqueLimitReason::LimpMode);
 }
 
@@ -295,6 +297,20 @@ fn torque_arbiter_uses_idle_request_when_higher() {
 
     assert_eq!(result.requested_x100, 85);
     assert_eq!(result.allowed_x100, 85);
+    assert_eq!(result.allowed_x1000, 850);
+    assert_eq!(result.reason, TorqueLimitReason::None);
+}
+
+#[test]
+fn torque_arbiter_preserves_explicit_high_resolution_request() {
+    let arbiter = TorqueArbiter::new();
+    let result =
+        arbiter.evaluate(TorqueInputs::new(53, 0, 120, 120, 120).with_driver_request_x1000(537));
+
+    assert_eq!(result.requested_x100, 53);
+    assert_eq!(result.requested_x1000, 537);
+    assert_eq!(result.allowed_x100, 53);
+    assert_eq!(result.allowed_x1000, 537);
     assert_eq!(result.reason, TorqueLimitReason::None);
 }
 

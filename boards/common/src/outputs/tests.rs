@@ -1,4 +1,5 @@
 use super::*;
+use ecu_board_api::frontier::{TimingIslandPermitMask, TimingIslandStopReason};
 use ecu_board_api::{EcuOutput, OutputLevel, OutputTransition, OutputTransitionBatch};
 use ecu_domain::Ticks;
 use ecu_runtime::{
@@ -7,8 +8,8 @@ use ecu_runtime::{
 use ecu_scheduler::{
     ChannelId, ExclusiveChannel, IgnitionPlan as SchedulerIgnitionPlan,
     InjectionPlan as SchedulerInjectionPlan, Micros, OutputGroup, ScheduleError, ScheduledLevel,
-    ScheduledTransition, ScheduledTransitionKind, ScheduledTransitionQueue, TimedIgnitionPlan,
-    TimedInjectionPlan, TransitionDrainBuffer,
+    ScheduledTimingMetrics, ScheduledTransition, ScheduledTransitionKind, ScheduledTransitionQueue,
+    SchedulerMode, TimedIgnitionPlan, TimedInjectionPlan, TransitionDrainBuffer,
 };
 
 #[derive(Default, Copy, Clone, PartialEq, Eq)]
@@ -309,10 +310,48 @@ fn scheduler_queue_drain_applies_to_target_pins() {
     assert_eq!(ign0.low_count, 0);
 }
 
+#[test]
+fn scheduled_action_executor_exposes_queue_timing_metrics() {
+    let mut executor = ScheduledActionExecutor::<4>::new();
+    executor
+        .execute(Action::ArmScheduler {
+            injection: timed_injection(100, 120),
+            ignition: timed_ignition(200, 230),
+        })
+        .expect("scheduler action queues");
+
+    assert_eq!(
+        executor.timing_metrics(),
+        ScheduledTimingMetrics {
+            late_event_count: 0,
+            max_lateness_us: None,
+            queue_high_water_mark: 4,
+            last_drain_count: 0,
+        }
+    );
+
+    let mut drained = TransitionDrainBuffer::<4>::new();
+    assert_eq!(executor.drain_due(Micros::new(1_000), &mut drained), 4);
+
+    assert_eq!(
+        executor.timing_metrics(),
+        ScheduledTimingMetrics {
+            late_event_count: 4,
+            max_lateness_us: Some(Micros::new(900)),
+            queue_high_water_mark: 4,
+            last_drain_count: 4,
+        }
+    );
+}
+
 fn timed_injection(start_at: u32, end_at: u32) -> TimedInjectionPlan {
+    timed_injection_on(0, start_at, end_at)
+}
+
+fn timed_injection_on(channel: u8, start_at: u32, end_at: u32) -> TimedInjectionPlan {
     TimedInjectionPlan {
         plan: SchedulerInjectionPlan {
-            output: ExclusiveChannel::new(OutputGroup::Injector, ChannelId::new(0)),
+            output: ExclusiveChannel::new(OutputGroup::Injector, ChannelId::new(channel)),
             pulse_width: ecu_scheduler::PulseWidthUs::new((end_at - start_at) as u16),
         },
         start_at: Micros::new(start_at),
@@ -321,9 +360,13 @@ fn timed_injection(start_at: u32, end_at: u32) -> TimedInjectionPlan {
 }
 
 fn timed_ignition(start_at: u32, end_at: u32) -> TimedIgnitionPlan {
+    timed_ignition_on(0, start_at, end_at)
+}
+
+fn timed_ignition_on(channel: u8, start_at: u32, end_at: u32) -> TimedIgnitionPlan {
     TimedIgnitionPlan {
         plan: SchedulerIgnitionPlan {
-            output: ExclusiveChannel::new(OutputGroup::Ignition, ChannelId::new(0)),
+            output: ExclusiveChannel::new(OutputGroup::Ignition, ChannelId::new(channel)),
             dwell: ecu_scheduler::DwellUs::new((end_at - start_at) as u16),
             advance: ecu_scheduler::Degrees10::new(100),
         },
@@ -361,6 +404,10 @@ fn scheduled_action_executor_enqueues_runtime_scheduler_action() {
         })
         .expect("scheduler action queues");
 
+    assert_eq!(executor.frontier().mode(), SchedulerMode::Armed);
+    assert_eq!(executor.frontier().active_groups(), 0b11);
+    assert_eq!(executor.frontier().injection_count(), 1);
+    assert_eq!(executor.frontier().ignition_count(), 1);
     assert_eq!(executor.queue().active_count(), 4);
 
     let mut drained = TransitionDrainBuffer::<4>::new();
@@ -592,8 +639,8 @@ fn scheduled_action_executor_batch_overflow_preserves_live_queue() {
     let before = executor.queue().snapshot();
 
     let mut batch = ActionBatch::<2>::new();
-    assert!(batch.push(Action::ArmInjection(timed_injection(100, 120))));
-    assert!(batch.push(Action::ArmIgnition(timed_ignition(200, 230))));
+    assert!(batch.push(Action::ArmInjection(timed_injection_on(1, 100, 120))));
+    assert!(batch.push(Action::ArmIgnition(timed_ignition_on(1, 200, 230))));
 
     assert_eq!(executor.execute_batch(batch), Err(ScheduleError::QueueFull));
     assert_eq!(
@@ -723,7 +770,7 @@ fn scheduled_action_executor_drain_and_apply_due_is_board_tick_ready() {
 
     assert_eq!(
         executor.drain_and_apply_due(
-            Micros::new(1_000),
+            Micros::new(240),
             &mut drained,
             &mut injectors,
             &mut ignition
@@ -738,6 +785,257 @@ fn scheduled_action_executor_drain_and_apply_due_is_board_tick_ready() {
 }
 
 #[test]
+fn scheduled_action_executor_frontier_commit_and_expiry_gate_drain() {
+    let mut executor = ScheduledActionExecutor::<4>::new();
+    executor
+        .execute(Action::ArmScheduler {
+            injection: timed_injection(100, 120),
+            ignition: timed_ignition(200, 230),
+        })
+        .expect("scheduler action queues");
+
+    let permit_mask = TimingIslandPermitMask::new(
+        TimingIslandPermitMask::IGNITION | TimingIslandPermitMask::INJECTOR,
+    );
+    assert!(executor.commit_frontier_horizon(
+        21,
+        Micros::new(100),
+        Micros::new(260),
+        Micros::new(150),
+        permit_mask,
+    ));
+
+    let mut drained = TransitionDrainBuffer::<4>::new();
+    assert_eq!(
+        executor.drain_due_with_frontier(Micros::new(140), &mut drained),
+        2
+    );
+    assert_eq!(executor.queue().active_count(), 2);
+    assert_eq!(executor.frontier().active_horizon_id(), Some(21));
+    assert_eq!(
+        executor.frontier().active_stop_reason(),
+        TimingIslandStopReason::None
+    );
+    assert_eq!(executor.frontier().active_permit_mask(), permit_mask);
+}
+
+#[test]
+fn scheduled_action_executor_frontier_heartbeat_expiry_clears_queue() {
+    let mut executor = ScheduledActionExecutor::<4>::new();
+    executor
+        .execute(Action::ArmScheduler {
+            injection: timed_injection(100, 120),
+            ignition: timed_ignition(200, 230),
+        })
+        .expect("scheduler action queues");
+
+    assert!(executor.commit_frontier_horizon(
+        22,
+        Micros::new(100),
+        Micros::new(260),
+        Micros::new(150),
+        TimingIslandPermitMask::ALL,
+    ));
+
+    let mut drained = TransitionDrainBuffer::<4>::new();
+    assert_eq!(
+        executor.drain_due_with_frontier(Micros::new(151), &mut drained),
+        0
+    );
+    assert_eq!(executor.queue().active_count(), 0);
+    assert_eq!(
+        executor.frontier().active_stop_reason(),
+        TimingIslandStopReason::HeartbeatExpired
+    );
+    assert_eq!(
+        executor.frontier().active_permit_mask(),
+        TimingIslandPermitMask::NONE
+    );
+    assert_eq!(executor.frontier().active_horizon_id(), Some(22));
+
+    assert_eq!(
+        executor.drain_due_with_frontier(Micros::new(261), &mut drained),
+        0
+    );
+    assert_eq!(executor.frontier().active_horizon_id(), None);
+    assert_eq!(
+        executor.frontier().active_stop_reason(),
+        TimingIslandStopReason::HeartbeatExpired
+    );
+}
+
+#[test]
+fn scheduled_action_executor_drain_and_apply_due_stays_frontier_aware_after_expiry() {
+    let mut executor = ScheduledActionExecutor::<4>::new();
+    executor
+        .execute(Action::ArmScheduler {
+            injection: timed_injection(100, 120),
+            ignition: timed_ignition(200, 230),
+        })
+        .expect("scheduler action queues");
+
+    assert!(executor.commit_frontier_horizon(
+        23,
+        Micros::new(100),
+        Micros::new(260),
+        Micros::new(150),
+        TimingIslandPermitMask::ALL,
+    ));
+    executor.expire_frontier(Micros::new(261));
+
+    let mut inj0 = RecordingPin::default();
+    let mut inj1 = RecordingPin::default();
+    let mut ign0 = RecordingPin::default();
+    let mut ign1 = RecordingPin::default();
+    let mut injectors: [&mut dyn RawScheduledOutputPin; 2] = [&mut inj0, &mut inj1];
+    let mut ignition: [&mut dyn RawScheduledOutputPin; 2] = [&mut ign0, &mut ign1];
+    let mut drained = TransitionDrainBuffer::<4>::new();
+
+    assert_eq!(
+        executor.drain_and_apply_due(
+            Micros::new(300),
+            &mut drained,
+            &mut injectors,
+            &mut ignition,
+        ),
+        Ok(0)
+    );
+    assert_eq!(executor.queue().active_count(), 0);
+    assert_eq!(inj0.high_count, 0);
+    assert_eq!(inj0.low_count, 0);
+    assert_eq!(inj1.high_count, 0);
+    assert_eq!(inj1.low_count, 0);
+    assert_eq!(ign0.high_count, 0);
+    assert_eq!(ign0.low_count, 0);
+    assert_eq!(ign1.high_count, 0);
+    assert_eq!(ign1.low_count, 0);
+}
+
+#[test]
+fn scheduled_action_executor_frontier_reset_paths_clear_live_state() {
+    let mut executor = ScheduledActionExecutor::<4>::new();
+    assert!(executor.commit_frontier_horizon(
+        23,
+        Micros::new(100),
+        Micros::new(260),
+        Micros::new(150),
+        TimingIslandPermitMask::ALL,
+    ));
+    executor.on_sync_loss();
+    assert_eq!(executor.queue().active_count(), 0);
+    assert_eq!(executor.frontier().active_horizon_id(), None);
+    assert_eq!(
+        executor.frontier().active_permit_mask(),
+        TimingIslandPermitMask::NONE
+    );
+    assert_eq!(
+        executor.frontier().active_stop_reason(),
+        TimingIslandStopReason::SyncLost
+    );
+
+    assert!(executor.commit_frontier_horizon(
+        24,
+        Micros::new(300),
+        Micros::new(420),
+        Micros::new(340),
+        TimingIslandPermitMask::ALL,
+    ));
+    executor.on_hard_safety_shutdown();
+    assert_eq!(executor.queue().active_count(), 0);
+    assert_eq!(executor.frontier().active_horizon_id(), None);
+    assert_eq!(
+        executor.frontier().active_permit_mask(),
+        TimingIslandPermitMask::NONE
+    );
+    assert_eq!(
+        executor.frontier().active_stop_reason(),
+        TimingIslandStopReason::TimingFault
+    );
+}
+
+#[test]
+fn scheduled_action_executor_runtime_cancel_preserves_frontier_stop_reason() {
+    let mut executor = ScheduledActionExecutor::<4>::new();
+    assert!(executor.commit_frontier_horizon(
+        30,
+        Micros::new(100),
+        Micros::new(260),
+        Micros::new(150),
+        TimingIslandPermitMask::ALL,
+    ));
+
+    executor
+        .execute(Action::CancelScheduler(ecu_domain::CancelReason::SyncLoss))
+        .expect("sync loss cancel clears queue");
+    assert_eq!(executor.queue().active_count(), 0);
+    assert_eq!(executor.frontier().active_horizon_id(), None);
+    assert_eq!(
+        executor.frontier().active_stop_reason(),
+        TimingIslandStopReason::SyncLost
+    );
+
+    assert!(executor.commit_frontier_horizon(
+        31,
+        Micros::new(300),
+        Micros::new(520),
+        Micros::new(340),
+        TimingIslandPermitMask::ALL,
+    ));
+    executor
+        .execute(Action::CancelScheduler(
+            ecu_domain::CancelReason::SafetyShutdown,
+        ))
+        .expect("safety shutdown cancel clears queue");
+    assert_eq!(executor.queue().active_count(), 0);
+    assert_eq!(executor.frontier().active_horizon_id(), None);
+    assert_eq!(
+        executor.frontier().active_stop_reason(),
+        TimingIslandStopReason::TimingFault
+    );
+}
+
+#[test]
+fn scheduled_action_executor_drain_and_apply_due_respects_active_frontier_permissions() {
+    let mut executor = ScheduledActionExecutor::<4>::new();
+    executor
+        .execute(Action::ArmScheduler {
+            injection: timed_injection(100, 120),
+            ignition: timed_ignition(200, 230),
+        })
+        .expect("scheduler action queues");
+
+    assert!(executor.commit_frontier_horizon(
+        40,
+        Micros::new(100),
+        Micros::new(260),
+        Micros::new(150),
+        TimingIslandPermitMask::NONE,
+    ));
+
+    let mut inj0 = RecordingPin::default();
+    let mut ign0 = RecordingPin::default();
+    let mut injectors: [&mut dyn RawScheduledOutputPin; 1] = [&mut inj0];
+    let mut ignition: [&mut dyn RawScheduledOutputPin; 1] = [&mut ign0];
+    let mut drained = TransitionDrainBuffer::<4>::new();
+
+    assert_eq!(
+        executor.drain_and_apply_due(
+            Micros::new(140),
+            &mut drained,
+            &mut injectors,
+            &mut ignition
+        ),
+        Ok(0)
+    );
+    assert_eq!(executor.queue().active_count(), 0);
+    assert_eq!(executor.frontier().active_horizon_id(), Some(40));
+    assert_eq!(inj0.high_count, 0);
+    assert_eq!(inj0.low_count, 0);
+    assert_eq!(ign0.high_count, 0);
+    assert_eq!(ign0.low_count, 0);
+}
+
+#[test]
 fn scheduled_outputs4_drains_and_applies_due_transitions() {
     let mut executor = ScheduledActionExecutor::<4>::new();
     executor
@@ -746,6 +1044,13 @@ fn scheduled_outputs4_drains_and_applies_due_transitions() {
             ignition: timed_ignition(200, 230),
         })
         .expect("scheduler action queues");
+    assert!(executor.commit_frontier_horizon(
+        24,
+        Micros::new(100),
+        Micros::new(260),
+        Micros::new(300),
+        TimingIslandPermitMask::ALL,
+    ));
 
     let inj0 = RecordingPin::default();
     let inj1 = RecordingPin::default();
@@ -755,7 +1060,7 @@ fn scheduled_outputs4_drains_and_applies_due_transitions() {
     let mut drained = TransitionDrainBuffer::<4>::new();
 
     assert_eq!(
-        outputs.drain_and_apply_due(&mut executor, Micros::new(1_000), &mut drained),
+        outputs.drain_and_apply_due(&mut executor, Micros::new(240), &mut drained),
         Ok(4)
     );
 
@@ -779,6 +1084,13 @@ fn scheduled_outputs4_accepts_embedded_hal_1_wrapped_pins() {
             ignition: timed_ignition(200, 230),
         })
         .expect("scheduler action queues");
+    assert!(executor.commit_frontier_horizon(
+        25,
+        Micros::new(100),
+        Micros::new(260),
+        Micros::new(300),
+        TimingIslandPermitMask::ALL,
+    ));
 
     let inj0 = Hal1ScheduledOut::new(RecordingHal1Pin::default());
     let inj1 = Hal1ScheduledOut::new(RecordingHal1Pin::default());
@@ -788,7 +1100,7 @@ fn scheduled_outputs4_accepts_embedded_hal_1_wrapped_pins() {
     let mut drained = TransitionDrainBuffer::<4>::new();
 
     assert_eq!(
-        outputs.drain_and_apply_due(&mut executor, Micros::new(1_000), &mut drained),
+        outputs.drain_and_apply_due(&mut executor, Micros::new(240), &mut drained),
         Ok(4)
     );
 

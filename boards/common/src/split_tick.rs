@@ -1,4 +1,9 @@
-use crate::adapter::{BoardAdapter, BoardAdapterError, BoardEvent};
+use crate::adapter::{
+    ApplyAndPushPairError, ApplyAndRecordError, BoardAdapter, BoardAdapterError, BoardEvent,
+    CommonObservabilityRecordTraceOverflow, CommonObservabilityTraceOverflow,
+    FixedCommonObservabilityRecordTrace, FixedCommonObservabilityTrace,
+    FixedCommonObservabilityTracePair,
+};
 use crate::outputs::{RawScheduledOutputBank, ScheduledActionExecutor, TransitionApplyError};
 use ecu_board_api::{CaptureSampleSource, CaptureSink, Watchdog};
 use ecu_calibration::PersistedCalibrationStore;
@@ -19,8 +24,27 @@ pub enum SplitScheduledTickError<S, C, W, T, P> {
     Apply(TransitionApplyError),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SplitScheduledTickAndRecordError<S, C, W, T, P> {
+    Adapter(BoardAdapterError<S, C, ScheduleError, W, T, P>),
+    Record(CommonObservabilityRecordTraceOverflow),
+    Apply(TransitionApplyError),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SplitScheduledTickAndPushPairError<S, C, W, T, P> {
+    Adapter(BoardAdapterError<S, C, ScheduleError, W, T, P>),
+    Record(CommonObservabilityRecordTraceOverflow),
+    Sample(CommonObservabilityTraceOverflow),
+    Apply(TransitionApplyError),
+}
+
 type SplitTickResult<S, C, W, T, P> =
     Result<SplitScheduledTickResult, SplitScheduledTickError<S, C, W, T, P>>;
+type SplitTickAndRecordResult<S, C, W, T, P> =
+    Result<SplitScheduledTickResult, SplitScheduledTickAndRecordError<S, C, W, T, P>>;
+type SplitTickAndPushPairResult<S, C, W, T, P> =
+    Result<SplitScheduledTickResult, SplitScheduledTickAndPushPairError<S, C, W, T, P>>;
 
 #[allow(clippy::type_complexity)]
 /// Runs the `boards/common` scheduled-output seam for a runtime adapter tick.
@@ -57,10 +81,148 @@ where
     })
 }
 
+#[allow(clippy::type_complexity)]
+pub fn run_runtime_scheduled_output_tick_and_record<
+    S,
+    C,
+    W,
+    T,
+    P,
+    O,
+    const Q: usize,
+    const D: usize,
+    const R: usize,
+>(
+    adapter: &mut BoardAdapter<S, C, ScheduledActionExecutor<Q>, W, T, P>,
+    now_us: Micros,
+    control: ControlInputs,
+    trace: &mut FixedCommonObservabilityRecordTrace<R>,
+    outputs: &mut O,
+    drain: &mut TransitionDrainBuffer<D>,
+) -> SplitTickAndRecordResult<S::Error, C::Error, W::Error, T::Error, P::Error>
+where
+    S: CaptureSampleSource,
+    C: CaptureSink,
+    W: Watchdog,
+    T: TransportPublisher,
+    P: PersistedCalibrationStore,
+    O: RawScheduledOutputBank,
+{
+    let step = adapter
+        .apply_event_and_record(BoardEvent::Tick { now_us, control }, trace)
+        .map_err(|err| match err {
+            ApplyAndRecordError::Apply(err) => SplitScheduledTickAndRecordError::Adapter(err),
+            ApplyAndRecordError::Record(err) => SplitScheduledTickAndRecordError::Record(err),
+        })?;
+    let applied = outputs
+        .drain_and_apply_due(adapter.actions(), now_us, drain)
+        .map_err(SplitScheduledTickAndRecordError::Apply)?;
+
+    Ok(SplitScheduledTickResult {
+        runtime_step_ran: step.is_some(),
+        drained_transitions: drain.len as usize,
+        applied_transitions: applied,
+    })
+}
+
+#[allow(clippy::type_complexity)]
+pub fn run_runtime_scheduled_output_tick_and_push_pair<
+    S,
+    C,
+    W,
+    T,
+    P,
+    O,
+    const Q: usize,
+    const D: usize,
+    const SM: usize,
+    const RM: usize,
+>(
+    adapter: &mut BoardAdapter<S, C, ScheduledActionExecutor<Q>, W, T, P>,
+    now_us: Micros,
+    control: ControlInputs,
+    sample_trace: &mut FixedCommonObservabilityTrace<SM>,
+    record_trace: &mut FixedCommonObservabilityRecordTrace<RM>,
+    outputs: &mut O,
+    drain: &mut TransitionDrainBuffer<D>,
+) -> SplitTickAndPushPairResult<S::Error, C::Error, W::Error, T::Error, P::Error>
+where
+    S: CaptureSampleSource,
+    C: CaptureSink,
+    W: Watchdog,
+    T: TransportPublisher,
+    P: PersistedCalibrationStore,
+    O: RawScheduledOutputBank,
+{
+    let step = adapter
+        .apply_event_and_push_pair(
+            BoardEvent::Tick { now_us, control },
+            sample_trace,
+            record_trace,
+        )
+        .map_err(|err| match err {
+            ApplyAndPushPairError::Apply(err) => SplitScheduledTickAndPushPairError::Adapter(err),
+            ApplyAndPushPairError::Record(err) => SplitScheduledTickAndPushPairError::Record(err),
+            ApplyAndPushPairError::Sample(err) => SplitScheduledTickAndPushPairError::Sample(err),
+        })?;
+    let applied = outputs
+        .drain_and_apply_due(adapter.actions(), now_us, drain)
+        .map_err(SplitScheduledTickAndPushPairError::Apply)?;
+
+    Ok(SplitScheduledTickResult {
+        runtime_step_ran: step.is_some(),
+        drained_transitions: drain.len as usize,
+        applied_transitions: applied,
+    })
+}
+
+#[allow(clippy::type_complexity)]
+pub fn run_runtime_scheduled_output_tick_and_push_to_trace_pair<
+    S,
+    C,
+    W,
+    T,
+    P,
+    O,
+    const Q: usize,
+    const D: usize,
+    const SM: usize,
+    const RM: usize,
+>(
+    adapter: &mut BoardAdapter<S, C, ScheduledActionExecutor<Q>, W, T, P>,
+    now_us: Micros,
+    control: ControlInputs,
+    traces: &mut FixedCommonObservabilityTracePair<SM, RM>,
+    outputs: &mut O,
+    drain: &mut TransitionDrainBuffer<D>,
+) -> SplitTickAndPushPairResult<S::Error, C::Error, W::Error, T::Error, P::Error>
+where
+    S: CaptureSampleSource,
+    C: CaptureSink,
+    W: Watchdog,
+    T: TransportPublisher,
+    P: PersistedCalibrationStore,
+    O: RawScheduledOutputBank,
+{
+    let (sample_trace, record_trace) = traces.split_mut();
+    run_runtime_scheduled_output_tick_and_push_pair(
+        adapter,
+        now_us,
+        control,
+        sample_trace,
+        record_trace,
+        outputs,
+        drain,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapter::BoardEvent;
+    use crate::adapter::{
+        BoardEvent, CommonObservabilityRecord, CommonObservabilityRecordKind,
+        CommonObservabilitySample, CommonObservabilitySnapshot, FixedCommonObservabilityTracePair,
+    };
     use crate::outputs::{RawScheduledOutputPin, ScheduledOutputs4};
     use ecu_board_api::CaptureSample;
     use ecu_calibration::PersistedCalibrationBlob;
@@ -232,6 +394,7 @@ mod tests {
             },
             torque: TorqueInputs::new(90, 90, 90, 90, 90),
             ignition: IgnitionInputs::new(Degrees10::new(100), 0, 0, 0, false, Rpm::new(3000)),
+            knock_intensity_x100: 0,
         }
     }
 
@@ -325,6 +488,44 @@ mod tests {
     }
 
     #[test]
+    fn run_runtime_scheduled_output_tick_and_record_stores_tick_record() {
+        let mut adapter = adapter();
+        sync_adapter(&mut adapter);
+
+        let inj0 = RecordingPin::default();
+        let inj1 = RecordingPin::default();
+        let ign0 = RecordingPin::default();
+        let ign1 = RecordingPin::default();
+        let mut outputs = ScheduledOutputs4::new(inj0, inj1, ign0, ign1);
+        let mut drain = TransitionDrainBuffer::<8>::new();
+        let mut trace: FixedCommonObservabilityRecordTrace<4> =
+            FixedCommonObservabilityRecordTrace::new();
+
+        let result = run_runtime_scheduled_output_tick_and_record(
+            &mut adapter,
+            Micros::new(10_000),
+            control_inputs(Micros::new(10_000)),
+            &mut trace,
+            &mut outputs,
+            &mut drain,
+        )
+        .expect("split tick with recording succeeds");
+
+        assert!(result.runtime_step_ran);
+        assert_eq!(trace.len(), 1);
+        assert_eq!(
+            trace.get(0),
+            Some(CommonObservabilityRecord {
+                kind: CommonObservabilityRecordKind::Tick,
+                sample: CommonObservabilitySample {
+                    at_us: Micros::new(10_000),
+                    snapshot: adapter.observability_snapshot(),
+                },
+            })
+        );
+    }
+
+    #[test]
     fn run_runtime_scheduled_output_tick_returns_zero_counts_when_unsynced() {
         let mut adapter = adapter();
         let mut outputs = ScheduledOutputs4::new(
@@ -351,6 +552,462 @@ mod tests {
     }
 
     #[test]
+    fn run_runtime_scheduled_output_tick_and_record_returns_record_error_before_drain() {
+        let mut adapter = adapter();
+        sync_adapter(&mut adapter);
+
+        let mut trace: FixedCommonObservabilityRecordTrace<1> =
+            FixedCommonObservabilityRecordTrace::new();
+        trace
+            .push(CommonObservabilityRecord {
+                kind: CommonObservabilityRecordKind::Tick,
+                sample: CommonObservabilitySample {
+                    at_us: Micros::new(1),
+                    snapshot: CommonObservabilitySnapshot::default(),
+                },
+            })
+            .expect("trace prefill");
+
+        let mut queue = ScheduledTransitionQueue::<8>::new();
+        queue
+            .enqueue_transition(ecu_scheduler::ScheduledTransition {
+                at_us: Micros::new(240),
+                kind: ecu_scheduler::ScheduledTransitionKind::Injector,
+                channel: ecu_domain::ChannelId::new(0),
+                level: ecu_scheduler::ScheduledLevel::High,
+            })
+            .expect("queue transition");
+        *adapter.actions().queue_mut() = queue;
+        assert!(adapter.actions().commit_frontier_horizon(
+            51,
+            Micros::new(200),
+            Micros::new(300),
+            Micros::new(260),
+            ecu_board_api::frontier::TimingIslandPermitMask::ALL,
+        ));
+
+        let inj0 = RecordingPin::default();
+        let inj1 = RecordingPin::default();
+        let ign0 = RecordingPin::default();
+        let ign1 = RecordingPin::default();
+        let mut outputs = ScheduledOutputs4::new(inj0, inj1, ign0, ign1);
+        let mut drain = TransitionDrainBuffer::<8>::new();
+
+        let err = run_runtime_scheduled_output_tick_and_record(
+            &mut adapter,
+            Micros::new(240),
+            control_inputs(Micros::new(240)),
+            &mut trace,
+            &mut outputs,
+            &mut drain,
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            err,
+            SplitScheduledTickAndRecordError::Record(CommonObservabilityRecordTraceOverflow {
+                capacity: 1
+            })
+        );
+        assert_eq!(trace.len(), 1);
+        assert_eq!(drain.len, 0);
+        let (inj0, inj1, ign0, ign1) = outputs.into_inner();
+        assert_eq!(inj0.high_count, 0);
+        assert_eq!(inj0.low_count, 0);
+        assert_eq!(inj1.high_count, 0);
+        assert_eq!(inj1.low_count, 0);
+        assert_eq!(ign0.high_count, 0);
+        assert_eq!(ign0.low_count, 0);
+        assert_eq!(ign1.high_count, 0);
+        assert_eq!(ign1.low_count, 0);
+    }
+
+    #[test]
+    fn run_runtime_scheduled_output_tick_and_push_pair_stores_tick_pair() {
+        let mut adapter = adapter();
+        sync_adapter(&mut adapter);
+
+        let inj0 = RecordingPin::default();
+        let inj1 = RecordingPin::default();
+        let ign0 = RecordingPin::default();
+        let ign1 = RecordingPin::default();
+        let mut outputs = ScheduledOutputs4::new(inj0, inj1, ign0, ign1);
+        let mut drain = TransitionDrainBuffer::<8>::new();
+        let mut sample_trace: FixedCommonObservabilityTrace<4> =
+            FixedCommonObservabilityTrace::new();
+        let mut record_trace: FixedCommonObservabilityRecordTrace<4> =
+            FixedCommonObservabilityRecordTrace::new();
+
+        let result = run_runtime_scheduled_output_tick_and_push_pair(
+            &mut adapter,
+            Micros::new(10_000),
+            control_inputs(Micros::new(10_000)),
+            &mut sample_trace,
+            &mut record_trace,
+            &mut outputs,
+            &mut drain,
+        )
+        .expect("split tick with push pair succeeds");
+
+        assert!(result.runtime_step_ran);
+        assert_eq!(result.drained_transitions, 0);
+        assert_eq!(result.applied_transitions, 0);
+        assert_eq!(sample_trace.len(), 1);
+        assert_eq!(record_trace.len(), 1);
+        assert_eq!(
+            sample_trace.get(0),
+            record_trace.get(0).map(|record| record.sample)
+        );
+        assert_eq!(
+            record_trace.get(0),
+            Some(CommonObservabilityRecord {
+                kind: CommonObservabilityRecordKind::Tick,
+                sample: adapter.observability_sample(),
+            })
+        );
+
+        let (inj0, inj1, ign0, ign1) = outputs.into_inner();
+        assert_eq!(inj0.high_count, 0);
+        assert_eq!(inj0.low_count, 0);
+        assert_eq!(inj1.high_count, 0);
+        assert_eq!(inj1.low_count, 0);
+        assert_eq!(ign0.high_count, 0);
+        assert_eq!(ign0.low_count, 0);
+        assert_eq!(ign1.high_count, 0);
+        assert_eq!(ign1.low_count, 0);
+    }
+
+    #[test]
+    fn run_runtime_scheduled_output_tick_and_push_to_trace_pair_stores_tick_pair() {
+        let mut adapter = adapter();
+        sync_adapter(&mut adapter);
+
+        let inj0 = RecordingPin::default();
+        let inj1 = RecordingPin::default();
+        let ign0 = RecordingPin::default();
+        let ign1 = RecordingPin::default();
+        let mut outputs = ScheduledOutputs4::new(inj0, inj1, ign0, ign1);
+        let mut drain = TransitionDrainBuffer::<8>::new();
+        let mut traces: FixedCommonObservabilityTracePair<4, 4> =
+            FixedCommonObservabilityTracePair::new();
+
+        let result = run_runtime_scheduled_output_tick_and_push_to_trace_pair(
+            &mut adapter,
+            Micros::new(10_000),
+            control_inputs(Micros::new(10_000)),
+            &mut traces,
+            &mut outputs,
+            &mut drain,
+        )
+        .expect("split tick with push pair succeeds");
+
+        assert!(result.runtime_step_ran);
+        assert_eq!(result.drained_transitions, 0);
+        assert_eq!(result.applied_transitions, 0);
+        assert_eq!(traces.sample().len(), 1);
+        assert_eq!(traces.record().len(), 1);
+        assert_eq!(
+            traces.sample().get(0),
+            traces.record().get(0).map(|record| record.sample)
+        );
+        assert_eq!(
+            traces.record().get(0),
+            Some(CommonObservabilityRecord {
+                kind: CommonObservabilityRecordKind::Tick,
+                sample: adapter.observability_sample(),
+            })
+        );
+
+        let (inj0, inj1, ign0, ign1) = outputs.into_inner();
+        assert_eq!(inj0.high_count, 0);
+        assert_eq!(inj0.low_count, 0);
+        assert_eq!(inj1.high_count, 0);
+        assert_eq!(inj1.low_count, 0);
+        assert_eq!(ign0.high_count, 0);
+        assert_eq!(ign0.low_count, 0);
+        assert_eq!(ign1.high_count, 0);
+        assert_eq!(ign1.low_count, 0);
+    }
+
+    #[test]
+    fn run_runtime_scheduled_output_tick_and_push_pair_returns_record_error_before_drain() {
+        let mut adapter = adapter();
+        sync_adapter(&mut adapter);
+
+        let mut sample_trace: FixedCommonObservabilityTrace<1> =
+            FixedCommonObservabilityTrace::new();
+        let mut record_trace: FixedCommonObservabilityRecordTrace<1> =
+            FixedCommonObservabilityRecordTrace::new();
+        let sample_before = CommonObservabilitySample {
+            at_us: Micros::new(1),
+            snapshot: CommonObservabilitySnapshot::default(),
+        };
+        let record_before = CommonObservabilityRecord {
+            kind: CommonObservabilityRecordKind::Tick,
+            sample: sample_before,
+        };
+        sample_trace.push(sample_before).unwrap();
+        record_trace.push(record_before).unwrap();
+
+        let mut queue = ScheduledTransitionQueue::<8>::new();
+        queue
+            .enqueue_transition(ecu_scheduler::ScheduledTransition {
+                at_us: Micros::new(240),
+                kind: ecu_scheduler::ScheduledTransitionKind::Injector,
+                channel: ecu_domain::ChannelId::new(0),
+                level: ecu_scheduler::ScheduledLevel::High,
+            })
+            .expect("queue transition");
+        *adapter.actions().queue_mut() = queue;
+        assert!(adapter.actions().commit_frontier_horizon(
+            51,
+            Micros::new(200),
+            Micros::new(300),
+            Micros::new(260),
+            ecu_board_api::frontier::TimingIslandPermitMask::ALL,
+        ));
+
+        let inj0 = RecordingPin::default();
+        let inj1 = RecordingPin::default();
+        let ign0 = RecordingPin::default();
+        let ign1 = RecordingPin::default();
+        let mut outputs = ScheduledOutputs4::new(inj0, inj1, ign0, ign1);
+        let mut drain = TransitionDrainBuffer::<8>::new();
+
+        let err = run_runtime_scheduled_output_tick_and_push_pair(
+            &mut adapter,
+            Micros::new(240),
+            control_inputs(Micros::new(240)),
+            &mut sample_trace,
+            &mut record_trace,
+            &mut outputs,
+            &mut drain,
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            err,
+            SplitScheduledTickAndPushPairError::Record(CommonObservabilityRecordTraceOverflow {
+                capacity: 1
+            })
+        );
+        assert_eq!(sample_trace.len(), 1);
+        assert_eq!(sample_trace.get(0), Some(sample_before));
+        assert_eq!(record_trace.len(), 1);
+        assert_eq!(record_trace.get(0), Some(record_before));
+        assert_eq!(drain.len, 0);
+        let (inj0, inj1, ign0, ign1) = outputs.into_inner();
+        assert_eq!(inj0.high_count, 0);
+        assert_eq!(inj0.low_count, 0);
+        assert_eq!(inj1.high_count, 0);
+        assert_eq!(inj1.low_count, 0);
+        assert_eq!(ign0.high_count, 0);
+        assert_eq!(ign0.low_count, 0);
+        assert_eq!(ign1.high_count, 0);
+        assert_eq!(ign1.low_count, 0);
+    }
+
+    #[test]
+    fn run_runtime_scheduled_output_tick_and_push_to_trace_pair_returns_record_error_before_drain()
+    {
+        let mut adapter = adapter();
+        sync_adapter(&mut adapter);
+
+        let mut traces: FixedCommonObservabilityTracePair<1, 1> =
+            FixedCommonObservabilityTracePair::new();
+        let sample_before = CommonObservabilitySample {
+            at_us: Micros::new(1),
+            snapshot: CommonObservabilitySnapshot::default(),
+        };
+        let record_before = CommonObservabilityRecord {
+            kind: CommonObservabilityRecordKind::Tick,
+            sample: sample_before,
+        };
+        traces.sample_mut().push(sample_before).unwrap();
+        traces.record_mut().push(record_before).unwrap();
+
+        let mut queue = ScheduledTransitionQueue::<8>::new();
+        queue
+            .enqueue_transition(ecu_scheduler::ScheduledTransition {
+                at_us: Micros::new(240),
+                kind: ecu_scheduler::ScheduledTransitionKind::Injector,
+                channel: ecu_domain::ChannelId::new(0),
+                level: ecu_scheduler::ScheduledLevel::High,
+            })
+            .expect("queue transition");
+        *adapter.actions().queue_mut() = queue;
+        assert!(adapter.actions().commit_frontier_horizon(
+            51,
+            Micros::new(200),
+            Micros::new(300),
+            Micros::new(260),
+            ecu_board_api::frontier::TimingIslandPermitMask::ALL,
+        ));
+
+        let inj0 = RecordingPin::default();
+        let inj1 = RecordingPin::default();
+        let ign0 = RecordingPin::default();
+        let ign1 = RecordingPin::default();
+        let mut outputs = ScheduledOutputs4::new(inj0, inj1, ign0, ign1);
+        let mut drain = TransitionDrainBuffer::<8>::new();
+
+        let err = run_runtime_scheduled_output_tick_and_push_to_trace_pair(
+            &mut adapter,
+            Micros::new(240),
+            control_inputs(Micros::new(240)),
+            &mut traces,
+            &mut outputs,
+            &mut drain,
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            err,
+            SplitScheduledTickAndPushPairError::Record(CommonObservabilityRecordTraceOverflow {
+                capacity: 1
+            })
+        );
+        assert_eq!(traces.sample().len(), 1);
+        assert_eq!(traces.sample().get(0), Some(sample_before));
+        assert_eq!(traces.record().len(), 1);
+        assert_eq!(traces.record().get(0), Some(record_before));
+        assert_eq!(drain.len, 0);
+        let (inj0, inj1, ign0, ign1) = outputs.into_inner();
+        assert_eq!(inj0.high_count, 0);
+        assert_eq!(inj0.low_count, 0);
+        assert_eq!(inj1.high_count, 0);
+        assert_eq!(inj1.low_count, 0);
+        assert_eq!(ign0.high_count, 0);
+        assert_eq!(ign0.low_count, 0);
+        assert_eq!(ign1.high_count, 0);
+        assert_eq!(ign1.low_count, 0);
+    }
+
+    #[test]
+    fn run_runtime_scheduled_output_tick_and_push_pair_returns_sample_error_after_record_is_stored()
+    {
+        let mut adapter = adapter();
+        sync_adapter(&mut adapter);
+
+        let mut sample_trace: FixedCommonObservabilityTrace<1> =
+            FixedCommonObservabilityTrace::new();
+        let mut record_trace: FixedCommonObservabilityRecordTrace<2> =
+            FixedCommonObservabilityRecordTrace::new();
+        sample_trace
+            .push(CommonObservabilitySample::default())
+            .unwrap();
+
+        let inj0 = RecordingPin::default();
+        let inj1 = RecordingPin::default();
+        let ign0 = RecordingPin::default();
+        let ign1 = RecordingPin::default();
+        let mut outputs = ScheduledOutputs4::new(inj0, inj1, ign0, ign1);
+        let mut drain = TransitionDrainBuffer::<8>::new();
+
+        let err = run_runtime_scheduled_output_tick_and_push_pair(
+            &mut adapter,
+            Micros::new(10_000),
+            control_inputs(Micros::new(10_000)),
+            &mut sample_trace,
+            &mut record_trace,
+            &mut outputs,
+            &mut drain,
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            err,
+            SplitScheduledTickAndPushPairError::Sample(CommonObservabilityTraceOverflow {
+                capacity: 1
+            })
+        );
+        assert_eq!(sample_trace.len(), 1);
+        assert_eq!(
+            sample_trace.get(0),
+            Some(CommonObservabilitySample::default())
+        );
+        assert_eq!(record_trace.len(), 1);
+        assert_eq!(
+            record_trace.get(0),
+            Some(CommonObservabilityRecord {
+                kind: CommonObservabilityRecordKind::Tick,
+                sample: adapter.observability_sample(),
+            })
+        );
+        assert_eq!(drain.len, 0);
+        let (inj0, inj1, ign0, ign1) = outputs.into_inner();
+        assert_eq!(inj0.high_count, 0);
+        assert_eq!(inj0.low_count, 0);
+        assert_eq!(inj1.high_count, 0);
+        assert_eq!(inj1.low_count, 0);
+        assert_eq!(ign0.high_count, 0);
+        assert_eq!(ign0.low_count, 0);
+        assert_eq!(ign1.high_count, 0);
+        assert_eq!(ign1.low_count, 0);
+    }
+
+    #[test]
+    fn run_runtime_scheduled_output_tick_and_push_to_trace_pair_returns_sample_error_after_record_is_stored(
+    ) {
+        let mut adapter = adapter();
+        sync_adapter(&mut adapter);
+
+        let mut traces: FixedCommonObservabilityTracePair<1, 2> =
+            FixedCommonObservabilityTracePair::new();
+        traces
+            .sample_mut()
+            .push(CommonObservabilitySample::default())
+            .unwrap();
+
+        let inj0 = RecordingPin::default();
+        let inj1 = RecordingPin::default();
+        let ign0 = RecordingPin::default();
+        let ign1 = RecordingPin::default();
+        let mut outputs = ScheduledOutputs4::new(inj0, inj1, ign0, ign1);
+        let mut drain = TransitionDrainBuffer::<8>::new();
+
+        let err = run_runtime_scheduled_output_tick_and_push_to_trace_pair(
+            &mut adapter,
+            Micros::new(10_000),
+            control_inputs(Micros::new(10_000)),
+            &mut traces,
+            &mut outputs,
+            &mut drain,
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            err,
+            SplitScheduledTickAndPushPairError::Sample(CommonObservabilityTraceOverflow {
+                capacity: 1
+            })
+        );
+        assert_eq!(traces.sample().len(), 1);
+        assert_eq!(
+            traces.sample().get(0),
+            Some(CommonObservabilitySample::default())
+        );
+        assert_eq!(traces.record().len(), 1);
+        assert_eq!(
+            traces.record().get(0),
+            Some(CommonObservabilityRecord {
+                kind: CommonObservabilityRecordKind::Tick,
+                sample: adapter.observability_sample(),
+            })
+        );
+        assert_eq!(drain.len, 0);
+        let (inj0, inj1, ign0, ign1) = outputs.into_inner();
+        assert_eq!(inj0.high_count, 0);
+        assert_eq!(inj0.low_count, 0);
+        assert_eq!(inj1.high_count, 0);
+        assert_eq!(inj1.low_count, 0);
+        assert_eq!(ign0.high_count, 0);
+        assert_eq!(ign0.low_count, 0);
+        assert_eq!(ign1.high_count, 0);
+        assert_eq!(ign1.low_count, 0);
+    }
+
+    #[test]
     fn run_runtime_scheduled_output_tick_clears_queue_after_sync_loss() {
         let mut adapter = adapter();
         sync_adapter(&mut adapter);
@@ -361,6 +1018,7 @@ mod tests {
             })
             .expect("runtime arms scheduler");
         adapter.actions().queue_mut().cancel_all();
+        adapter.actions().frontier_mut().cancel_all();
         adapter
             .actions()
             .execute(Action::ArmScheduler {
@@ -436,7 +1094,7 @@ mod tests {
         let mut invalid_queue = ScheduledTransitionQueue::<8>::new();
         invalid_queue
             .enqueue_transition(ecu_scheduler::ScheduledTransition {
-                at_us: Micros::new(10_000),
+                at_us: Micros::new(240),
                 kind: ecu_scheduler::ScheduledTransitionKind::Injector,
                 channel: ecu_domain::ChannelId::new(0),
                 level: ecu_scheduler::ScheduledLevel::High,
@@ -444,13 +1102,20 @@ mod tests {
             .expect("valid transition fits");
         invalid_queue
             .enqueue_transition(ecu_scheduler::ScheduledTransition {
-                at_us: Micros::new(10_000),
+                at_us: Micros::new(240),
                 kind: ecu_scheduler::ScheduledTransitionKind::Ignition,
                 channel: ecu_domain::ChannelId::new(3),
                 level: ecu_scheduler::ScheduledLevel::High,
             })
             .expect("invalid-channel transition fits queue");
         *adapter.actions().queue_mut() = invalid_queue;
+        assert!(adapter.actions().commit_frontier_horizon(
+            41,
+            Micros::new(200),
+            Micros::new(300),
+            Micros::new(260),
+            ecu_board_api::frontier::TimingIslandPermitMask::ALL,
+        ));
 
         let inj0 = RecordingPin::default();
         let inj1 = RecordingPin::default();
@@ -461,8 +1126,8 @@ mod tests {
 
         let result = run_runtime_scheduled_output_tick(
             &mut adapter,
-            Micros::new(10_000),
-            control_inputs(Micros::new(10_000)),
+            Micros::new(240),
+            control_inputs(Micros::new(240)),
             &mut outputs,
             &mut drain,
         );

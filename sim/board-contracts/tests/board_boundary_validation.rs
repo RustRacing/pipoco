@@ -2,7 +2,9 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use ecu_board_api::{
-    BoardCapabilities, CaptureSample, CaptureSampleSource, CaptureSink, LoadSourceCapabilities,
+    BoardCapabilities, CaptureSample, CaptureSampleSource, CaptureSink, CommonFrontierTelemetry,
+    CommonSchedulerOwnershipTelemetry, CommonSchedulerReservationTelemetry,
+    CommonSchedulerStateSummaryTelemetry, CommonSchedulerWindowTelemetry, LoadSourceCapabilities,
     Watchdog,
 };
 use ecu_board_contracts::check_watchdog_policy;
@@ -20,7 +22,12 @@ use ecu_runtime::{
 };
 use ecu_target_common::adapter::{
     BoardAdapter as Rp2350Adapter, BoardAdapterError, BoardEvent as Rp2350Event,
+    CommonObservabilityDrainCycleReport, CommonObservabilityRecord, CommonObservabilityRecordKind,
+    CommonObservabilitySample, CommonObservabilityTraceCycleReport,
+    FixedCommonObservabilityRecordTrace, FixedCommonObservabilityTracePair, ScheduledTimingMetrics,
+    SchedulerObservabilitySource,
 };
+use ecu_target_common::outputs::ScheduledActionExecutor;
 
 type BoundaryAdapterError = BoardAdapterError<
     InjectedBoundaryError,
@@ -110,6 +117,44 @@ impl ActionExecutor for MockActions {
             return Err(error);
         }
         Ok(())
+    }
+}
+
+impl SchedulerObservabilitySource for MockActions {
+    fn timing_metrics(&self) -> ScheduledTimingMetrics {
+        ScheduledTimingMetrics::default()
+    }
+
+    fn active_queue_count(&self) -> u8 {
+        0
+    }
+
+    fn free_queue_slots(&self) -> u8 {
+        0
+    }
+
+    fn queue_capacity(&self) -> u8 {
+        0
+    }
+
+    fn frontier_telemetry(&self) -> CommonFrontierTelemetry {
+        Default::default()
+    }
+
+    fn scheduler_ownership_telemetry(&self) -> CommonSchedulerOwnershipTelemetry {
+        Default::default()
+    }
+
+    fn scheduler_reservation_telemetry(&self) -> CommonSchedulerReservationTelemetry {
+        Default::default()
+    }
+
+    fn scheduler_state_summary_telemetry(&self) -> CommonSchedulerStateSummaryTelemetry {
+        Default::default()
+    }
+
+    fn scheduler_window_telemetry(&self) -> CommonSchedulerWindowTelemetry {
+        Default::default()
     }
 }
 
@@ -264,6 +309,7 @@ fn control_inputs() -> ControlInputs {
         },
         torque: TorqueInputs::new(90, 90, 90, 90, 90),
         ignition: IgnitionInputs::new(Degrees10::new(100), 0, 0, 0, false, Rpm::new(3000)),
+        knock_intensity_x100: 0,
     }
 }
 
@@ -274,6 +320,52 @@ fn sample() -> CaptureSample {
         load_kpa10: Kpa10::new(700),
         angle_x10: Degrees10::new(12),
     }
+}
+
+#[inline]
+fn empty_observability_record() -> CommonObservabilityRecord {
+    CommonObservabilityRecord {
+        kind: CommonObservabilityRecordKind::Tick,
+        sample: CommonObservabilitySample::default(),
+    }
+}
+
+#[inline]
+fn empty_drain_report() -> CommonObservabilityDrainCycleReport {
+    CommonObservabilityDrainCycleReport {
+        sample: CommonObservabilityTraceCycleReport {
+            drained: 0,
+            overflow_count: 0,
+            status: Default::default(),
+        },
+        record: CommonObservabilityTraceCycleReport {
+            drained: 0,
+            overflow_count: 0,
+            status: Default::default(),
+        },
+    }
+}
+
+#[inline]
+fn drain_observability_pair<const S: usize, const R: usize, const SO: usize, const RO: usize>(
+    traces: &mut FixedCommonObservabilityTracePair<S, R>,
+    sample_out: &mut [CommonObservabilitySample; SO],
+    record_out: &mut [CommonObservabilityRecord; RO],
+    report: &mut CommonObservabilityDrainCycleReport,
+) {
+    *report = traces.drain_cycle(sample_out, record_out);
+}
+
+fn assert_observability_drain(
+    report: &CommonObservabilityDrainCycleReport,
+    record: CommonObservabilityRecord,
+    expected_kind: CommonObservabilityRecordKind,
+) {
+    assert_eq!(report.sample.drained, 1);
+    assert_eq!(report.record.drained, 1);
+    assert_eq!(report.sample.overflow_count, 0);
+    assert_eq!(report.record.overflow_count, 0);
+    assert_eq!(record.kind, expected_kind);
 }
 
 fn locked_authority() -> EngineTimeAuthority {
@@ -388,7 +480,7 @@ fn adapter_boundary_smoke_accepts_same_event_sequence_for_independent_ports() {
     let mut rp2350 = Rp2350Adapter::new(
         mock_sensor(no_failures),
         mock_capture(no_failures),
-        mock_actions(counters_a.clone(), no_failures),
+        ScheduledActionExecutor::<4>::new(),
         mock_watchdog(counters_a.clone(), no_failures),
         mock_transport(counters_a.clone(), no_failures),
         mock_store(counters_a.clone(), no_failures),
@@ -396,60 +488,152 @@ fn adapter_boundary_smoke_accepts_same_event_sequence_for_independent_ports() {
     let mut second = Rp2350Adapter::new(
         mock_sensor(no_failures),
         mock_capture(no_failures),
-        mock_actions(counters_b.clone(), no_failures),
+        ScheduledActionExecutor::<4>::new(),
         mock_watchdog(counters_b.clone(), no_failures),
         mock_transport(counters_b.clone(), no_failures),
         mock_store(counters_b.clone(), no_failures),
     );
+    let mut rp2350_traces: FixedCommonObservabilityTracePair<8, 8> =
+        FixedCommonObservabilityTracePair::new();
+    let mut second_traces: FixedCommonObservabilityTracePair<8, 8> =
+        FixedCommonObservabilityTracePair::new();
+    let mut rp2350_sample_scratch = [CommonObservabilitySample::default(); 8];
+    let mut rp2350_record_scratch = [empty_observability_record(); 8];
+    let mut second_sample_scratch = [CommonObservabilitySample::default(); 8];
+    let mut second_record_scratch = [empty_observability_record(); 8];
+    let mut rp2350_last_drain_report = empty_drain_report();
+    let mut second_last_drain_report = empty_drain_report();
 
     rp2350
-        .apply_event(Rp2350Event::TriggerEdge {
-            at_us: Micros::new(12),
-            rpm: Rpm::new(3000),
-            angle_x10: Degrees10::new(12),
-            synced: true,
-            authority: locked_authority(),
-        })
+        .apply_event_and_push_to_trace_pair(
+            Rp2350Event::TriggerEdge {
+                at_us: Micros::new(12),
+                rpm: Rpm::new(3000),
+                angle_x10: Degrees10::new(12),
+                synced: true,
+                authority: locked_authority(),
+            },
+            &mut rp2350_traces,
+        )
         .expect("rp2350 trigger edge should be captured");
+    drain_observability_pair(
+        &mut rp2350_traces,
+        &mut rp2350_sample_scratch,
+        &mut rp2350_record_scratch,
+        &mut rp2350_last_drain_report,
+    );
+    assert_observability_drain(
+        &rp2350_last_drain_report,
+        rp2350_record_scratch[0],
+        CommonObservabilityRecordKind::TriggerEdge,
+    );
     rp2350
-        .apply_event(Rp2350Event::CamEdge {
-            at_us: Micros::new(13),
-            cam_seen: true,
-        })
+        .apply_event_and_push_to_trace_pair(
+            Rp2350Event::CamEdge {
+                at_us: Micros::new(13),
+                cam_seen: true,
+            },
+            &mut rp2350_traces,
+        )
         .expect("rp2350 cam edge should update decoder state");
+    drain_observability_pair(
+        &mut rp2350_traces,
+        &mut rp2350_sample_scratch,
+        &mut rp2350_record_scratch,
+        &mut rp2350_last_drain_report,
+    );
+    assert_observability_drain(
+        &rp2350_last_drain_report,
+        rp2350_record_scratch[0],
+        CommonObservabilityRecordKind::CamEdge,
+    );
     second
-        .apply_event(Rp2350Event::TriggerEdge {
-            at_us: Micros::new(12),
-            rpm: Rpm::new(3000),
-            angle_x10: Degrees10::new(12),
-            synced: true,
-            authority: locked_authority(),
-        })
+        .apply_event_and_push_to_trace_pair(
+            Rp2350Event::TriggerEdge {
+                at_us: Micros::new(12),
+                rpm: Rpm::new(3000),
+                angle_x10: Degrees10::new(12),
+                synced: true,
+                authority: locked_authority(),
+            },
+            &mut second_traces,
+        )
         .expect("second adapter trigger edge should be captured");
+    drain_observability_pair(
+        &mut second_traces,
+        &mut second_sample_scratch,
+        &mut second_record_scratch,
+        &mut second_last_drain_report,
+    );
+    assert_observability_drain(
+        &second_last_drain_report,
+        second_record_scratch[0],
+        CommonObservabilityRecordKind::TriggerEdge,
+    );
     second
-        .apply_event(Rp2350Event::CamEdge {
-            at_us: Micros::new(13),
-            cam_seen: true,
-        })
+        .apply_event_and_push_to_trace_pair(
+            Rp2350Event::CamEdge {
+                at_us: Micros::new(13),
+                cam_seen: true,
+            },
+            &mut second_traces,
+        )
         .expect("second adapter cam edge should update decoder state");
+    drain_observability_pair(
+        &mut second_traces,
+        &mut second_sample_scratch,
+        &mut second_record_scratch,
+        &mut second_last_drain_report,
+    );
+    assert_observability_drain(
+        &second_last_drain_report,
+        second_record_scratch[0],
+        CommonObservabilityRecordKind::CamEdge,
+    );
 
     rp2350
-        .apply_event(Rp2350Event::Tick {
-            now_us: Micros::new(20),
-            control: control_inputs(),
-        })
+        .apply_event_and_push_to_trace_pair(
+            Rp2350Event::Tick {
+                now_us: Micros::new(20),
+                control: control_inputs(),
+            },
+            &mut rp2350_traces,
+        )
         .expect("rp2350 tick should execute board IO")
         .expect("tick events should return a runtime step result");
+    drain_observability_pair(
+        &mut rp2350_traces,
+        &mut rp2350_sample_scratch,
+        &mut rp2350_record_scratch,
+        &mut rp2350_last_drain_report,
+    );
+    assert_observability_drain(
+        &rp2350_last_drain_report,
+        rp2350_record_scratch[0],
+        CommonObservabilityRecordKind::Tick,
+    );
     second
-        .apply_event(Rp2350Event::Tick {
-            now_us: Micros::new(20),
-            control: control_inputs(),
-        })
+        .apply_event_and_push_to_trace_pair(
+            Rp2350Event::Tick {
+                now_us: Micros::new(20),
+                control: control_inputs(),
+            },
+            &mut second_traces,
+        )
         .expect("second adapter tick should execute board IO")
         .expect("tick events should return a runtime step result");
+    drain_observability_pair(
+        &mut second_traces,
+        &mut second_sample_scratch,
+        &mut second_record_scratch,
+        &mut second_last_drain_report,
+    );
+    assert_observability_drain(
+        &second_last_drain_report,
+        second_record_scratch[0],
+        CommonObservabilityRecordKind::Tick,
+    );
 
-    assert!(counters_a.action.get() > 0);
-    assert!(counters_b.action.get() > 0);
     assert!(counters_a.transport.get() > 0);
     assert!(counters_b.transport.get() > 0);
     assert!(counters_a.watchdog.get() > 0);
@@ -529,7 +713,10 @@ fn rp2350_with_failures(
         mock_transport(counters.clone(), failures),
         mock_store(counters, failures),
     );
-    adapter.configure_fuel_model(test_fuel_model());
+    let mut fuel_model_record_scratch = FixedCommonObservabilityRecordTrace::<1>::new();
+    adapter
+        .configure_fuel_model_and_record(test_fuel_model(), &mut fuel_model_record_scratch)
+        .expect("fuel model config");
     adapter
 }
 

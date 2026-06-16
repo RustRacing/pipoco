@@ -1,13 +1,36 @@
 use super::*;
 
 impl EngineRuntime {
+    fn clear_semantic_runtime_flags(&mut self) {
+        self.rev_soft_active = false;
+        self.rev_hard_active = false;
+        self.launch_active = false;
+        self.flat_shift_active = false;
+        self.safety_latched = false;
+        self.knock_retard_deg10 = 0;
+    }
+
+    fn apply_semantic_runtime_flags(&mut self, state: RuntimeSemanticState) {
+        self.rev_soft_active = state.rev_soft_active;
+        self.rev_hard_active = state.rev_hard_active;
+        self.launch_active = state.launch_active;
+        self.flat_shift_active = state.flat_shift_active;
+        self.safety_latched = state.safety_latched;
+        self.knock_retard_deg10 = state.knock_retard_deg10;
+    }
+
     pub(super) fn compose_control(
         &mut self,
         validated: &ValidatedInputs,
         inputs: ControlInputs,
+        launch_armed: bool,
+        flat_shift_armed: bool,
+        safety_latch_request: bool,
     ) -> ControlPlan {
-        let fuel_input = self.fuel_input_snapshot(validated, inputs);
-        let fuel_intent = self.compute_fuel_intent(fuel_input);
+        self.knock_intensity_x100 = inputs.knock_intensity_x100;
+        let fuel_input =
+            self.fuel_input_snapshot(validated, inputs, launch_armed, flat_shift_armed);
+        let fuel_intent = self.compute_fuel_intent(fuel_input, safety_latch_request);
         let base_fuel = fuel_intent.pulse_width_us;
         let startup_config = self.planners.startup_config;
         let warmup_config = self.planners.warmup_config;
@@ -23,7 +46,11 @@ impl EngineRuntime {
             &acceleration_config,
         );
         let lambda = self.planners.lambda.update(inputs.lambda, &lambda_config);
-        let torque = self.planners.torque.evaluate(inputs.torque);
+        let mut torque = self.planners.torque.evaluate(inputs.torque);
+        if self.rev_hard_active && torque.allowed_x100 != 0 {
+            torque.allowed_x100 = 0;
+            torque.reason = TorqueLimitReason::RevLimiter;
+        }
         let ignition = self.planners.ignition.plan(inputs.ignition, &dwell_config);
         let enriched_fuel = enrichment.apply_to(base_fuel);
 
@@ -52,6 +79,8 @@ impl EngineRuntime {
         &self,
         validated: &ValidatedInputs,
         inputs: ControlInputs,
+        launch_armed: bool,
+        flat_shift_armed: bool,
     ) -> FuelInputSnapshot {
         FuelInputSnapshot {
             now_us: inputs.enrichment.now_us,
@@ -62,6 +91,7 @@ impl EngineRuntime {
                 .torque
                 .driver_request_x100
                 .max(inputs.torque.idle_request_x100),
+            knock_intensity_x100: inputs.knock_intensity_x100,
             maf_x100: 0,
             clt_c10: inputs.enrichment.clt_c.saturating_mul(10),
             iat_c10: 250,
@@ -76,15 +106,23 @@ impl EngineRuntime {
                 EnginePhase::Running => FuelEngineMode::Running,
                 EnginePhase::Stopping => FuelEngineMode::Shutdown,
             },
-            fuel_cut_request: false,
+            launch_armed,
+            flat_shift_armed,
+            fuel_cut_request: self.direct_fuel_cut_request,
+            spark_cut_request: self.direct_spark_cut_request,
             target_afr_override_x100: FuelAfrOverride::None,
         }
     }
 
-    fn compute_fuel_intent(&mut self, input: FuelInputSnapshot) -> FuelIntent {
+    fn compute_fuel_intent(
+        &mut self,
+        input: FuelInputSnapshot,
+        safety_latch_request: bool,
+    ) -> FuelIntent {
         let sync = input.sync;
         let mode = input.mode;
-        match &mut self.planners.fuel_strategy {
+        let mut semantic_runtime_state = None;
+        let fuel_intent = match &mut self.planners.fuel_strategy {
             RuntimeFuelStrategy::DirectPulseWidthTable(fuel_model) => {
                 let pw = fuel_model.calculate_base_fuel(input.rpm, input.load_kpa10);
                 FuelIntent {
@@ -102,10 +140,18 @@ impl EngineRuntime {
                 }
             }
             RuntimeFuelStrategy::SpeedDensityVe { calibration, state } => {
-                let semantic_input =
-                    Self::semantic_input_for_strategy(input, FuelLoadSource::Map, sync, mode);
-                match runtime_semantic_evaluate_fuel(calibration, semantic_input, *state) {
-                    Ok(obs) => {
+                let semantic_input = Self::semantic_input_for_strategy(
+                    input,
+                    FuelLoadSource::Map,
+                    sync,
+                    mode,
+                    safety_latch_request,
+                );
+                match runtime_semantic_evaluate_fuel_with_state(calibration, semantic_input, *state)
+                {
+                    Ok((obs, next_state)) => {
+                        *state = next_state;
+                        semantic_runtime_state = Some(next_state);
                         let pw = PulseWidthUs::new(obs.pw_corr_us.min(u32::from(u16::MAX)) as u16);
                         FuelIntent {
                             pulse_width_us: pw,
@@ -137,10 +183,18 @@ impl EngineRuntime {
                 }
             }
             RuntimeFuelStrategy::AlphaN { calibration, state } => {
-                let semantic_input =
-                    Self::semantic_input_for_strategy(input, FuelLoadSource::Tps, sync, mode);
-                match runtime_semantic_evaluate_fuel(calibration, semantic_input, *state) {
-                    Ok(obs) => {
+                let semantic_input = Self::semantic_input_for_strategy(
+                    input,
+                    FuelLoadSource::Tps,
+                    sync,
+                    mode,
+                    safety_latch_request,
+                );
+                match runtime_semantic_evaluate_fuel_with_state(calibration, semantic_input, *state)
+                {
+                    Ok((obs, next_state)) => {
+                        *state = next_state;
+                        semantic_runtime_state = Some(next_state);
                         let pw = PulseWidthUs::new(obs.pw_corr_us.min(u32::from(u16::MAX)) as u16);
                         FuelIntent {
                             pulse_width_us: pw,
@@ -172,11 +226,19 @@ impl EngineRuntime {
                 }
             }
             RuntimeFuelStrategy::Maf { calibration, state } => {
-                let mut semantic_input =
-                    Self::semantic_input_for_strategy(input, FuelLoadSource::Map, sync, mode);
+                let mut semantic_input = Self::semantic_input_for_strategy(
+                    input,
+                    FuelLoadSource::Map,
+                    sync,
+                    mode,
+                    safety_latch_request,
+                );
                 semantic_input.load_kpa10 = Kpa10::new(input.maf_x100);
-                match runtime_semantic_evaluate_fuel(calibration, semantic_input, *state) {
-                    Ok(obs) => {
+                match runtime_semantic_evaluate_fuel_with_state(calibration, semantic_input, *state)
+                {
+                    Ok((obs, next_state)) => {
+                        *state = next_state;
+                        semantic_runtime_state = Some(next_state);
                         let pw = PulseWidthUs::new(obs.pw_corr_us.min(u32::from(u16::MAX)) as u16);
                         FuelIntent {
                             pulse_width_us: pw,
@@ -207,7 +269,13 @@ impl EngineRuntime {
                     },
                 }
             }
+        };
+        if let Some(state) = semantic_runtime_state {
+            self.apply_semantic_runtime_flags(state);
+        } else {
+            self.clear_semantic_runtime_flags();
         }
+        fuel_intent
     }
 }
 
@@ -234,6 +302,7 @@ mod tests {
             },
             torque: TorqueInputs::new(72, 84, 100, 100, 100),
             ignition: IgnitionInputs::new(Degrees10::new(120), 0, 0, 0, false, Rpm::new(rpm)),
+            knock_intensity_x100: 0,
         }
     }
 
@@ -272,6 +341,7 @@ mod tests {
                 cam_seen: true,
                 launch_armed: false,
                 flat_shift_armed: false,
+                safety_latch_request: false,
             },
             control_inputs(1_000, 3000),
         );
@@ -294,6 +364,8 @@ mod tests {
                 clamped: false,
             },
             inputs,
+            false,
+            false,
         );
 
         assert_eq!(snapshot.now_us, Micros::new(2_000));
@@ -304,5 +376,7 @@ mod tests {
         assert_eq!(snapshot.clt_c10, -100);
         assert!(snapshot.lambda_valid);
         assert_eq!(snapshot.lambda_measured, Lambda100::new(92));
+        assert!(!snapshot.launch_armed);
+        assert!(!snapshot.flat_shift_armed);
     }
 }

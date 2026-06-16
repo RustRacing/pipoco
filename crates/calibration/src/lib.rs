@@ -21,8 +21,8 @@ pub use expert_trigger::{
 };
 pub use kv::{KvError, KvStore, PersistError};
 pub use model::{
-    ActiveCalibration, Calibration, CalibrationClass, CalibrationDiff, CalibrationRevision,
-    CalibrationSchemaVersion, CalibrationSnapshot, CommitRules, CommitVerdict,
+    ActiveCalibration, Calibration, CalibrationClass, CalibrationDiff, CalibrationPackageIdentity,
+    CalibrationRevision, CalibrationSchemaVersion, CalibrationSnapshot, CommitRules, CommitVerdict,
     PersistedCalibrationBlob, PersistedCalibrationStore, StagedCalibration,
 };
 pub use runtime_tune::{
@@ -224,6 +224,59 @@ mod tests {
         assert_eq!(blob.schema_version(), CalibrationSchemaVersion::CURRENT);
         assert_eq!(blob.revision().get(), 9);
         assert_eq!(blob.snapshot(), snapshot);
+    }
+
+    #[test]
+    fn calibration_package_identity_from_default_snapshot_is_empty() {
+        let identity = CalibrationPackageIdentity::from_snapshot(CalibrationSnapshot::default());
+
+        assert_eq!(identity.schema_version, CalibrationSchemaVersion::CURRENT);
+        assert_eq!(identity.active_revision, CalibrationRevision::default());
+        assert_eq!(
+            identity.staged_base_revision,
+            CalibrationRevision::default()
+        );
+        assert_eq!(identity.staged_revision, CalibrationRevision::default());
+        assert!(!identity.staged_dirty);
+    }
+
+    #[test]
+    fn calibration_package_identity_from_dirty_snapshot_carries_revisions_and_dirty_flag() {
+        let mut staged =
+            StagedCalibration::new(CalibrationRevision::new(4), Calibration::default());
+        staged.mark_dirty();
+        let snapshot = CalibrationSnapshot {
+            active: ActiveCalibration::new(CalibrationRevision::new(9), Calibration::default()),
+            staged,
+        };
+
+        let identity = CalibrationPackageIdentity::from_snapshot(snapshot);
+
+        assert_eq!(identity.schema_version, CalibrationSchemaVersion::CURRENT);
+        assert_eq!(identity.active_revision, CalibrationRevision::new(9));
+        assert_eq!(identity.staged_base_revision, CalibrationRevision::new(4));
+        assert_eq!(identity.staged_revision, CalibrationRevision::new(5));
+        assert!(identity.staged_dirty);
+    }
+
+    #[test]
+    fn calibration_package_identity_from_blob_uses_blob_schema_version_and_snapshot_revisions() {
+        let mut staged =
+            StagedCalibration::new(CalibrationRevision::new(4), Calibration::default());
+        staged.mark_dirty();
+        let snapshot = CalibrationSnapshot {
+            active: ActiveCalibration::new(CalibrationRevision::new(9), Calibration::default()),
+            staged,
+        };
+        let blob = PersistedCalibrationBlob::new(snapshot);
+
+        let identity = CalibrationPackageIdentity::from_blob(blob);
+
+        assert_eq!(identity.schema_version, CalibrationSchemaVersion::CURRENT);
+        assert_eq!(identity.active_revision, CalibrationRevision::new(9));
+        assert_eq!(identity.staged_base_revision, CalibrationRevision::new(4));
+        assert_eq!(identity.staged_revision, CalibrationRevision::new(5));
+        assert!(identity.staged_dirty);
     }
 
     #[test]

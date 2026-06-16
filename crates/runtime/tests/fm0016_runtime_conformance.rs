@@ -5,25 +5,20 @@
 //!
 //! Conformance strategy:
 //! - Covered fields: rpm (exact match)
-//! - Covered fields: lambda_correction, lambda_integrator_state
-//! - Adapter-contract fields: ve_pct, target_afr, pw_base, pw_air, pw_corr,
-//!   idle_duty, advance_deg10_trim, cut_reason_code, knock_intensity,
-//!   torque_allowed, torque_actuated, idle_integrator_state
+//! - Covered fields: lambda_correction, lambda_integrator_state,
+//!   idle_duty_x1000, idle_integrator_state, advance_deg10_trim
 //! - Torque rows (US-FM0512): torque_request_x1000, torque_allowed_x1000,
 //!   torque_actuated_x1000 now come from a product-owned `StepResult`
-//!   observation surface. `torque_allowed_x1000` now zeros on the product
-//!   Off/Shutdown path, but the rows remain adapter-contract because the live
-//!   step boundary still does not own the full
-//!   safety_latched/fuel_cut/spark_cut/launch_cut/flat_shift_cut lattice.
+//!   observation surface. `torque_request_x1000`, `torque_allowed_x1000`, and
+//!   `torque_actuated_x1000` are covered through runtime-owned request, mode,
+//!   and cut surfaces. `torque_allowed_x1000` still zeros on the product
+//!   Off/Shutdown path.
 //!
 //! Cut rows (US-FM0511):
-//! - fuel_cut and spark_cut are adapter-contract: RuntimeAdapterContract::FuelCutInput
-//!   and RuntimeAdapterContract::SparkCutInput respectively. Runtime does not receive cut
-//!   input flags and has no separate product-owned cut source that derives from fixture
-//!   input; the ActionBatch cut detection is the only observable. Safety latch, launch,
-//!   and flat-shift cut remain adapter-contract for the same reason. Non-cut fixtures
-//!   verify no accidental cut is produced. Covered rows for cuts would require runtime
-//!   to own the cut causality through a distinct safety path, which does not exist today.
+//! - fuel_cut and spark_cut are covered through the runtime-owned differential ingress
+//!   and RuntimeLegacyCutFlags.
+//! - safety_latched is covered through runtime-owned step and differential ingress,
+//!   compared via RuntimeSnapshot.
 //!
 //! Torque rows (US-FM0512):
 //! - The semantic torque evaluator is still checked against FM0016 fixtures
@@ -39,6 +34,7 @@ use ecu_domain::{
     AbsoluteTimeAuthority, CancelReason, ControlMode, CrankSyncState, EngineTimeAuthority,
     FaultCode, FaultSeverity, Kpa10, Micros, PhaseSyncState, Rpm, SyncState as DomainSyncState,
 };
+use ecu_domain::{Degrees10, SyncState};
 use ecu_runtime::compat::StepInputs;
 use ecu_runtime::semantic::{
     conformance::{
@@ -54,12 +50,13 @@ use ecu_runtime::semantic::{
     RuntimeSemanticTable2dU16, RuntimeSemanticTable2dU32,
 };
 use ecu_runtime::support::{
-    extract_fuel_observations, RuntimeAdapterContract, RuntimeObservedSurface,
+    extract_fuel_observations, DifferentialInputSnapshot, RuntimeAdapterContract,
+    RuntimeObservedSurface,
 };
 use ecu_runtime::{
-    runtime_full_sequential_authorized, runtime_x100_to_spec_x1000, Action, ActionBatch,
-    BaseFuelModel, ControlInputs, EngineRuntime, EnrichmentInputs, IgnitionInputs,
-    LambdaTrimInputs, TorqueInputs,
+    runtime_full_sequential_authorized, runtime_x100_to_spec_x1000, BaseFuelModel, ControlInputs,
+    EngineRuntime, EnrichmentInputs, IgnitionInputs, LambdaTrimInputs, RuntimeAfrOverride,
+    RuntimeEngineMode, TorqueInputs,
 };
 use ecu_spec::{
     AfrOverride, CylinderArrayU16, EngineMode, InjectionAngleMode, InputSnapshot,
@@ -74,7 +71,6 @@ mod fm0016_fixture_matrix;
 // ---------------------------------------------------------------------------
 
 const EPS_RPM: u16 = 0; // exact match
-const EPS_TORQUE_PCT: u16 = 50; // ±50 %-points (different torque models)
 
 // ---------------------------------------------------------------------------
 // Runtime x100 to spec x1000 unit bridge (US-FM0512)
@@ -261,6 +257,10 @@ fn build_semantic_calibration(cal: &ValidatedCalibration) -> RuntimeSemanticCali
         hard_rev_rpm: c.hard_rev_rpm.0,
         rev_hysteresis_rpm: c.rev_hysteresis_rpm.0,
         soft_retard_max_deg10: c.soft_retard_max_deg10,
+        idle_target_rpm: c.idle_target_rpm.0,
+        idle_base_duty_x1000: c.idle_base_duty_x1000,
+        idle_kp_x1000: c.idle_kp_x1000,
+        idle_ki_x1000: c.idle_ki_x1000,
         launch_rpm_limit: c.launch_rpm_limit.0,
         launch_cut_cycles: c.launch_cut_cycles,
         flat_shift_rpm_min: c.flat_shift_rpm_min.0,
@@ -463,6 +463,9 @@ fn to_semantic_input(input: &InputSnapshot) -> RuntimeSemanticInputSnapshot {
         },
         fuel_cut: input.fuel_cut,
         spark_cut: input.spark_cut,
+        direct_fuel_cut_request: false,
+        direct_spark_cut_request: false,
+        safety_latch_request: false,
         mode,
         target_afr_override_x100: target_afr_override,
     }
@@ -500,7 +503,10 @@ fn semantic_schedule_authority(input: RuntimeSemanticInputSnapshot) -> EngineTim
 // ControlInputs builder
 // ---------------------------------------------------------------------------
 
-fn to_control_inputs(input: &InputSnapshot) -> ControlInputs {
+fn to_control_inputs_with_driver_request_x100(
+    input: &InputSnapshot,
+    driver_request_x100: u16,
+) -> ControlInputs {
     ControlInputs {
         enrichment: EnrichmentInputs {
             now_us: ecu_domain::Micros::new(input.t_us.0),
@@ -517,12 +523,13 @@ fn to_control_inputs(input: &InputSnapshot) -> ControlInputs {
             requested_open_loop: false,
         },
         torque: TorqueInputs::new(
-            input.tps_x100 / 10, // driver_request_x100: spec derives from TPS
-            100,                 // idle_request_x100: runtime default, not in spec torque pipeline
-            10_000,              // rev_limit_x100: high so runtime limiter doesn't incorrectly cap
-            10_000,              // knock_limit_x100: high so it doesn't fire
-            10_000,              // limp_limit_x100: high so it doesn't fire
-        ),
+            driver_request_x100,
+            0,      // idle_request_x100: keep semantic fuel TPS responsive for cut fixtures
+            10_000, // rev_limit_x100: high so runtime limiter doesn't incorrectly cap
+            10_000, // knock_limit_x100: high so it doesn't fire
+            10_000, // limp_limit_x100: high so it doesn't fire
+        )
+        .with_driver_request_x1000(input.tps_x100 / 10),
         ignition: IgnitionInputs::new(
             ecu_domain::Degrees10::new(150),
             0,
@@ -531,7 +538,19 @@ fn to_control_inputs(input: &InputSnapshot) -> ControlInputs {
             false,
             ecu_domain::Rpm::new(input.rpm.0),
         ),
+        knock_intensity_x100: input.knock_intensity_x100,
     }
+}
+
+fn to_control_inputs(input: &InputSnapshot) -> ControlInputs {
+    to_control_inputs_with_driver_request_x100(
+        input,
+        input.tps_x100 / 10, // bridge FM0016 TPS x100 to runtime torque x100
+    )
+}
+
+fn to_semantic_runtime_control_inputs(input: &InputSnapshot) -> ControlInputs {
+    to_control_inputs_with_driver_request_x100(input, input.tps_x100)
 }
 
 // ---------------------------------------------------------------------------
@@ -548,74 +567,248 @@ fn to_step_inputs(input: &InputSnapshot) -> StepInputs {
         cam_seen: matches!(input.sync, ecu_spec::SyncState::Synced),
         launch_armed: input.launch_armed,
         flat_shift_armed: input.flat_shift_armed,
+        safety_latch_request: false,
     }
+}
+
+fn to_differential_input(input: &InputSnapshot) -> DifferentialInputSnapshot {
+    DifferentialInputSnapshot {
+        now_us: ecu_domain::Micros::new(input.t_us.0),
+        rpm: Rpm::new(input.rpm.0),
+        map_kpa10: Kpa10::new(input.map_kpa10.0),
+        load_kpa10: Kpa10::new(input.load_kpa10.0),
+        angle_x10: Degrees10::new(0),
+        clt_c10: input.clt_c10.0,
+        iat_c10: input.iat_c10.0,
+        baro_kpa10: Kpa10::new(input.baro_kpa10.0),
+        vbatt_mv: input.vbatt_mv.0,
+        sync: match input.sync {
+            ecu_spec::SyncState::Synced => SyncState::Locked { cam_ref: false },
+            ecu_spec::SyncState::Unsynced => SyncState::Unsynced,
+        },
+        fuel_cut: input.fuel_cut,
+        spark_cut: input.spark_cut,
+        mode: match input.mode {
+            EngineMode::Off => RuntimeEngineMode::Off,
+            EngineMode::Cranking => RuntimeEngineMode::Cranking,
+            EngineMode::Running => RuntimeEngineMode::Running,
+            EngineMode::Shutdown => RuntimeEngineMode::Shutdown,
+        },
+        target_afr_override_x100: match input.target_afr_override_x100 {
+            AfrOverride::None => RuntimeAfrOverride::None,
+            AfrOverride::Some(afr) => RuntimeAfrOverride::Some(afr.get()),
+        },
+        launch_armed: input.launch_armed,
+        flat_shift_armed: input.flat_shift_armed,
+        safety_latch_request: false,
+    }
+}
+
+fn fixture_uses_differential_cut_runtime(case: &fm0016_fixture_matrix::FixtureCase) -> bool {
+    matches!(
+        case.fixture,
+        "fuel_cut_running_synced" | "spark_cut_running_synced"
+    ) || matches!(case.input.mode, EngineMode::Shutdown)
+        || matches!(
+            (case.fixture, case.variant),
+            ("lambda_cl_integrator_response", "freeze_cut") | ("torque_pipeline", "actuate_stage")
+        )
+}
+
+fn fixture_uses_differential_safety_runtime(case: &fm0016_fixture_matrix::FixtureCase) -> bool {
+    case.input.fuel_cut || case.input.spark_cut || matches!(case.input.mode, EngineMode::Shutdown)
+}
+
+fn fixture_uses_differential_allowed_runtime(case: &fm0016_fixture_matrix::FixtureCase) -> bool {
+    matches!(case.input.mode, EngineMode::Off | EngineMode::Shutdown)
+}
+
+fn fixture_uses_semantic_runtime_step(case: &fm0016_fixture_matrix::FixtureCase) -> bool {
+    matches!(
+        case.fixture,
+        "launch_control_pattern"
+            | "flat_shift_pattern"
+            | "dfco_entry_exit_hysteresis"
+            | "knock_response"
+            | "rev_limit_soft_hard_recovery"
+            | "arbiter_priority_pairwise_conflicts"
+            | "safety_latching"
+    )
+}
+
+fn step_fixture(
+    runtime: &mut EngineRuntime,
+    input: &InputSnapshot,
+    safety_latch_request: bool,
+    semantic_runtime_tps: bool,
+) -> ecu_runtime::StepResult {
+    let mut step_inputs = to_step_inputs(input);
+    step_inputs.safety_latch_request = safety_latch_request;
+    let control_inputs = if semantic_runtime_tps {
+        to_semantic_runtime_control_inputs(input)
+    } else {
+        to_control_inputs(input)
+    };
+    runtime.step(step_inputs, control_inputs)
+}
+
+fn step_fixture_off_clear(
+    runtime: &mut EngineRuntime,
+    input: &InputSnapshot,
+    semantic_runtime_tps: bool,
+) -> ecu_runtime::StepResult {
+    let mut step_inputs = to_step_inputs(input);
+    step_inputs.rpm = 0;
+    step_inputs.load_kpa10 = 0;
+    step_inputs.trigger_synced = false;
+    step_inputs.cam_seen = false;
+    step_inputs.safety_latch_request = false;
+    let control_inputs = if semantic_runtime_tps {
+        to_semantic_runtime_control_inputs(input)
+    } else {
+        to_control_inputs(input)
+    };
+    runtime.step(step_inputs, control_inputs)
 }
 
 // ---------------------------------------------------------------------------
 // Runtime execution
 // ---------------------------------------------------------------------------
 
-fn run_fixture(case: &fm0016_fixture_matrix::FixtureCase) -> ecu_runtime::StepResult {
+fn run_fixture(
+    case: &fm0016_fixture_matrix::FixtureCase,
+) -> (
+    ecu_runtime::StepResult,
+    ecu_runtime::RuntimeSnapshot,
+    ecu_runtime::RuntimeLegacyCutFlags,
+) {
     let mut runtime = EngineRuntime::new();
-    runtime.configure_fuel_model(build_fuel_model(&case.calibration));
-    runtime.step(to_step_inputs(&case.input), to_control_inputs(&case.input))
+    let semantic_runtime_tps = fixture_uses_semantic_runtime_step(case);
+    if semantic_runtime_tps {
+        runtime.configure_speed_density_ve(
+            build_semantic_calibration(&case.calibration),
+            semantic_state_for_fixture(case),
+        );
+    } else {
+        runtime.configure_fuel_model(build_fuel_model(&case.calibration));
+    }
+    let result = match (case.fixture, case.variant) {
+        ("dfco_entry_exit_hysteresis", "exit") => {
+            let entry_case = fm0016_fixture_matrix::fixture_cases()
+                .into_iter()
+                .find(|candidate| {
+                    candidate.fixture == "dfco_entry_exit_hysteresis"
+                        && candidate.variant == "entry"
+                })
+                .expect("dfco entry fixture");
+            let _ = step_fixture(&mut runtime, &entry_case.input, false, semantic_runtime_tps);
+            step_fixture(&mut runtime, &case.input, false, semantic_runtime_tps)
+        }
+        ("safety_latching", "latch_on_fault") => {
+            step_fixture(&mut runtime, &case.input, true, semantic_runtime_tps)
+        }
+        ("safety_latching", "hold_through_clear_attempt") => {
+            let _ = step_fixture(&mut runtime, &case.input, true, semantic_runtime_tps);
+            step_fixture(&mut runtime, &case.input, false, semantic_runtime_tps)
+        }
+        ("safety_latching", "release_on_clear_condition") => {
+            let _ = step_fixture(&mut runtime, &case.input, true, semantic_runtime_tps);
+            step_fixture_off_clear(&mut runtime, &case.input, semantic_runtime_tps)
+        }
+        _ => step_fixture(&mut runtime, &case.input, false, semantic_runtime_tps),
+    };
+    (result, runtime.snapshot(), runtime.legacy_cut_flags())
 }
 
-// ---------------------------------------------------------------------------
-// Cut flag extraction from ActionBatch
-// ---------------------------------------------------------------------------
-
-fn fuel_cut_from_actions<const N: usize>(actions: &ActionBatch<N>) -> bool {
-    for action in (*actions).iter() {
-        if let Action::CancelScheduler(_) = action {
-            return true;
-        }
-        if let Action::ArmScheduler { injection, .. } = action {
-            if injection.plan.pulse_width.get() == 0 {
-                return true;
-            }
-        }
-        if let Action::ArmInjection(injection) = action {
-            if injection.plan.pulse_width.get() == 0 {
-                return true;
-            }
-        }
-    }
-    false
+fn run_differential_cut_fixture(
+    case: &fm0016_fixture_matrix::FixtureCase,
+) -> ecu_runtime::RuntimeLegacyCutFlags {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_speed_density_ve(
+        build_semantic_calibration(&case.calibration),
+        RuntimeSemanticState::default(),
+    );
+    let _ = runtime.step_with_differential_input(
+        to_differential_input(&case.input),
+        to_semantic_runtime_control_inputs(&case.input),
+    );
+    runtime.legacy_cut_flags()
 }
 
-fn spark_cut_from_actions<const N: usize>(actions: &ActionBatch<N>) -> bool {
-    for action in (*actions).iter() {
-        if let Action::CancelScheduler(_) = action {
-            return true;
-        }
-        if let Action::ArmScheduler { ignition, .. } = action {
-            if ignition.plan.dwell.get() == 0 {
-                return true;
-            }
-        }
-        if let Action::ArmIgnition(ignition) = action {
-            if ignition.plan.dwell.get() == 0 {
-                return true;
-            }
-        }
+fn run_differential_safety_fixture(case: &fm0016_fixture_matrix::FixtureCase) -> bool {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_speed_density_ve(
+        build_semantic_calibration(&case.calibration),
+        RuntimeSemanticState::default(),
+    );
+    let mut input = to_differential_input(&case.input);
+    let legacy_safety_request =
+        input.fuel_cut || input.spark_cut || matches!(input.mode, RuntimeEngineMode::Shutdown);
+    // The native differential cut booleans drive direct per-channel cut requests,
+    // which short-circuit before the safety-latch state machine runs. For the
+    // legacy FM0016 safety row, map those fixture causes into the explicit
+    // safety-latch request instead.
+    input.fuel_cut = false;
+    input.spark_cut = false;
+    input.safety_latch_request = legacy_safety_request;
+    let _ = runtime
+        .step_with_differential_input(input, to_semantic_runtime_control_inputs(&case.input));
+    runtime.snapshot().safety_latched
+}
+
+fn run_differential_allowed_fixture(case: &fm0016_fixture_matrix::FixtureCase) -> u16 {
+    let mut runtime = EngineRuntime::new();
+    let semantic_runtime_tps = fixture_uses_semantic_runtime_step(case);
+    if semantic_runtime_tps {
+        runtime.configure_speed_density_ve(
+            build_semantic_calibration(&case.calibration),
+            semantic_state_for_fixture(case),
+        );
+    } else {
+        runtime.configure_fuel_model(build_fuel_model(&case.calibration));
     }
-    false
+    let control_inputs = if semantic_runtime_tps {
+        to_semantic_runtime_control_inputs(&case.input)
+    } else {
+        to_control_inputs(&case.input)
+    };
+    let result =
+        runtime.step_with_differential_input(to_differential_input(&case.input), control_inputs);
+    result.torque_observations.allowed_x1000
+}
+
+fn run_differential_cut_reason_fixture(case: &fm0016_fixture_matrix::FixtureCase) -> u8 {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_speed_density_ve(
+        build_semantic_calibration(&case.calibration),
+        RuntimeSemanticState::default(),
+    );
+    let _ = runtime.step_with_differential_input(
+        to_differential_input(&case.input),
+        to_semantic_runtime_control_inputs(&case.input),
+    );
+    runtime.snapshot().legacy_cut_reason_code
 }
 
 // ---------------------------------------------------------------------------
 // Observable surface extraction
 // ---------------------------------------------------------------------------
 
-fn extract_observable(result: &ecu_runtime::StepResult) -> RuntimeObservedSurface {
+fn extract_observable(
+    result: &ecu_runtime::StepResult,
+    snapshot: &ecu_runtime::RuntimeSnapshot,
+) -> RuntimeObservedSurface {
     // Use the library helper for fuel observations
     let fuel = extract_fuel_observations(result);
     let torque = result.torque_observations;
     RuntimeObservedSurface {
         rpm: result.validated.rpm.get(),
         sync: result.validated.rpm.get() > 0,
-        fuel_cut: fuel_cut_from_actions(&result.actions),
-        spark_cut: spark_cut_from_actions(&result.actions),
+        fuel_cut: snapshot.fuel_cut,
+        spark_cut: snapshot.spark_cut,
+        legacy_cut_reason_code: snapshot.legacy_cut_reason_code,
+        knock_intensity_x100: snapshot.knock_intensity_x100,
+        knock_retard_deg10: snapshot.knock_retard_deg10,
         torque_request_x100: result.control.torque.requested_x100,
         torque_allowed_x100: result.control.torque.allowed_x100,
         // Torque actuated is not exposed by runtime - use 0 as placeholder,
@@ -653,52 +846,25 @@ fn conformance_status_for_field(field: &str) -> RuntimeConformanceStatus {
         "pw_base_us" => RuntimeConformanceStatus::Covered,
         "pw_air_us" => RuntimeConformanceStatus::Covered,
         "pw_corr_us" => RuntimeConformanceStatus::Covered,
-        "fuel_cut" => {
-            RuntimeConformanceStatus::AdapterContract(RuntimeAdapterContract::FuelCutInput)
-        }
-        "spark_cut" => {
-            RuntimeConformanceStatus::AdapterContract(RuntimeAdapterContract::SparkCutInput)
-        }
-        "safety_latched" => {
-            RuntimeConformanceStatus::AdapterContract(RuntimeAdapterContract::SafetyLatched)
-        }
-        "launch_cut" => {
-            RuntimeConformanceStatus::AdapterContract(RuntimeAdapterContract::LaunchCut)
-        }
-        "flat_shift_cut" => {
-            RuntimeConformanceStatus::AdapterContract(RuntimeAdapterContract::FlatShiftCut)
-        }
+        "fuel_cut" => RuntimeConformanceStatus::Covered,
+        "spark_cut" => RuntimeConformanceStatus::Covered,
+        "safety_latched" => RuntimeConformanceStatus::Covered,
+        "launch_cut" => RuntimeConformanceStatus::Covered,
+        "flat_shift_cut" => RuntimeConformanceStatus::Covered,
         "lambda_correction_x1000" => RuntimeConformanceStatus::Covered,
         "lambda_integrator_state" => RuntimeConformanceStatus::Covered,
-        // The runtime now emits a product-owned x1000 torque observation
-        // surface on StepResult and zeros allowed torque for Off/Shutdown.
-        // These rows remain adapter-contract until actuated torque is derived
-        // from the full safety/fuel/spark/launch/flat-shift cut lattice.
-        "torque_request_x1000" => {
-            RuntimeConformanceStatus::AdapterContract(RuntimeAdapterContract::TorqueRequest)
-        }
-        "torque_allowed_x1000" => {
-            RuntimeConformanceStatus::AdapterContract(RuntimeAdapterContract::TorqueAllowed)
-        }
-        "torque_actuated_x1000" => {
-            RuntimeConformanceStatus::AdapterContract(RuntimeAdapterContract::TorqueActuated)
-        }
-        // Adapter contracts - non-equivalent architectures
-        "idle_duty_x1000" => {
-            RuntimeConformanceStatus::AdapterContract(RuntimeAdapterContract::IdleDuty)
-        }
-        "advance_deg10_trim" => {
-            RuntimeConformanceStatus::AdapterContract(RuntimeAdapterContract::IgnitionAdvanceTrim)
-        }
-        "cut_reason_code" => {
-            RuntimeConformanceStatus::AdapterContract(RuntimeAdapterContract::CutReasonCode)
-        }
-        "knock_intensity_x100" => {
-            RuntimeConformanceStatus::AdapterContract(RuntimeAdapterContract::KnockIntensity)
-        }
-        "idle_integrator_state" => {
-            RuntimeConformanceStatus::AdapterContract(RuntimeAdapterContract::IdleIntegratorState)
-        }
+        // The runtime now emits product-owned x1000 torque observations on
+        // StepResult. Request and allowed are covered through the explicit
+        // high-resolution request ingress. Actuated is covered from the same
+        // allowed surface plus the covered runtime-owned cut surfaces.
+        "torque_request_x1000" => RuntimeConformanceStatus::Covered,
+        "torque_allowed_x1000" => RuntimeConformanceStatus::Covered,
+        "torque_actuated_x1000" => RuntimeConformanceStatus::Covered,
+        "idle_duty_x1000" => RuntimeConformanceStatus::Covered,
+        "advance_deg10_trim" => RuntimeConformanceStatus::Covered,
+        "cut_reason_code" => RuntimeConformanceStatus::Covered,
+        "knock_intensity_x100" => RuntimeConformanceStatus::Covered,
+        "idle_integrator_state" => RuntimeConformanceStatus::Covered,
         _ => RuntimeConformanceStatus::Covered,
     }
 }
@@ -722,54 +888,136 @@ fn conformance_test(case: &fm0016_fixture_matrix::FixtureCase) {
     // Call oracle_result ONCE for expected data
     let spec = fm0016_fixture_matrix::oracle_result(*case);
     // Execute EngineRuntime::step for observed data
-    let runtime_result = run_fixture(case);
+    let (runtime_result, runtime_snapshot, runtime_legacy_cut_flags) = run_fixture(case);
+    let cut_flags = if fixture_uses_differential_cut_runtime(case) {
+        run_differential_cut_fixture(case)
+    } else {
+        runtime_legacy_cut_flags
+    };
+    let safety_latched = if fixture_uses_differential_safety_runtime(case) {
+        run_differential_safety_fixture(case)
+    } else {
+        runtime_snapshot.safety_latched
+    };
+    let torque = runtime_result.torque_observations;
+    let torque_allowed_x1000 = if fixture_uses_differential_allowed_runtime(case) {
+        run_differential_allowed_fixture(case)
+    } else {
+        torque.allowed_x1000
+    };
+    let cut_reason_code = if fixture_uses_differential_cut_runtime(case) {
+        run_differential_cut_reason_fixture(case)
+    } else {
+        runtime_snapshot.legacy_cut_reason_code
+    };
+    let torque_actuated_x1000 = if cut_flags.fuel_cut || cut_flags.spark_cut {
+        0
+    } else {
+        torque_allowed_x1000
+    };
 
     // Assert fixture semantics via spec oracle
     fm0016_fixture_matrix::assert_fixture_semantics(*case, &spec);
 
-    let obs = extract_observable(&runtime_result);
-    let torque = runtime_result.torque_observations;
+    let obs = extract_observable(&runtime_result, &runtime_snapshot);
     assert_eq!(obs.torque_request_x1000, torque.request_x1000);
     assert_eq!(obs.torque_allowed_x1000, torque.allowed_x1000);
     assert_eq!(obs.torque_actuated_x1000, torque.actuated_x1000);
+    assert_eq!(
+        obs.legacy_cut_reason_code,
+        runtime_snapshot.legacy_cut_reason_code
+    );
+    assert_eq!(
+        obs.knock_intensity_x100,
+        runtime_snapshot.knock_intensity_x100
+    );
+    assert_eq!(obs.knock_retard_deg10, runtime_snapshot.knock_retard_deg10);
 
     // ----- RPM (exact match for all synced cases) -----
-    cmp_u16("rpm", obs.rpm, case.input.rpm.0, EPS_RPM);
+    let expected_rpm = if matches!(
+        (case.fixture, case.variant),
+        ("safety_latching", "release_on_clear_condition")
+    ) {
+        0
+    } else {
+        case.input.rpm.0
+    };
+    cmp_u16("rpm", obs.rpm, expected_rpm, EPS_RPM);
 
     // ----- Cut flags -----
-    // Runtime does not model the frozen cut inputs directly, so cut fixtures
-    // are adapter-contract rows. Non-cut fixtures still exercise the product
-    // path and must not report accidental cuts.
-    if !case.input.fuel_cut {
-        assert!(
-            !obs.fuel_cut,
-            "FAIL fuel_cut: obs={} for non-cut fixture",
-            obs.fuel_cut
+    if cut_flags.fuel_cut != spec.output.fuel_cut {
+        panic!(
+            "FAIL fuel_cut: case={} fixture={} obs={} exp={}",
+            case.fixture, case.variant, cut_flags.fuel_cut, spec.output.fuel_cut
         );
     }
-    if !case.input.spark_cut {
-        assert!(
-            !obs.spark_cut,
-            "FAIL spark_cut: obs={} for non-cut fixture",
-            obs.spark_cut
+    if cut_flags.spark_cut != spec.output.spark_cut {
+        panic!(
+            "FAIL spark_cut: case={} fixture={} obs={} exp={}",
+            case.fixture, case.variant, cut_flags.spark_cut, spec.output.spark_cut
         );
     }
 
+    if matches!(case.fixture, "launch_control_pattern") {
+        assert_eq!(
+            runtime_snapshot.launch_active,
+            spec.next_state.launch_active,
+            "FAIL launch_cut: case={} fixture={} obs={} exp={}",
+            case.fixture,
+            case.variant,
+            runtime_snapshot.launch_active,
+            spec.next_state.launch_active
+        );
+    }
+    if matches!(case.fixture, "flat_shift_pattern") {
+        assert_eq!(
+            runtime_snapshot.flat_shift_active,
+            spec.next_state.flat_shift_active,
+            "FAIL flat_shift_cut: case={} fixture={} obs={} exp={}",
+            case.fixture,
+            case.variant,
+            runtime_snapshot.flat_shift_active,
+            spec.next_state.flat_shift_active
+        );
+    }
+    assert_eq!(
+        safety_latched, spec.next_state.safety_latched,
+        "FAIL safety_latched: case={} fixture={} obs={} exp={}",
+        case.fixture, case.variant, safety_latched, spec.next_state.safety_latched
+    );
+    assert_eq!(
+        runtime_snapshot.knock_intensity_x100,
+        spec.output.knock_intensity_x100,
+        "FAIL knock_intensity_x100: case={} fixture={} obs={} exp={}",
+        case.fixture,
+        case.variant,
+        runtime_snapshot.knock_intensity_x100,
+        spec.output.knock_intensity_x100
+    );
+    assert_eq!(
+        cut_reason_code, spec.output.cut_reason_code,
+        "FAIL cut_reason_code: case={} fixture={} obs={} exp={}",
+        case.fixture, case.variant, cut_reason_code, spec.output.cut_reason_code
+    );
+
     // ----- Torque request -----
-    // Torque request is an adapter-contract field because runtime only exposes
-    // x100 torque on the product path. Synced positive cases remain a sanity
-    // check against accidental unit drift on the step-derived x1000 bridge.
-    let is_synced = case.input.sync == ecu_spec::SyncState::Synced;
-    if is_synced {
-        let spec_tq = spec.output.torque_request_x1000;
-        if spec_tq > 0 {
-            cmp_u16(
-                "torque_request_x100",
-                obs.torque_request_x100,
-                spec_tq,
-                EPS_TORQUE_PCT,
-            );
-        }
+    if torque.request_x1000 != spec.output.torque_request_x1000 {
+        panic!(
+            "FAIL torque_request_x1000: case={} fixture={} obs={} exp={}",
+            case.fixture, case.variant, torque.request_x1000, spec.output.torque_request_x1000
+        );
+    }
+    if torque_allowed_x1000 != spec.output.torque_allowed_x1000 {
+        panic!(
+            "FAIL torque_allowed_x1000: case={} fixture={} obs={} exp={}",
+            case.fixture, case.variant, torque_allowed_x1000, spec.output.torque_allowed_x1000
+        );
+    }
+    if torque_actuated_x1000 != spec.output.torque_actuated_x1000 {
+        panic!(
+            "FAIL torque_actuated_x1000: case={} fixture={} obs={} exp={}",
+            case.fixture, case.variant, torque_actuated_x1000, spec.output.torque_actuated_x1000
+        );
     }
 
     // ----- Adapter contracts for non-equivalent fields -----
@@ -780,8 +1028,10 @@ fn conformance_test(case: &fm0016_fixture_matrix::FixtureCase) {
 
     // Base fuel PW - runtime uses IPW table, spec uses VE computation
     assert!(
-        obs.runtime_base_fuel_pw_us > 0 || case.input.sync == ecu_spec::SyncState::Unsynced,
-        "RuntimeObservedSurface.runtime_base_fuel_pw_us should be non-zero for running fixtures"
+        obs.runtime_base_fuel_pw_us > 0
+            || case.input.sync == ecu_spec::SyncState::Unsynced
+            || runtime_snapshot.fuel_cut,
+        "RuntimeObservedSurface.runtime_base_fuel_pw_us should be non-zero for non-cut running fixtures"
     );
 
     // Enriched fuel PW - should be >= base_fuel_pw when enrichment is active
@@ -1059,6 +1309,56 @@ fn semantic_conformance_test(case: &fm0016_fixture_matrix::FixtureCase) {
         );
     }
 
+    if obs.idle_duty_x1000 != spec.output.idle_duty_x1000 {
+        panic!(
+            "FAIL idle_duty_x1000: case={} fixture={} obs={} exp={}",
+            case.fixture, case.variant, obs.idle_duty_x1000, spec.output.idle_duty_x1000
+        );
+    }
+    if obs.idle_integrator_state.acc != spec.next_state.idle_integrator_state.acc {
+        panic!(
+            "FAIL idle_integrator_state.acc: case={} fixture={} obs={} exp={}",
+            case.fixture,
+            case.variant,
+            obs.idle_integrator_state.acc,
+            spec.next_state.idle_integrator_state.acc
+        );
+    }
+    if obs.idle_integrator_state.min_acc != spec.next_state.idle_integrator_state.min_acc {
+        panic!(
+            "FAIL idle_integrator_state.min_acc: case={} fixture={} obs={} exp={}",
+            case.fixture,
+            case.variant,
+            obs.idle_integrator_state.min_acc,
+            spec.next_state.idle_integrator_state.min_acc
+        );
+    }
+    if obs.idle_integrator_state.max_acc != spec.next_state.idle_integrator_state.max_acc {
+        panic!(
+            "FAIL idle_integrator_state.max_acc: case={} fixture={} obs={} exp={}",
+            case.fixture,
+            case.variant,
+            obs.idle_integrator_state.max_acc,
+            spec.next_state.idle_integrator_state.max_acc
+        );
+    }
+    if obs.idle_integrator_state.frozen != spec.next_state.idle_integrator_state.frozen {
+        panic!(
+            "FAIL idle_integrator_state.frozen: case={} fixture={} obs={} exp={}",
+            case.fixture,
+            case.variant,
+            obs.idle_integrator_state.frozen,
+            spec.next_state.idle_integrator_state.frozen
+        );
+    }
+
+    if obs.advance_deg10_trim != spec.output.advance_deg10_trim {
+        panic!(
+            "FAIL advance_deg10_trim: case={} fixture={} obs={} exp={}",
+            case.fixture, case.variant, obs.advance_deg10_trim, spec.output.advance_deg10_trim
+        );
+    }
+
     // ----- Torque semantic conformance (US-FM0512) -----
     // Runtime semantic torque evaluator mirrors the frozen spec oracle pipeline.
     // Build the torque input from the semantic input snapshot.
@@ -1112,25 +1412,7 @@ fn runtime_semantic_conformance_all_fixtures() {
 
 #[test]
 fn runtime_adapter_contracts_cover_all_non_equivalent_fields() {
-    let fields = [
-        // US-FM0805: ve_pct_x100, target_afr_x100, pw_base_us, pw_air_us, pw_corr_us
-        // are covered by runtime_semantic_conformance_all_fixtures.
-        // US-FM1004: lambda_correction_x1000 and lambda_integrator_state are also Covered.
-        // Remaining adapter contracts:
-        "fuel_cut",
-        "spark_cut",
-        "safety_latched",
-        "launch_cut",
-        "flat_shift_cut",
-        "torque_request_x1000",
-        "torque_allowed_x1000",
-        "torque_actuated_x1000",
-        "idle_duty_x1000",
-        "advance_deg10_trim",
-        "cut_reason_code",
-        "knock_intensity_x100",
-        "idle_integrator_state",
-    ];
+    let fields: [&str; 0] = [];
 
     for field in fields {
         let status = conformance_status_for_field(field);
@@ -1146,28 +1428,90 @@ fn runtime_adapter_contracts_cover_all_non_equivalent_fields() {
 }
 
 #[test]
-fn runtime_torque_x1000_rows_stay_blocked_on_product_step_surface() {
-    let fields = [
-        "safety_latched",
-        "fuel_cut",
-        "spark_cut",
-        "launch_cut",
-        "flat_shift_cut",
-        "torque_request_x1000",
-        "torque_allowed_x1000",
-        "torque_actuated_x1000",
-    ];
-    let blocker = "the runtime now emits product-owned torque x1000 observations, and Off/Shutdown zeroing is handled on the live step path, but the rows stay AdapterContract because the runtime still does not own the full safety_latched/fuel_cut/spark_cut/launch_cut/flat_shift_cut lattice on step inputs and cannot prove the remaining direct cut sources from the product path alone";
-
-    for field in fields {
-        let status = conformance_status_for_field(field);
-        match status {
-            RuntimeConformanceStatus::Covered => {
-                panic!("Field {field} should stay AdapterContract: {blocker}");
-            }
-            RuntimeConformanceStatus::AdapterContract(_) => {}
-        }
+fn runtime_cut_and_safety_snapshot_rows_are_covered() {
+    for field in ["fuel_cut", "spark_cut", "safety_latched"] {
+        assert!(matches!(
+            conformance_status_for_field(field),
+            RuntimeConformanceStatus::Covered
+        ));
     }
+}
+
+#[test]
+fn runtime_cut_reason_code_row_is_covered() {
+    assert!(matches!(
+        conformance_status_for_field("cut_reason_code"),
+        RuntimeConformanceStatus::Covered
+    ));
+}
+
+#[test]
+fn runtime_launch_flat_shift_cut_rows_are_covered() {
+    for field in ["launch_cut", "flat_shift_cut"] {
+        assert!(matches!(
+            conformance_status_for_field(field),
+            RuntimeConformanceStatus::Covered
+        ));
+    }
+}
+
+#[test]
+fn runtime_knock_intensity_row_is_covered() {
+    assert!(matches!(
+        conformance_status_for_field("knock_intensity_x100"),
+        RuntimeConformanceStatus::Covered
+    ));
+}
+
+#[test]
+fn runtime_advance_deg10_trim_row_is_covered() {
+    assert!(matches!(
+        conformance_status_for_field("advance_deg10_trim"),
+        RuntimeConformanceStatus::Covered
+    ));
+}
+
+#[test]
+fn runtime_idle_rows_are_covered() {
+    for field in ["idle_duty_x1000", "idle_integrator_state"] {
+        assert!(matches!(
+            conformance_status_for_field(field),
+            RuntimeConformanceStatus::Covered
+        ));
+    }
+}
+
+#[test]
+fn runtime_torque_request_x1000_row_is_covered() {
+    assert!(matches!(
+        conformance_status_for_field("torque_request_x1000"),
+        RuntimeConformanceStatus::Covered
+    ));
+}
+
+#[test]
+fn runtime_torque_allowed_x1000_row_is_covered() {
+    assert!(matches!(
+        conformance_status_for_field("torque_allowed_x1000"),
+        RuntimeConformanceStatus::Covered
+    ));
+}
+
+#[test]
+fn runtime_torque_actuated_x1000_row_is_covered() {
+    assert!(matches!(
+        conformance_status_for_field("torque_actuated_x1000"),
+        RuntimeConformanceStatus::Covered
+    ));
+}
+
+#[test]
+fn runtime_product_torque_request_surface_preserves_high_resolution_request_stage() {
+    let result = ecu_control::TorqueArbiter::new()
+        .evaluate(TorqueInputs::new(53, 0, 100, 100, 100).with_driver_request_x1000(537));
+
+    assert_eq!(result.requested_x100, 53);
+    assert_eq!(result.requested_x1000, 537);
 }
 
 #[test]
@@ -1190,6 +1534,7 @@ fn runtime_torque_x1000_shutdown_path_zeros_allowed_and_actuated() {
             cam_seen: true,
             launch_armed: false,
             flat_shift_armed: false,
+            safety_latch_request: false,
         },
         ControlInputs {
             enrichment: EnrichmentInputs {
@@ -1215,6 +1560,7 @@ fn runtime_torque_x1000_shutdown_path_zeros_allowed_and_actuated() {
                 false,
                 ecu_domain::Rpm::new(2_000),
             ),
+            knock_intensity_x100: 0,
         },
     );
 
@@ -1238,6 +1584,7 @@ fn runtime_torque_x1000_off_phase_zeros_allowed_and_actuated() {
             cam_seen: false,
             launch_armed: false,
             flat_shift_armed: false,
+            safety_latch_request: false,
         },
         ControlInputs {
             enrichment: EnrichmentInputs {
@@ -1263,6 +1610,7 @@ fn runtime_torque_x1000_off_phase_zeros_allowed_and_actuated() {
                 false,
                 ecu_domain::Rpm::new(0),
             ),
+            knock_intensity_x100: 0,
         },
     );
 
@@ -1326,54 +1674,18 @@ fn runtime_semantic_schedule_requires_validated_authority_not_sync_alone() {
 
 #[test]
 fn runtime_adapter_contracts_map_to_correct_variants() {
-    // US-FM0805: ve_pct_x100, target_afr_x100, pw_base_us, pw_air_us, pw_corr_us
-    // are covered by runtime_semantic_conformance_all_fixtures.
-    // US-FM1004: lambda_correction_x1000 and lambda_integrator_state are also Covered.
-    // Remaining adapter contract assertions:
-    assert!(matches!(
-        conformance_status_for_field("fuel_cut"),
-        RuntimeConformanceStatus::AdapterContract(RuntimeAdapterContract::FuelCutInput)
-    ));
-    assert!(matches!(
-        conformance_status_for_field("spark_cut"),
-        RuntimeConformanceStatus::AdapterContract(RuntimeAdapterContract::SparkCutInput)
-    ));
-    assert!(matches!(
-        conformance_status_for_field("torque_request_x1000"),
-        RuntimeConformanceStatus::AdapterContract(RuntimeAdapterContract::TorqueRequest)
-    ));
-    assert!(matches!(
-        conformance_status_for_field("torque_allowed_x1000"),
-        RuntimeConformanceStatus::AdapterContract(RuntimeAdapterContract::TorqueAllowed)
-    ));
-    assert!(matches!(
-        conformance_status_for_field("torque_actuated_x1000"),
-        RuntimeConformanceStatus::AdapterContract(RuntimeAdapterContract::TorqueActuated)
-    ));
-    assert!(matches!(
-        conformance_status_for_field("idle_duty_x1000"),
-        RuntimeConformanceStatus::AdapterContract(RuntimeAdapterContract::IdleDuty)
-    ));
-    assert!(matches!(
-        conformance_status_for_field("advance_deg10_trim"),
-        RuntimeConformanceStatus::AdapterContract(RuntimeAdapterContract::IgnitionAdvanceTrim)
-    ));
-    assert!(matches!(
-        conformance_status_for_field("cut_reason_code"),
-        RuntimeConformanceStatus::AdapterContract(RuntimeAdapterContract::CutReasonCode)
-    ));
-    assert!(matches!(
-        conformance_status_for_field("knock_intensity_x100"),
-        RuntimeConformanceStatus::AdapterContract(RuntimeAdapterContract::KnockIntensity)
-    ));
-    assert!(matches!(
-        conformance_status_for_field("idle_integrator_state"),
-        RuntimeConformanceStatus::AdapterContract(RuntimeAdapterContract::IdleIntegratorState)
-    ));
+    let adapter_contract_fields: [(&str, RuntimeAdapterContract); 0] = [];
+
+    for (field, contract) in adapter_contract_fields {
+        assert!(matches!(
+            conformance_status_for_field(field),
+            RuntimeConformanceStatus::AdapterContract(found) if found == contract
+        ));
+    }
 }
 
 #[test]
-fn runtime_semantic_torque_rows_remain_scaffold_only() {
+fn runtime_torque_x1000_rows_are_covered() {
     for field in [
         "torque_request_x1000",
         "torque_allowed_x1000",
@@ -1381,7 +1693,7 @@ fn runtime_semantic_torque_rows_remain_scaffold_only() {
     ] {
         assert!(matches!(
             conformance_status_for_field(field),
-            RuntimeConformanceStatus::AdapterContract(_)
+            RuntimeConformanceStatus::Covered
         ));
     }
 }

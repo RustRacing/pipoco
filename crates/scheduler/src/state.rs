@@ -2,6 +2,11 @@ use crate::{
     ChannelId, ExclusiveChannel, IgnitionPlan, InjectionPlan, Micros, OutputGroup, ScheduleError,
     TimedIgnitionPlan, TimedInjectionPlan,
 };
+use ecu_board_api::frontier::{
+    TimingIslandHorizonSequenceId as FrontierHorizonSequenceId,
+    TimingIslandPermitMask as FrontierPermitMask, TimingIslandStopReason as FrontierStopReason,
+    HEARTBEAT_EXPIRY_US as FRONTIER_HEARTBEAT_EXPIRY_US, MAX_HORIZON_US as FRONTIER_MAX_HORIZON_US,
+};
 
 /// High-level scheduler mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
@@ -18,6 +23,15 @@ pub struct SchedulerState {
     mode: SchedulerMode,
     active_groups: u8,
     reserved_channels: [u128; 4],
+    last_accepted_horizon_id: Option<FrontierHorizonSequenceId>,
+    last_accepted_horizon_start_us: Option<Micros>,
+    last_accepted_horizon_end_us: Option<Micros>,
+    active_horizon_id: Option<FrontierHorizonSequenceId>,
+    horizon_start_us: Option<Micros>,
+    horizon_end_us: Option<Micros>,
+    heartbeat_deadline_us: Option<Micros>,
+    active_permit_mask: FrontierPermitMask,
+    active_stop_reason: FrontierStopReason,
     injection_count: u8,
     ignition_count: u8,
     last_injection_start: Option<Micros>,
@@ -32,6 +46,15 @@ impl SchedulerState {
             mode: SchedulerMode::Idle,
             active_groups: 0,
             reserved_channels: [0; 4],
+            last_accepted_horizon_id: None,
+            last_accepted_horizon_start_us: None,
+            last_accepted_horizon_end_us: None,
+            active_horizon_id: None,
+            horizon_start_us: None,
+            horizon_end_us: None,
+            heartbeat_deadline_us: None,
+            active_permit_mask: FrontierPermitMask::NONE,
+            active_stop_reason: FrontierStopReason::None,
             injection_count: 0,
             ignition_count: 0,
             last_injection_start: None,
@@ -55,6 +78,42 @@ impl SchedulerState {
 
     pub const fn reserved_channels(self) -> [u128; 4] {
         self.reserved_channels
+    }
+
+    pub const fn last_accepted_horizon_id(self) -> Option<FrontierHorizonSequenceId> {
+        self.last_accepted_horizon_id
+    }
+
+    pub const fn last_accepted_horizon_start_us(self) -> Option<Micros> {
+        self.last_accepted_horizon_start_us
+    }
+
+    pub const fn last_accepted_horizon_end_us(self) -> Option<Micros> {
+        self.last_accepted_horizon_end_us
+    }
+
+    pub const fn active_horizon_id(self) -> Option<FrontierHorizonSequenceId> {
+        self.active_horizon_id
+    }
+
+    pub const fn horizon_start_us(self) -> Option<Micros> {
+        self.horizon_start_us
+    }
+
+    pub const fn horizon_end_us(self) -> Option<Micros> {
+        self.horizon_end_us
+    }
+
+    pub const fn heartbeat_deadline_us(self) -> Option<Micros> {
+        self.heartbeat_deadline_us
+    }
+
+    pub const fn active_permit_mask(self) -> FrontierPermitMask {
+        self.active_permit_mask
+    }
+
+    pub const fn active_stop_reason(self) -> FrontierStopReason {
+        self.active_stop_reason
     }
 
     pub const fn injection_count(self) -> u8 {
@@ -111,6 +170,7 @@ impl SchedulerState {
         self.reserved_channels = [0; 4];
         self.active_groups = 0;
         self.mode = SchedulerMode::Idle;
+        self.clear_live_frontier_state(FrontierStopReason::PermitDenied);
         self.refresh_counts();
     }
 
@@ -122,6 +182,7 @@ impl SchedulerState {
     }
 
     pub fn on_sync_loss(&mut self) {
+        self.clear_live_frontier_state(FrontierStopReason::SyncLost);
         self.suspend();
     }
 
@@ -137,7 +198,95 @@ impl SchedulerState {
     }
 
     pub fn on_hard_safety_shutdown(&mut self) {
+        self.clear_live_frontier_state(FrontierStopReason::TimingFault);
         self.suspend();
+    }
+
+    pub fn commit_horizon(
+        &mut self,
+        horizon_id: FrontierHorizonSequenceId,
+        horizon_start_us: Micros,
+        horizon_end_us: Micros,
+        heartbeat_deadline_us: Micros,
+        permit_mask: FrontierPermitMask,
+    ) -> bool {
+        if horizon_end_us.get() <= horizon_start_us.get() {
+            return false;
+        }
+        if horizon_end_us.get().saturating_sub(horizon_start_us.get())
+            > FRONTIER_MAX_HORIZON_US.get()
+        {
+            return false;
+        }
+        if self
+            .last_accepted_horizon_id
+            .is_some_and(|last| horizon_id <= last)
+        {
+            return false;
+        }
+
+        self.last_accepted_horizon_id = Some(horizon_id);
+        self.last_accepted_horizon_start_us = Some(horizon_start_us);
+        self.last_accepted_horizon_end_us = Some(horizon_end_us);
+        self.active_horizon_id = Some(horizon_id);
+        self.horizon_start_us = Some(horizon_start_us);
+        self.horizon_end_us = Some(horizon_end_us);
+        self.heartbeat_deadline_us = Some(heartbeat_deadline_us);
+        self.active_permit_mask = permit_mask;
+        self.active_stop_reason = FrontierStopReason::None;
+        true
+    }
+
+    pub fn note_heartbeat(&mut self, now: Micros) {
+        if self.active_horizon_id.is_some() {
+            self.heartbeat_deadline_us = Some(Micros::new(
+                now.get().saturating_add(FRONTIER_HEARTBEAT_EXPIRY_US.get()),
+            ));
+        }
+    }
+
+    pub fn expire_frontier(&mut self, now: Micros) {
+        self.expire_heartbeat(now);
+        self.expire_horizon(now);
+    }
+
+    pub fn clear_live_frontier_state(&mut self, stop_reason: FrontierStopReason) {
+        self.active_horizon_id = None;
+        self.horizon_start_us = None;
+        self.horizon_end_us = None;
+        self.heartbeat_deadline_us = None;
+        self.active_permit_mask = FrontierPermitMask::NONE;
+        self.active_stop_reason = stop_reason;
+    }
+
+    pub fn expire_heartbeat(&mut self, now: Micros) -> bool {
+        let Some(deadline) = self.heartbeat_deadline_us else {
+            return false;
+        };
+        if now.get() <= deadline.get() {
+            return false;
+        }
+
+        self.active_permit_mask = FrontierPermitMask::NONE;
+        if self.active_stop_reason == FrontierStopReason::None {
+            self.active_stop_reason = FrontierStopReason::HeartbeatExpired;
+        }
+        true
+    }
+
+    pub fn expire_horizon(&mut self, now: Micros) -> bool {
+        let Some(end_us) = self.horizon_end_us else {
+            return false;
+        };
+        if now.get() <= end_us.get() {
+            return false;
+        }
+
+        self.clear_live_frontier_state(match self.active_stop_reason {
+            FrontierStopReason::None => FrontierStopReason::HorizonExpired,
+            reason => reason,
+        });
+        true
     }
 
     pub fn schedule_injection(

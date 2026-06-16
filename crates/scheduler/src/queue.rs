@@ -1,3 +1,4 @@
+use crate::state::SchedulerState;
 use crate::{ChannelId, Micros, OutputGroup, ScheduleError, TimedIgnitionPlan, TimedInjectionPlan};
 
 /// Kind of scheduled output transition.
@@ -106,11 +107,41 @@ impl<const N: usize> Default for TransitionDrainBuffer<N> {
     }
 }
 
+/// Queue-owned timing metrics recorded by scheduler queue operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScheduledTimingMetrics {
+    pub late_event_count: u32,
+    pub max_lateness_us: Option<Micros>,
+    pub queue_high_water_mark: u8,
+    pub last_drain_count: u8,
+}
+
+impl ScheduledTimingMetrics {
+    pub const fn new() -> Self {
+        Self {
+            late_event_count: 0,
+            max_lateness_us: None,
+            queue_high_water_mark: 0,
+            last_drain_count: 0,
+        }
+    }
+}
+
+impl Default for ScheduledTimingMetrics {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Read-only queue observation for diagnostics and tests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScheduledTransitionQueueSnapshot<const N: usize> {
     pub len: u8,
     pub transitions: [Option<ScheduledTransition>; N],
+    pub late_event_count: u32,
+    pub max_lateness_us: Option<Micros>,
+    pub queue_high_water_mark: u8,
+    pub last_drain_count: u8,
 }
 
 /// Fixed-capacity transition queue for live scheduler execution.
@@ -120,6 +151,7 @@ pub struct ScheduledTransitionQueueSnapshot<const N: usize> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScheduledTransitionQueue<const N: usize> {
     transitions: [Option<ScheduledTransition>; N],
+    metrics: ScheduledTimingMetrics,
 }
 
 impl<const N: usize> ScheduledTransitionQueue<N> {
@@ -128,6 +160,7 @@ impl<const N: usize> ScheduledTransitionQueue<N> {
     pub const fn new() -> Self {
         Self {
             transitions: [None; N],
+            metrics: ScheduledTimingMetrics::new(),
         }
     }
 
@@ -141,6 +174,7 @@ impl<const N: usize> ScheduledTransitionQueue<N> {
         for slot in &mut self.transitions {
             if slot.is_none() {
                 *slot = Some(transition);
+                self.record_enqueue_metrics();
                 return Ok(());
             }
         }
@@ -170,10 +204,11 @@ impl<const N: usize> ScheduledTransitionQueue<N> {
         out: &mut TransitionDrainBuffer<M>,
     ) -> usize {
         out.clear();
-        let mut drained = 0;
         if !TransitionDrainBuffer::<M>::metadata_capacity_supported() {
-            return drained;
+            self.metrics.last_drain_count = 0;
+            return 0;
         }
+        let mut drained = 0;
         loop {
             if out.len as usize >= M {
                 break;
@@ -183,11 +218,30 @@ impl<const N: usize> ScheduledTransitionQueue<N> {
             };
             if let Some(transition) = self.transitions[idx].take() {
                 // Capacity was checked at the top of the loop.
+                self.record_drained_transition(now, transition);
                 let _ = out.push(transition);
                 drained += 1;
             }
         }
+        self.metrics.last_drain_count = drained as u8;
         drained
+    }
+
+    pub fn drain_due_with_frontier<const M: usize>(
+        &mut self,
+        now: Micros,
+        frontier: &mut SchedulerState,
+        out: &mut TransitionDrainBuffer<M>,
+    ) -> usize {
+        frontier.expire_frontier(now);
+        if frontier.active_horizon_id().is_none() || frontier.active_permit_mask().is_empty() {
+            self.cancel_all();
+            out.clear();
+            self.metrics.last_drain_count = 0;
+            return 0;
+        }
+
+        self.drain_due(now, out)
     }
 
     pub fn cancel_channel_after(&mut self, channel: ChannelId, cutoff: Micros) {
@@ -260,7 +314,15 @@ impl<const N: usize> ScheduledTransitionQueue<N> {
         ScheduledTransitionQueueSnapshot {
             len: self.active_count() as u8,
             transitions: self.transitions,
+            late_event_count: self.metrics.late_event_count,
+            max_lateness_us: self.metrics.max_lateness_us,
+            queue_high_water_mark: self.metrics.queue_high_water_mark,
+            last_drain_count: self.metrics.last_drain_count,
         }
+    }
+
+    pub const fn timing_metrics(&self) -> ScheduledTimingMetrics {
+        self.metrics
     }
 
     pub const fn metadata_capacity_supported() -> bool {
@@ -288,6 +350,29 @@ impl<const N: usize> ScheduledTransitionQueue<N> {
             }
         }
         selected.map(|(idx, _)| idx)
+    }
+
+    fn record_enqueue_metrics(&mut self) {
+        let active_count = self.active_count() as u8;
+        if active_count > self.metrics.queue_high_water_mark {
+            self.metrics.queue_high_water_mark = active_count;
+        }
+    }
+
+    fn record_drained_transition(&mut self, now: Micros, transition: ScheduledTransition) {
+        let lateness_us = now.get().wrapping_sub(transition.at_us.get());
+        if lateness_us == 0 {
+            return;
+        }
+
+        self.metrics.late_event_count = self.metrics.late_event_count.saturating_add(1);
+        let should_update = self
+            .metrics
+            .max_lateness_us
+            .is_none_or(|max_lateness| lateness_us > max_lateness.get());
+        if should_update {
+            self.metrics.max_lateness_us = Some(Micros::new(lateness_us));
+        }
     }
 }
 

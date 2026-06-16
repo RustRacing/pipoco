@@ -1,4 +1,4 @@
-use crate::test_support::observe_scheduler;
+use crate::test_support::{observe_scheduler, observe_scheduler_queue};
 use crate::*;
 use ecu_domain::Rpm;
 use ecu_spec::{
@@ -227,6 +227,190 @@ fn scheduler_state_transitions_between_modes() {
     state.cancel_group(OutputGroup::Injector);
     assert_eq!(state.mode(), SchedulerMode::Idle);
     assert!(!state.is_armed());
+}
+
+#[test]
+fn frontier_commit_tracks_one_live_horizon() {
+    let mut state = SchedulerState::new();
+    let permit_mask = ecu_board_api::frontier::TimingIslandPermitMask::new(
+        ecu_board_api::frontier::TimingIslandPermitMask::IGNITION
+            | ecu_board_api::frontier::TimingIslandPermitMask::INJECTOR,
+    );
+
+    assert!(state.commit_horizon(
+        7,
+        Micros::new(100),
+        Micros::new(400),
+        Micros::new(120),
+        permit_mask,
+    ));
+    assert_eq!(state.last_accepted_horizon_id(), Some(7));
+    assert_eq!(state.active_horizon_id(), Some(7));
+    assert_eq!(state.horizon_start_us(), Some(Micros::new(100)));
+    assert_eq!(state.horizon_end_us(), Some(Micros::new(400)));
+    assert_eq!(state.heartbeat_deadline_us(), Some(Micros::new(120)));
+    assert_eq!(state.active_permit_mask(), permit_mask);
+    assert_eq!(
+        state.active_stop_reason(),
+        ecu_board_api::frontier::TimingIslandStopReason::None
+    );
+
+    let observed = observe_scheduler(&state);
+    assert_eq!(observed.last_accepted_horizon_id, Some(7));
+    assert_eq!(observed.active_horizon_id, Some(7));
+    assert_eq!(observed.horizon_start_us, Some(Micros::new(100)));
+    assert_eq!(observed.horizon_end_us, Some(Micros::new(400)));
+    assert_eq!(observed.heartbeat_deadline_us, Some(Micros::new(120)));
+    assert_eq!(observed.active_permit_mask, permit_mask);
+    assert_eq!(
+        observed.active_stop_reason,
+        ecu_board_api::frontier::TimingIslandStopReason::None
+    );
+}
+
+#[test]
+fn stale_or_repeated_horizon_ids_are_ignored() {
+    let mut state = SchedulerState::new();
+    let permit_mask = ecu_board_api::frontier::TimingIslandPermitMask::new(
+        ecu_board_api::frontier::TimingIslandPermitMask::IGNITION,
+    );
+
+    assert!(state.commit_horizon(
+        11,
+        Micros::new(100),
+        Micros::new(300),
+        Micros::new(150),
+        permit_mask,
+    ));
+    assert!(!state.commit_horizon(
+        11,
+        Micros::new(200),
+        Micros::new(450),
+        Micros::new(250),
+        ecu_board_api::frontier::TimingIslandPermitMask::ALL,
+    ));
+    assert!(!state.commit_horizon(
+        10,
+        Micros::new(200),
+        Micros::new(450),
+        Micros::new(250),
+        ecu_board_api::frontier::TimingIslandPermitMask::ALL,
+    ));
+    assert_eq!(state.active_horizon_id(), Some(11));
+    assert_eq!(state.horizon_start_us(), Some(Micros::new(100)));
+    assert_eq!(state.horizon_end_us(), Some(Micros::new(300)));
+    assert_eq!(state.active_permit_mask(), permit_mask);
+}
+
+#[test]
+fn horizon_expiry_clears_live_authority() {
+    let mut state = SchedulerState::new();
+    assert!(state.commit_horizon(
+        12,
+        Micros::new(100),
+        Micros::new(180),
+        Micros::new(500),
+        ecu_board_api::frontier::TimingIslandPermitMask::ALL,
+    ));
+
+    state.expire_frontier(Micros::new(181));
+
+    assert_eq!(state.active_horizon_id(), None);
+    assert_eq!(state.horizon_start_us(), None);
+    assert_eq!(state.horizon_end_us(), None);
+    assert_eq!(state.heartbeat_deadline_us(), None);
+    assert_eq!(
+        state.active_stop_reason(),
+        ecu_board_api::frontier::TimingIslandStopReason::HorizonExpired
+    );
+    assert_eq!(
+        state.active_permit_mask(),
+        ecu_board_api::frontier::TimingIslandPermitMask::NONE
+    );
+    assert_eq!(state.last_accepted_horizon_id(), Some(12));
+}
+
+#[test]
+fn heartbeat_expiry_drops_permit_mask_to_deny_all() {
+    let mut state = SchedulerState::new();
+    let permit_mask = ecu_board_api::frontier::TimingIslandPermitMask::new(
+        ecu_board_api::frontier::TimingIslandPermitMask::IGNITION
+            | ecu_board_api::frontier::TimingIslandPermitMask::BOUNDED_AUX,
+    );
+
+    assert!(state.commit_horizon(
+        13,
+        Micros::new(100),
+        Micros::new(500),
+        Micros::new(130),
+        permit_mask,
+    ));
+
+    state.expire_frontier(Micros::new(131));
+    assert_eq!(
+        state.active_stop_reason(),
+        ecu_board_api::frontier::TimingIslandStopReason::HeartbeatExpired
+    );
+    assert_eq!(
+        state.active_permit_mask(),
+        ecu_board_api::frontier::TimingIslandPermitMask::NONE
+    );
+    assert_eq!(state.active_horizon_id(), Some(13));
+
+    state.expire_frontier(Micros::new(501));
+    assert_eq!(state.active_horizon_id(), None);
+    assert_eq!(
+        state.active_stop_reason(),
+        ecu_board_api::frontier::TimingIslandStopReason::HeartbeatExpired
+    );
+    assert_eq!(state.last_accepted_horizon_id(), Some(13));
+}
+
+#[test]
+fn sync_loss_and_hard_shutdown_clear_live_frontier_state() {
+    let mut state = SchedulerState::new();
+    assert!(state.commit_horizon(
+        14,
+        Micros::new(100),
+        Micros::new(250),
+        Micros::new(120),
+        ecu_board_api::frontier::TimingIslandPermitMask::ALL,
+    ));
+
+    state.on_sync_loss();
+    assert_eq!(state.active_horizon_id(), None);
+    assert_eq!(state.horizon_start_us(), None);
+    assert_eq!(state.horizon_end_us(), None);
+    assert_eq!(state.heartbeat_deadline_us(), None);
+    assert_eq!(
+        state.active_stop_reason(),
+        ecu_board_api::frontier::TimingIslandStopReason::SyncLost
+    );
+    assert_eq!(
+        state.active_permit_mask(),
+        ecu_board_api::frontier::TimingIslandPermitMask::NONE
+    );
+
+    assert!(state.commit_horizon(
+        15,
+        Micros::new(300),
+        Micros::new(500),
+        Micros::new(340),
+        ecu_board_api::frontier::TimingIslandPermitMask::ALL,
+    ));
+    state.on_hard_safety_shutdown();
+    assert_eq!(state.active_horizon_id(), None);
+    assert_eq!(state.horizon_start_us(), None);
+    assert_eq!(state.horizon_end_us(), None);
+    assert_eq!(state.heartbeat_deadline_us(), None);
+    assert_eq!(
+        state.active_stop_reason(),
+        ecu_board_api::frontier::TimingIslandStopReason::TimingFault
+    );
+    assert_eq!(
+        state.active_permit_mask(),
+        ecu_board_api::frontier::TimingIslandPermitMask::NONE
+    );
 }
 
 #[test]
@@ -660,6 +844,174 @@ fn transition_queue_saturates_at_max_pending_then_recovers_after_drain() {
         "queue must accept work again after draining"
     );
     assert_eq!(queue.active_count(), 1);
+}
+
+#[test]
+fn transition_queue_tracks_high_water_and_drain_counts() {
+    let mut queue = ScheduledTransitionQueue::<4>::new();
+    let first = ScheduledTransition {
+        at_us: Micros::new(100),
+        kind: ScheduledTransitionKind::Injector,
+        channel: ChannelId::new(0),
+        level: ScheduledLevel::High,
+    };
+    let second = ScheduledTransition {
+        at_us: Micros::new(120),
+        kind: ScheduledTransitionKind::Injector,
+        channel: ChannelId::new(1),
+        level: ScheduledLevel::High,
+    };
+
+    assert_eq!(queue.snapshot().queue_high_water_mark, 0);
+    queue.enqueue_transition(first).expect("first enqueue");
+    assert_eq!(queue.snapshot().queue_high_water_mark, 1);
+    queue.enqueue_transition(second).expect("second enqueue");
+    assert_eq!(queue.snapshot().queue_high_water_mark, 2);
+
+    let mut drained = TransitionDrainBuffer::<4>::new();
+    assert_eq!(queue.drain_due(Micros::new(200), &mut drained), 2);
+    assert_eq!(queue.snapshot().last_drain_count, 2);
+
+    assert_eq!(queue.drain_due(Micros::new(200), &mut drained), 0);
+    assert_eq!(queue.snapshot().last_drain_count, 0);
+}
+
+#[test]
+fn transition_queue_on_time_drain_leaves_late_metrics_unchanged() {
+    let mut queue = ScheduledTransitionQueue::<2>::new();
+    queue
+        .enqueue_transition(ScheduledTransition {
+            at_us: Micros::new(100),
+            kind: ScheduledTransitionKind::Ignition,
+            channel: ChannelId::new(0),
+            level: ScheduledLevel::Low,
+        })
+        .expect("transition enqueues");
+
+    let mut drained = TransitionDrainBuffer::<2>::new();
+    assert_eq!(queue.drain_due(Micros::new(100), &mut drained), 1);
+
+    let observed = observe_scheduler_queue(&queue);
+    assert_eq!(observed.late_event_count, 0);
+    assert_eq!(observed.max_lateness_us, None);
+    assert_eq!(observed.last_drain_count, 1);
+}
+
+#[test]
+fn transition_queue_late_drain_tracks_worst_lateness_across_drains() {
+    let mut queue = ScheduledTransitionQueue::<4>::new();
+    queue
+        .enqueue_transition(ScheduledTransition {
+            at_us: Micros::new(80),
+            kind: ScheduledTransitionKind::Injector,
+            channel: ChannelId::new(0),
+            level: ScheduledLevel::High,
+        })
+        .expect("first transition enqueues");
+    queue
+        .enqueue_transition(ScheduledTransition {
+            at_us: Micros::new(60),
+            kind: ScheduledTransitionKind::Ignition,
+            channel: ChannelId::new(1),
+            level: ScheduledLevel::High,
+        })
+        .expect("second transition enqueues");
+
+    let mut drained = TransitionDrainBuffer::<4>::new();
+    assert_eq!(queue.drain_due(Micros::new(120), &mut drained), 2);
+    let observed = queue.snapshot();
+    assert_eq!(observed.late_event_count, 2);
+    assert_eq!(observed.max_lateness_us, Some(Micros::new(60)));
+    assert_eq!(observed.last_drain_count, 2);
+
+    queue
+        .enqueue_transition(ScheduledTransition {
+            at_us: Micros::new(200),
+            kind: ScheduledTransitionKind::Injector,
+            channel: ChannelId::new(2),
+            level: ScheduledLevel::Low,
+        })
+        .expect("third transition enqueues");
+    assert_eq!(queue.drain_due(Micros::new(210), &mut drained), 1);
+    let observed = queue.snapshot();
+    assert_eq!(observed.late_event_count, 3);
+    assert_eq!(observed.max_lateness_us, Some(Micros::new(60)));
+    assert_eq!(observed.last_drain_count, 1);
+}
+
+#[test]
+fn transition_queue_frontier_drain_updates_metrics() {
+    let mut queue = ScheduledTransitionQueue::<4>::new();
+    let mut frontier = SchedulerState::new();
+
+    frontier.commit_horizon(
+        20,
+        Micros::new(100),
+        Micros::new(200),
+        Micros::new(150),
+        ecu_board_api::frontier::TimingIslandPermitMask::ALL,
+    );
+
+    queue
+        .enqueue_transition(ScheduledTransition {
+            at_us: Micros::new(110),
+            kind: ScheduledTransitionKind::Injector,
+            channel: ChannelId::new(0),
+            level: ScheduledLevel::High,
+        })
+        .expect("transition enqueues");
+
+    let mut drained = TransitionDrainBuffer::<4>::new();
+    assert_eq!(
+        queue.drain_due_with_frontier(Micros::new(120), &mut frontier, &mut drained),
+        1
+    );
+    let observed = queue.snapshot();
+    assert_eq!(observed.late_event_count, 1);
+    assert_eq!(observed.max_lateness_us, Some(Micros::new(10)));
+    assert_eq!(observed.last_drain_count, 1);
+
+    assert!(frontier.commit_horizon(
+        21,
+        Micros::new(300),
+        Micros::new(400),
+        Micros::new(310),
+        ecu_board_api::frontier::TimingIslandPermitMask::NONE,
+    ));
+    assert_eq!(
+        queue.drain_due_with_frontier(Micros::new(311), &mut frontier, &mut drained),
+        0
+    );
+    assert_eq!(queue.snapshot().last_drain_count, 0);
+}
+
+#[test]
+fn scheduler_state_cancel_all_clears_frontier_authority() {
+    let mut state = SchedulerState::new();
+    assert!(state.commit_horizon(
+        33,
+        Micros::new(100),
+        Micros::new(200),
+        Micros::new(150),
+        ecu_board_api::frontier::TimingIslandPermitMask::ALL,
+    ));
+
+    state.cancel_all();
+
+    let observed = observe_scheduler(&state);
+    assert_eq!(observed.mode, SchedulerMode::Idle);
+    assert_eq!(observed.active_horizon_id, None);
+    assert_eq!(observed.horizon_start_us, None);
+    assert_eq!(observed.horizon_end_us, None);
+    assert_eq!(observed.heartbeat_deadline_us, None);
+    assert_eq!(
+        observed.active_permit_mask,
+        ecu_board_api::frontier::TimingIslandPermitMask::NONE
+    );
+    assert_eq!(
+        observed.active_stop_reason,
+        ecu_board_api::frontier::TimingIslandStopReason::PermitDenied
+    );
 }
 
 #[test]

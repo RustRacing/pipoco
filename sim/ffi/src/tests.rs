@@ -237,8 +237,12 @@ fn snapshot_conversion_covers_non_default_diagnostics() {
         rev_hard_active: false,
         launch_active: true,
         flat_shift_active: false,
+        safety_latched: false,
         fuel_cut: true,
         spark_cut: false,
+        legacy_cut_reason_code: 3,
+        knock_intensity_x100: 0,
+        knock_retard_deg10: 0,
     };
     let snap = snapshot_from_runtime(runtime_snapshot, 42_000, 17, 3);
     assert_eq!(snap.fault_code, 2);

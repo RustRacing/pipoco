@@ -1,12 +1,12 @@
 use ecu_board_api::{
     legacy::{CalibrationPage, CalibrationStore},
-    AuxCommandBatch, AuxOutputSink, EcuClock, EcuOutput, EdgeBatch, OutputLevel, OutputScheduler,
-    OutputTransition, OutputTransitionBatch, RuntimeOutputProfile, SensorSnapshot, SensorSource,
-    TelemetryFrame, TelemetrySink, TriggerEdge, TriggerEdgeSource,
+    AuxCommandBatch, AuxOutputSink, EcuClock, EcuOutput, EdgeBatch, FullEcuOutputProfile,
+    OutputLevel, OutputScheduler, OutputTransition, OutputTransitionBatch, RuntimeOutputProfile,
+    SensorSnapshot, SensorSource, TelemetryFrame, TelemetrySink, TriggerEdge, TriggerEdgeSource,
 };
-use ecu_domain::{Micros, SyncState, Ticks};
-use ecu_runtime::compat::StepInputs;
-use ecu_runtime::{Action, BaseFuelModel, EngineRuntime};
+use ecu_domain::{CancelReason, FaultCode, FaultSeverity, Micros, SyncState, Ticks};
+use ecu_runtime::ingress::AuthorityStepInputs;
+use ecu_runtime::{Action, BaseFuelModel, EngineRuntime, RuntimeFuelStrategy};
 
 use super::bridge::bridge_output_transitions_to_core_frame;
 use super::io::{
@@ -30,6 +30,8 @@ pub struct X86RuntimeBoard {
     telemetry: RecordingTelemetrySink,
     calibration: FixedCalibrationStore,
     diagnostics: X86RuntimeBoardDiagnostics,
+    pending_launch_armed: bool,
+    pending_flat_shift_armed: bool,
 }
 
 impl Default for X86RuntimeBoard {
@@ -39,13 +41,16 @@ impl Default for X86RuntimeBoard {
 }
 
 impl X86RuntimeBoard {
-    pub fn new() -> Self {
+    fn default_runtime() -> EngineRuntime {
         let mut runtime = EngineRuntime::new();
         runtime.configure_output_profile(RuntimeOutputProfile::default());
         runtime.configure_fuel_model(BaseFuelModel::default());
+        runtime
+    }
 
+    pub fn new() -> Self {
         Self {
-            runtime,
+            runtime: Self::default_runtime(),
             clock: DeterministicClock::default(),
             trigger_edges: FixedTriggerEdgeSource::default(),
             sensors: FixedSensorSource::default(),
@@ -54,11 +59,42 @@ impl X86RuntimeBoard {
             telemetry: RecordingTelemetrySink::default(),
             calibration: FixedCalibrationStore::default(),
             diagnostics: X86RuntimeBoardDiagnostics::default(),
+            pending_launch_armed: false,
+            pending_flat_shift_armed: false,
         }
     }
 
     pub fn runtime_mut(&mut self) -> &mut EngineRuntime {
         &mut self.runtime
+    }
+
+    pub fn configure_fuel_model(&mut self, fuel_model: BaseFuelModel) {
+        self.runtime.configure_fuel_model(fuel_model);
+    }
+
+    pub fn configure_runtime_fuel_strategy(&mut self, strategy: RuntimeFuelStrategy) {
+        self.runtime.configure_runtime_fuel_model(strategy);
+    }
+
+    pub fn configure_full_ecu(&mut self, profile: FullEcuOutputProfile) {
+        self.runtime.configure_full_ecu(profile);
+    }
+
+    pub fn configure_batch_injection(&mut self, cylinders: u8) {
+        self.runtime.configure_batch_injection(cylinders);
+    }
+
+    pub fn configure_crank_only_wasted_spark(&mut self, coils: u8) {
+        self.runtime.configure_crank_only_wasted_spark(coils);
+    }
+
+    pub fn set_fault_state(
+        &mut self,
+        fault: FaultCode,
+        severity: FaultSeverity,
+        cancel_reason: CancelReason,
+    ) {
+        self.runtime.set_fault_state(fault, severity, cancel_reason);
     }
 
     pub fn set_clock(&mut self, now_us: Micros) {
@@ -71,6 +107,11 @@ impl X86RuntimeBoard {
 
     pub fn set_trigger_edges(&mut self, edges: &[TriggerEdge]) -> Result<(), X86RuntimeBoardError> {
         self.trigger_edges.set_edges(edges)
+    }
+
+    pub fn set_shift_arming(&mut self, launch_armed: bool, flat_shift_armed: bool) {
+        self.pending_launch_armed = launch_armed;
+        self.pending_flat_shift_armed = flat_shift_armed;
     }
 
     pub fn scheduled_outputs(&self) -> OutputTransitionBatch<X86_OUTPUT_TRANSITION_CAP> {
@@ -115,25 +156,18 @@ impl X86RuntimeBoard {
             sensor_snapshot.engine_time.summary,
             SyncState::Locked { .. }
         );
-        self.runtime
-            .set_engine_time_authority(sensor_snapshot.engine_time.authority);
-
-        let trigger_synced = matches!(
-            sensor_snapshot.engine_time.summary,
-            SyncState::Locked { .. }
-        ) && !drained_edges.is_empty();
         let control_inputs = baseline_control_inputs(now_us, sensor_snapshot.rpm);
-        let step_result = self.runtime.step(
-            StepInputs {
+        let step_result = self.runtime.step_with_authority(
+            AuthorityStepInputs::new(
                 now_us,
-                rpm: sensor_snapshot.rpm.get() as u32,
-                load_kpa10: sensor_snapshot.map.get() as u32,
-                angle_x10: 0,
-                trigger_synced,
-                cam_seen: trigger_synced,
-                launch_armed: false,
-                flat_shift_armed: false,
-            },
+                sensor_snapshot.rpm.get() as u32,
+                sensor_snapshot.map.get() as u32,
+                0,
+                sensor_snapshot.engine_time.authority,
+                self.pending_launch_armed,
+                self.pending_flat_shift_armed,
+                false,
+            ),
             control_inputs,
         );
 

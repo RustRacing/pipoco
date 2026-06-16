@@ -34,7 +34,7 @@ pub mod compat {
 pub mod support {
     pub use crate::observations::{
         extract_fuel_observations, extract_torque_observations, DifferentialInputSnapshot,
-        RuntimeAdapterContract, RuntimeObservedSurface,
+        RuntimeAdapterContract, RuntimeLegacyCutFlags, RuntimeObservedSurface,
     };
 }
 
@@ -57,8 +57,8 @@ pub use lowering::{
 pub use observations::{
     AuthorityStepInputs, CalibrationState, CamObservation, ControlInputs, ControlPlan,
     ControlState, DecoderObservation, EngineState, FaultState, RuntimeAfrOverride,
-    RuntimeEngineMode, RuntimeFuelObservations, RuntimeSnapshot, StepResult, TorqueObservations,
-    TriggerObservation, ValidatedInputs,
+    RuntimeEngineMode, RuntimeFuelObservations, RuntimeLegacyCutFlags, RuntimeSnapshot, StepResult,
+    TorqueObservations, TriggerObservation, ValidatedInputs,
 };
 pub use outputs::runtime_full_sequential_authorized;
 #[cfg(test)]
@@ -89,9 +89,9 @@ pub use ecu_control::{
     AccelerationConfig, AccelerationState, AfterStartConfig, AfterStartState, AllowedTorque,
     BaseFuelModel, DwellConfig, EnrichmentController, EnrichmentInputs, EnrichmentResult,
     FuelAfrOverride, FuelEngineMode, FuelInputSnapshot, FuelIntent, FuelLoadSource,
-    FuelObservations, IgnitionInputs, IgnitionPlan, IgnitionPlanner, LambdaTrimConfig,
-    LambdaTrimInputs, LambdaTrimPlanner, LambdaTrimResult, StartupConfig, TorqueArbiter,
-    TorqueInputs, WarmupConfig,
+    FuelObservations, IgnitionInputs, IgnitionLimitReason, IgnitionPlan, IgnitionPlanner,
+    LambdaMode, LambdaTrimConfig, LambdaTrimInputs, LambdaTrimPlanner, LambdaTrimResult,
+    StartupConfig, TorqueArbiter, TorqueInputs, TorqueLimitReason, WarmupConfig,
 };
 pub use ecu_scheduler::{
     FuelOutputMode, FuelOutputProfile, SchedulerState, SparkOutputMode, SparkOutputProfile,

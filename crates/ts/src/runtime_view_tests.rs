@@ -66,6 +66,7 @@ fn maps_runtime_snapshot_without_reading_internal_state() {
             cam_seen: true,
             flat_shift_armed: false,
             launch_armed: false,
+            safety_latch_request: false,
         },
         ControlInputs {
             enrichment: EnrichmentInputs {
@@ -178,6 +179,7 @@ fn runtime_snapshot_adapter_fills_outpc_projection() {
             cam_seen: true,
             flat_shift_armed: false,
             launch_armed: false,
+            safety_latch_request: false,
         },
         ControlInputs {
             enrichment: EnrichmentInputs {

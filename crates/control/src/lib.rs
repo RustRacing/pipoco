@@ -19,8 +19,12 @@ pub use enrichment::{
     EnrichmentInputs, EnrichmentResult, StartupConfig, WarmupConfig,
 };
 pub use fuel::BaseFuelModel;
-pub use ignition::{DwellConfig, IgnitionInputs, IgnitionPlan, IgnitionPlanner};
-pub use lambda::{LambdaTrimConfig, LambdaTrimInputs, LambdaTrimPlanner, LambdaTrimResult};
+pub use ignition::{
+    DwellConfig, IgnitionInputs, IgnitionLimitReason, IgnitionPlan, IgnitionPlanner,
+};
+pub use lambda::{
+    LambdaMode, LambdaTrimConfig, LambdaTrimInputs, LambdaTrimPlanner, LambdaTrimResult,
+};
 pub use torque::{AllowedTorque, TorqueArbiter, TorqueInputs, TorqueLimitReason};
 pub use types::{
     FuelAfrOverride, FuelEngineMode, FuelInputSnapshot, FuelIntent, FuelLoadSource,

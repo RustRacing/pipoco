@@ -31,14 +31,20 @@ use cortex_m_rt::entry;
 use ecu_domain::{Kpa10, Micros};
 use ecu_scheduler::TransitionDrainBuffer;
 use ecu_target_common::{
-    adapter::{BoardAdapter, BoardEvent},
+    adapter::{
+        BoardAdapter, BoardEvent, CommonObservabilityDrainCycleReport, CommonObservabilityRecord,
+        CommonObservabilityRecordKind, CommonObservabilitySample,
+        CommonObservabilityTraceCycleReport, FixedCommonObservabilityTracePair,
+    },
     bringup::bringup_fuel_model,
-    control_inputs::{split_control_inputs_from, WarmBringupControlSignals},
+    control_inputs::{split_control_frame_from, WarmBringupControlSignals},
     noop::{NoopCapture, NoopStore, NoopTransport},
     outputs::{ScheduledActionExecutor, ScheduledOutputs4},
     sensor_sample::{BoardSensorSnapshotSampleSource, FixedLoadSensor},
-    split_tick::run_runtime_scheduled_output_tick,
-    trigger_adapter::{apply_trigger_timestamp_to_runtime_adapter, SplitTriggerAdapter},
+    split_tick::run_runtime_scheduled_output_tick_and_push_to_trace_pair,
+    trigger_adapter::{
+        apply_trigger_timestamp_to_runtime_adapter_and_push_to_trace_pair, SplitTriggerAdapter,
+    },
 };
 #[cfg(feature = "ts-usb-hw")]
 use ecu_ts::persistence::written_pages_require_runtime_fuel_retune;
@@ -74,6 +80,40 @@ macro_rules! IGN2_PIN {
     ($gpiob:ident) => {
         $gpiob.pb3.into_push_pull_output()
     };
+}
+
+#[inline]
+fn empty_observability_record() -> CommonObservabilityRecord {
+    CommonObservabilityRecord {
+        kind: CommonObservabilityRecordKind::Tick,
+        sample: CommonObservabilitySample::default(),
+    }
+}
+
+#[inline]
+fn empty_drain_report() -> CommonObservabilityDrainCycleReport {
+    CommonObservabilityDrainCycleReport {
+        sample: CommonObservabilityTraceCycleReport {
+            drained: 0,
+            overflow_count: 0,
+            status: Default::default(),
+        },
+        record: CommonObservabilityTraceCycleReport {
+            drained: 0,
+            overflow_count: 0,
+            status: Default::default(),
+        },
+    }
+}
+
+#[inline]
+fn drain_observability_pair<const S: usize, const R: usize, const SO: usize, const RO: usize>(
+    traces: &mut FixedCommonObservabilityTracePair<S, R>,
+    sample_out: &mut [CommonObservabilitySample; SO],
+    record_out: &mut [CommonObservabilityRecord; RO],
+    report: &mut CommonObservabilityDrainCycleReport,
+) {
+    *report = traces.drain_cycle(sample_out, record_out);
 }
 
 #[entry]
@@ -137,6 +177,11 @@ fn main() -> ! {
     ign2.set_low();
     let mut outputs = ScheduledOutputs4::new(inj1, inj2, ign1, ign2);
     let mut drain = TransitionDrainBuffer::<8>::new();
+    let mut observability_traces: FixedCommonObservabilityTracePair<16, 16> =
+        FixedCommonObservabilityTracePair::new();
+    let mut observability_sample_scratch = [CommonObservabilitySample::default(); 16];
+    let mut observability_record_scratch = [empty_observability_record(); 16];
+    let mut last_drain_report = empty_drain_report();
     let mut adapter = BoardAdapter::new(
         BoardSensorSnapshotSampleSource::new(FixedLoadSensor::new(Stm32Time, Kpa10::new(700))),
         NoopCapture,
@@ -145,7 +190,20 @@ fn main() -> ! {
         NoopTransport,
         NoopStore,
     );
-    adapter.configure_fuel_model(bringup_fuel_model());
+    if adapter
+        .configure_fuel_model_and_push_to_trace_pair(
+            bringup_fuel_model(),
+            &mut observability_traces,
+        )
+        .is_ok()
+    {
+        drain_observability_pair(
+            &mut observability_traces,
+            &mut observability_sample_scratch,
+            &mut observability_record_scratch,
+            &mut last_drain_report,
+        );
+    }
     let mut control_signals = WarmBringupControlSignals;
     let mut trigger_adapter = SplitTriggerAdapter::new(Stm32Time);
 
@@ -180,25 +238,70 @@ fn main() -> ! {
             Some(CdcSerial { serial, dev })
         };
         let svc = ts_support::new_service(ts_state, adapter.runtime());
-        adapter.configure_runtime_fuel_strategy(ecu_runtime::runtime_fuel_strategy_from_fuel_tune(
-            &svc.server.store().runtime_fuel_tune(),
-        ));
+        if adapter
+            .configure_runtime_fuel_strategy_and_push_to_trace_pair(
+                ecu_runtime::runtime_fuel_strategy_from_fuel_tune(
+                    &svc.server.store().runtime_fuel_tune(),
+                ),
+                &mut observability_traces,
+            )
+            .is_ok()
+        {
+            drain_observability_pair(
+                &mut observability_traces,
+                &mut observability_sample_scratch,
+                &mut observability_record_scratch,
+                &mut last_drain_report,
+            );
+        }
         (Some(svc), cdc_opt)
     };
     #[cfg(all(not(feature = "ts-usb-hw"), feature = "ts-usb"))]
-    adapter.configure_runtime_fuel_strategy(ecu_runtime::runtime_fuel_strategy_from_fuel_tune(
-        &ecu_calibration::FuelRuntimeTune::new(
-            ts_state.config.ve_table,
-            ts_state.config.afr_table,
-            ts_state.config.required_fuel_us,
-            ts_state.config.injector_deadtime_us,
-            ts_state.config.ve_load_source,
-        ),
-    ));
+    if adapter
+        .configure_runtime_fuel_strategy_and_push_to_trace_pair(
+            ecu_runtime::runtime_fuel_strategy_from_fuel_tune(
+                &ecu_calibration::FuelRuntimeTune::new(
+                    ts_state.config.ve_table,
+                    ts_state.config.afr_table,
+                    ts_state.config.required_fuel_us,
+                    ts_state.config.injector_deadtime_us,
+                    ts_state.config.ve_load_source,
+                ),
+            ),
+            &mut observability_traces,
+        )
+        .is_ok()
+    {
+        drain_observability_pair(
+            &mut observability_traces,
+            &mut observability_sample_scratch,
+            &mut observability_record_scratch,
+            &mut last_drain_report,
+        );
+    }
     #[cfg(all(not(feature = "ts-usb-hw"), not(feature = "ts-usb")))]
-    adapter.configure_runtime_fuel_strategy(ecu_runtime::runtime_fuel_strategy_from_fuel_tune(
-        &ecu_calibration::FuelRuntimeTune::new([[100; 16]; 16], [[147; 16]; 16], 1000, 800, 0),
-    ));
+    if adapter
+        .configure_runtime_fuel_strategy_and_push_to_trace_pair(
+            ecu_runtime::runtime_fuel_strategy_from_fuel_tune(
+                &ecu_calibration::FuelRuntimeTune::new(
+                    [[100; 16]; 16],
+                    [[147; 16]; 16],
+                    1000,
+                    800,
+                    0,
+                ),
+            ),
+            &mut observability_traces,
+        )
+        .is_ok()
+    {
+        drain_observability_pair(
+            &mut observability_traces,
+            &mut observability_sample_scratch,
+            &mut observability_record_scratch,
+            &mut last_drain_report,
+        );
+    }
 
     // Main loop - feed capture into the split runtime and apply due scheduled outputs.
     loop {
@@ -210,24 +313,86 @@ fn main() -> ! {
 
         while let Some(ts) = capture::pop() {
             let at_us = Micros::new(ts);
-            let _ =
-                apply_trigger_timestamp_to_runtime_adapter(&mut adapter, &mut trigger_adapter, ts);
-            let _ = adapter.apply_event(BoardEvent::CamEdge {
-                at_us,
-                cam_seen: false,
-            });
+            if apply_trigger_timestamp_to_runtime_adapter_and_push_to_trace_pair(
+                &mut adapter,
+                &mut trigger_adapter,
+                ts,
+                &mut observability_traces,
+            )
+            .is_ok()
+            {
+                drain_observability_pair(
+                    &mut observability_traces,
+                    &mut observability_sample_scratch,
+                    &mut observability_record_scratch,
+                    &mut last_drain_report,
+                );
+            }
+            if adapter
+                .apply_event_and_push_to_trace_pair(
+                    BoardEvent::CamEdge {
+                        at_us,
+                        cam_seen: false,
+                    },
+                    &mut observability_traces,
+                )
+                .is_ok()
+            {
+                drain_observability_pair(
+                    &mut observability_traces,
+                    &mut observability_sample_scratch,
+                    &mut observability_record_scratch,
+                    &mut last_drain_report,
+                );
+            }
         }
-        let _ = adapter.poll_sensor();
+        if adapter
+            .poll_sensor_and_push_to_trace_pair(&mut observability_traces)
+            .is_ok()
+        {
+            drain_observability_pair(
+                &mut observability_traces,
+                &mut observability_sample_scratch,
+                &mut observability_record_scratch,
+                &mut last_drain_report,
+            );
+        }
 
         let now = Micros::new(time_source.micros());
-        let _ = run_runtime_scheduled_output_tick(
+        let frame = split_control_frame_from(&mut control_signals, now, trigger_adapter.rpm())
+            .unwrap_or_else(|never| match never {});
+        if adapter
+            .set_shift_arming_and_push_to_trace_pair(
+                frame.launch_armed,
+                frame.flat_shift_armed,
+                &mut observability_traces,
+            )
+            .is_ok()
+        {
+            drain_observability_pair(
+                &mut observability_traces,
+                &mut observability_sample_scratch,
+                &mut observability_record_scratch,
+                &mut last_drain_report,
+            );
+        }
+        if run_runtime_scheduled_output_tick_and_push_to_trace_pair(
             &mut adapter,
             now,
-            split_control_inputs_from(&mut control_signals, now, trigger_adapter.rpm())
-                .unwrap_or_else(|never| match never {}),
+            frame.control,
+            &mut observability_traces,
             &mut outputs,
             &mut drain,
-        );
+        )
+        .is_ok()
+        {
+            drain_observability_pair(
+                &mut observability_traces,
+                &mut observability_sample_scratch,
+                &mut observability_record_scratch,
+                &mut last_drain_report,
+            );
+        }
 
         #[cfg(feature = "ts-usb-hw")]
         {
@@ -236,8 +401,15 @@ fn main() -> ! {
                 if let Some(pages) = svc.server.store_mut().take_written_pages() {
                     if written_pages_require_runtime_fuel_retune(pages) {
                         let tune = svc.server.store().runtime_fuel_tune();
-                        adapter.configure_runtime_fuel_strategy(
+                        let _ = adapter.configure_runtime_fuel_strategy_and_push_to_trace_pair(
                             ecu_runtime::runtime_fuel_strategy_from_fuel_tune(&tune),
+                            &mut observability_traces,
+                        );
+                        drain_observability_pair(
+                            &mut observability_traces,
+                            &mut observability_sample_scratch,
+                            &mut observability_record_scratch,
+                            &mut last_drain_report,
                         );
                     }
                 }

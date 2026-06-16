@@ -1,10 +1,14 @@
 use crate::types::{
-    FrontierAdmissionReport, FrontierHorizonSequenceId, FrontierMetricSnapshot, FrontierPermitMask,
-    FrontierStopReason, FrontierSyncLossReason, FRONTIER_HEARTBEAT_EXPIRY_US,
+    FrontierAdmissionReport, FrontierMetricSnapshot, FRONTIER_HEARTBEAT_EXPIRY_US,
     FRONTIER_HORIZON_SEQUENCE_BITS, FRONTIER_MAX_HORIZON_US,
 };
 use crate::{
-    ChannelId, Micros, SchedulerMode, SchedulerState, TimedIgnitionPlan, TimedInjectionPlan,
+    ChannelId, Micros, ScheduledTransitionQueue, SchedulerMode, SchedulerState, TimedIgnitionPlan,
+    TimedInjectionPlan,
+};
+use ecu_board_api::frontier::{
+    TimingIslandHorizonSequenceId, TimingIslandPermitMask, TimingIslandStopReason,
+    TimingIslandSyncLossReason,
 };
 use ecu_domain::SyncState;
 
@@ -15,12 +19,23 @@ pub struct SchedulerObservedSurface {
     pub mode: SchedulerMode,
     pub active_groups: u8,
     pub reserved_channels: [u128; 4],
+    pub last_accepted_horizon_id: Option<TimingIslandHorizonSequenceId>,
+    pub active_horizon_id: Option<TimingIslandHorizonSequenceId>,
+    pub horizon_start_us: Option<Micros>,
+    pub horizon_end_us: Option<Micros>,
+    pub heartbeat_deadline_us: Option<Micros>,
+    pub active_permit_mask: TimingIslandPermitMask,
+    pub active_stop_reason: TimingIslandStopReason,
     pub last_injection_start: Option<Micros>,
     pub last_injection_end: Option<Micros>,
     pub last_ignition_start: Option<Micros>,
     pub last_ignition_end: Option<Micros>,
     pub injection_count: u8,
     pub ignition_count: u8,
+    pub late_event_count: u32,
+    pub max_lateness_us: Option<Micros>,
+    pub queue_high_water_mark: u8,
+    pub last_drain_count: u8,
 }
 
 /// Canonical frontier contract surface for scheduler conformance checks.
@@ -30,9 +45,9 @@ pub(crate) struct FrontierContractSurface {
     pub horizon_sequence_bits: u8,
     pub heartbeat_expiry_us: Micros,
     pub max_horizon_us: Micros,
-    pub horizon_sequence_id: FrontierHorizonSequenceId,
-    pub default_permit_mask: FrontierPermitMask,
-    pub default_stop_reason: FrontierStopReason,
+    pub horizon_sequence_id: TimingIslandHorizonSequenceId,
+    pub default_permit_mask: TimingIslandPermitMask,
+    pub default_stop_reason: TimingIslandStopReason,
     pub admission_report: FrontierAdmissionReport,
     pub metric_snapshot: FrontierMetricSnapshot,
 }
@@ -44,25 +59,25 @@ pub(crate) const fn frontier_contract_surface() -> FrontierContractSurface {
         heartbeat_expiry_us: FRONTIER_HEARTBEAT_EXPIRY_US,
         max_horizon_us: FRONTIER_MAX_HORIZON_US,
         horizon_sequence_id: 0,
-        default_permit_mask: FrontierPermitMask::NONE,
-        default_stop_reason: FrontierStopReason::None,
+        default_permit_mask: TimingIslandPermitMask::NONE,
+        default_stop_reason: TimingIslandStopReason::None,
         admission_report: FrontierAdmissionReport::new(
             0,
             false,
-            FrontierStopReason::None,
-            FrontierPermitMask::NONE,
+            TimingIslandStopReason::None,
+            TimingIslandPermitMask::NONE,
             Micros::new(0),
             Micros::new(0),
         ),
         metric_snapshot: FrontierMetricSnapshot::new(
             SyncState::Unsynced,
-            FrontierSyncLossReason::None,
+            TimingIslandSyncLossReason::None,
             false,
             None,
             None,
             None,
-            FrontierPermitMask::NONE,
-            FrontierStopReason::None,
+            TimingIslandPermitMask::NONE,
+            TimingIslandStopReason::None,
             0,
             0,
         ),
@@ -178,11 +193,37 @@ pub fn observe_scheduler(state: &SchedulerState) -> SchedulerObservedSurface {
         mode: state.mode(),
         active_groups: state.active_groups(),
         reserved_channels: state.reserved_channels(),
+        last_accepted_horizon_id: state.last_accepted_horizon_id(),
+        active_horizon_id: state.active_horizon_id(),
+        horizon_start_us: state.horizon_start_us(),
+        horizon_end_us: state.horizon_end_us(),
+        heartbeat_deadline_us: state.heartbeat_deadline_us(),
+        active_permit_mask: state.active_permit_mask(),
+        active_stop_reason: state.active_stop_reason(),
         last_injection_start: state.last_injection_start(),
         last_injection_end: state.last_injection_end(),
         last_ignition_start: state.last_ignition_start(),
         last_ignition_end: state.last_ignition_end(),
         injection_count: state.injection_count(),
         ignition_count: state.ignition_count(),
+        late_event_count: 0,
+        max_lateness_us: None,
+        queue_high_water_mark: 0,
+        last_drain_count: 0,
+    }
+}
+
+/// Extract queue timing metrics into the shared observation surface.
+#[inline]
+pub fn observe_scheduler_queue<const N: usize>(
+    queue: &ScheduledTransitionQueue<N>,
+) -> SchedulerObservedSurface {
+    let snapshot = queue.snapshot();
+    SchedulerObservedSurface {
+        late_event_count: snapshot.late_event_count,
+        max_lateness_us: snapshot.max_lateness_us,
+        queue_high_water_mark: snapshot.queue_high_water_mark,
+        last_drain_count: snapshot.last_drain_count,
+        ..SchedulerObservedSurface::default()
     }
 }

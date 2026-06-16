@@ -1,10 +1,20 @@
+use crate::adapter::{
+    ApplyAndPushPairError, ApplyAndRecordError, BoardAdapter, BoardAdapterError, BoardEvent,
+    CommonObservabilityRecordTraceOverflow, CommonObservabilityTraceOverflow,
+    FixedCommonObservabilityRecordTrace, FixedCommonObservabilityTrace,
+    FixedCommonObservabilityTracePair,
+};
 use crate::live_inputs::{SplitLiveInputs, SplitLiveTriggerEvent};
+use crate::outputs::ScheduledActionExecutor;
 use ecu_board_api::{
     BoardSensorSnapshot, BoardSensorSnapshotCapture, BoardSensorSnapshotCaptureSource,
-    BoardSensorValidityFlags, CaptureSample, CaptureSampleSource, EcuClock,
+    BoardSensorValidityFlags, CaptureSample, CaptureSampleSource, CaptureSink, EcuClock, Watchdog,
 };
+use ecu_calibration::PersistedCalibrationStore;
 use ecu_domain::{Kpa10, Micros};
 use ecu_io::{SensorFrame, SensorFrameSource};
+use ecu_runtime::{ActionExecutor, TransportPublisher};
+use ecu_scheduler::ScheduleError;
 
 /// Non-trigger sensor values sampled by the board.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -144,6 +154,344 @@ pub(crate) fn map_speed_density_capture_sample(
         load_kpa10: capture.snapshot.map_kpa10,
         angle_x10: capture.angle_x10,
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SnapshotCaptureAndRecordError<Src, S, C, W, T, P> {
+    Source(Src),
+    Adapter(BoardAdapterError<S, C, ScheduleError, W, T, P>),
+    Record(CommonObservabilityRecordTraceOverflow),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SnapshotCaptureAndPushPairError<Src, S, C, W, T, P, const Q: usize> {
+    Source(Src),
+    Adapter(
+        BoardAdapterError<S, C, <ScheduledActionExecutor<Q> as ActionExecutor>::Error, W, T, P>,
+    ),
+    Record(CommonObservabilityRecordTraceOverflow),
+    Sample(CommonObservabilityTraceOverflow),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SensorFrameAndRecordError<Src, S, C, W, T, P> {
+    Source(Src),
+    Adapter(BoardAdapterError<S, C, ScheduleError, W, T, P>),
+    Record(CommonObservabilityRecordTraceOverflow),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SensorFrameAndPushPairError<Src, S, C, W, T, P, const Q: usize> {
+    Source(Src),
+    Adapter(
+        BoardAdapterError<S, C, <ScheduledActionExecutor<Q> as ActionExecutor>::Error, W, T, P>,
+    ),
+    Record(CommonObservabilityRecordTraceOverflow),
+    Sample(CommonObservabilityTraceOverflow),
+}
+
+#[allow(clippy::type_complexity)]
+pub fn apply_snapshot_capture_to_runtime_adapter_and_record<
+    S,
+    C,
+    W,
+    T,
+    P,
+    Src,
+    const Q: usize,
+    const R: usize,
+>(
+    adapter: &mut BoardAdapter<S, C, ScheduledActionExecutor<Q>, W, T, P>,
+    source: &mut Src,
+    trace: &mut FixedCommonObservabilityRecordTrace<R>,
+) -> Result<
+    bool,
+    SnapshotCaptureAndRecordError<Src::Error, S::Error, C::Error, W::Error, T::Error, P::Error>,
+>
+where
+    S: CaptureSampleSource,
+    C: CaptureSink,
+    W: Watchdog,
+    T: TransportPublisher,
+    P: PersistedCalibrationStore,
+    Src: BoardSensorSnapshotCaptureSource,
+{
+    let Some(capture) = source
+        .next_snapshot_capture()
+        .map_err(SnapshotCaptureAndRecordError::Source)?
+    else {
+        return Ok(false);
+    };
+
+    adapter
+        .apply_event_and_record(BoardEvent::SensorSnapshotCapture { capture }, trace)
+        .map_err(|err| match err {
+            ApplyAndRecordError::Apply(err) => SnapshotCaptureAndRecordError::Adapter(err),
+            ApplyAndRecordError::Record(err) => SnapshotCaptureAndRecordError::Record(err),
+        })?;
+    Ok(true)
+}
+
+#[allow(clippy::type_complexity)]
+pub fn apply_sensor_frame_to_runtime_adapter_and_push_pair<
+    S,
+    C,
+    W,
+    T,
+    P,
+    Src,
+    const Q: usize,
+    const SM: usize,
+    const RM: usize,
+>(
+    adapter: &mut BoardAdapter<S, C, ScheduledActionExecutor<Q>, W, T, P>,
+    source: &mut Src,
+    sample_trace: &mut FixedCommonObservabilityTrace<SM>,
+    record_trace: &mut FixedCommonObservabilityRecordTrace<RM>,
+) -> Result<
+    bool,
+    SensorFrameAndPushPairError<Src::Error, S::Error, C::Error, W::Error, T::Error, P::Error, Q>,
+>
+where
+    S: CaptureSampleSource,
+    C: CaptureSink,
+    W: Watchdog,
+    T: TransportPublisher,
+    P: PersistedCalibrationStore,
+    Src: SensorFrameSource,
+{
+    let Some(frame) = source
+        .next_frame()
+        .map_err(SensorFrameAndPushPairError::Source)?
+    else {
+        return Ok(false);
+    };
+
+    let capture = BoardSensorSnapshotCapture {
+        at_us: frame.at_us,
+        angle_x10: frame.angle_x10,
+        snapshot: board_sensor_snapshot_from_frame(frame),
+    };
+
+    adapter
+        .apply_event_and_push_pair(
+            BoardEvent::SensorSnapshotCapture { capture },
+            sample_trace,
+            record_trace,
+        )
+        .map_err(|err| match err {
+            ApplyAndPushPairError::Apply(err) => SensorFrameAndPushPairError::Adapter(err),
+            ApplyAndPushPairError::Record(err) => SensorFrameAndPushPairError::Record(err),
+            ApplyAndPushPairError::Sample(err) => SensorFrameAndPushPairError::Sample(err),
+        })?;
+    Ok(true)
+}
+
+#[allow(clippy::type_complexity)]
+pub fn apply_sensor_frame_to_runtime_adapter_and_push_to_trace_pair<
+    S,
+    C,
+    W,
+    T,
+    P,
+    Src,
+    const Q: usize,
+    const SM: usize,
+    const RM: usize,
+>(
+    adapter: &mut BoardAdapter<S, C, ScheduledActionExecutor<Q>, W, T, P>,
+    source: &mut Src,
+    traces: &mut FixedCommonObservabilityTracePair<SM, RM>,
+) -> Result<
+    bool,
+    SensorFrameAndPushPairError<Src::Error, S::Error, C::Error, W::Error, T::Error, P::Error, Q>,
+>
+where
+    S: CaptureSampleSource,
+    C: CaptureSink,
+    W: Watchdog,
+    T: TransportPublisher,
+    P: PersistedCalibrationStore,
+    Src: SensorFrameSource,
+{
+    let Some(frame) = source
+        .next_frame()
+        .map_err(SensorFrameAndPushPairError::Source)?
+    else {
+        return Ok(false);
+    };
+
+    let capture = BoardSensorSnapshotCapture {
+        at_us: frame.at_us,
+        angle_x10: frame.angle_x10,
+        snapshot: board_sensor_snapshot_from_frame(frame),
+    };
+
+    adapter
+        .apply_event_and_push_to_trace_pair(BoardEvent::SensorSnapshotCapture { capture }, traces)
+        .map_err(|err| match err {
+            ApplyAndPushPairError::Apply(err) => SensorFrameAndPushPairError::Adapter(err),
+            ApplyAndPushPairError::Record(err) => SensorFrameAndPushPairError::Record(err),
+            ApplyAndPushPairError::Sample(err) => SensorFrameAndPushPairError::Sample(err),
+        })?;
+    Ok(true)
+}
+
+#[allow(clippy::type_complexity)]
+pub fn apply_snapshot_capture_to_runtime_adapter_and_push_pair<
+    S,
+    C,
+    W,
+    T,
+    P,
+    Src,
+    const Q: usize,
+    const SM: usize,
+    const RM: usize,
+>(
+    adapter: &mut BoardAdapter<S, C, ScheduledActionExecutor<Q>, W, T, P>,
+    source: &mut Src,
+    sample_trace: &mut FixedCommonObservabilityTrace<SM>,
+    record_trace: &mut FixedCommonObservabilityRecordTrace<RM>,
+) -> Result<
+    bool,
+    SnapshotCaptureAndPushPairError<
+        Src::Error,
+        S::Error,
+        C::Error,
+        W::Error,
+        T::Error,
+        P::Error,
+        Q,
+    >,
+>
+where
+    S: CaptureSampleSource,
+    C: CaptureSink,
+    W: Watchdog,
+    T: TransportPublisher,
+    P: PersistedCalibrationStore,
+    Src: BoardSensorSnapshotCaptureSource,
+{
+    let Some(capture) = source
+        .next_snapshot_capture()
+        .map_err(SnapshotCaptureAndPushPairError::Source)?
+    else {
+        return Ok(false);
+    };
+
+    adapter
+        .apply_event_and_push_pair(
+            BoardEvent::SensorSnapshotCapture { capture },
+            sample_trace,
+            record_trace,
+        )
+        .map_err(|err| match err {
+            ApplyAndPushPairError::Apply(err) => SnapshotCaptureAndPushPairError::Adapter(err),
+            ApplyAndPushPairError::Record(err) => SnapshotCaptureAndPushPairError::Record(err),
+            ApplyAndPushPairError::Sample(err) => SnapshotCaptureAndPushPairError::Sample(err),
+        })?;
+    Ok(true)
+}
+
+#[allow(clippy::type_complexity)]
+pub fn apply_snapshot_capture_to_runtime_adapter_and_push_to_trace_pair<
+    S,
+    C,
+    W,
+    T,
+    P,
+    Src,
+    const Q: usize,
+    const SM: usize,
+    const RM: usize,
+>(
+    adapter: &mut BoardAdapter<S, C, ScheduledActionExecutor<Q>, W, T, P>,
+    source: &mut Src,
+    traces: &mut FixedCommonObservabilityTracePair<SM, RM>,
+) -> Result<
+    bool,
+    SnapshotCaptureAndPushPairError<
+        Src::Error,
+        S::Error,
+        C::Error,
+        W::Error,
+        T::Error,
+        P::Error,
+        Q,
+    >,
+>
+where
+    S: CaptureSampleSource,
+    C: CaptureSink,
+    W: Watchdog,
+    T: TransportPublisher,
+    P: PersistedCalibrationStore,
+    Src: BoardSensorSnapshotCaptureSource,
+{
+    let Some(capture) = source
+        .next_snapshot_capture()
+        .map_err(SnapshotCaptureAndPushPairError::Source)?
+    else {
+        return Ok(false);
+    };
+
+    adapter
+        .apply_event_and_push_to_trace_pair(BoardEvent::SensorSnapshotCapture { capture }, traces)
+        .map_err(|err| match err {
+            ApplyAndPushPairError::Apply(err) => SnapshotCaptureAndPushPairError::Adapter(err),
+            ApplyAndPushPairError::Record(err) => SnapshotCaptureAndPushPairError::Record(err),
+            ApplyAndPushPairError::Sample(err) => SnapshotCaptureAndPushPairError::Sample(err),
+        })?;
+    Ok(true)
+}
+
+#[allow(clippy::type_complexity)]
+pub fn apply_sensor_frame_to_runtime_adapter_and_record<
+    S,
+    C,
+    W,
+    T,
+    P,
+    Src,
+    const Q: usize,
+    const R: usize,
+>(
+    adapter: &mut BoardAdapter<S, C, ScheduledActionExecutor<Q>, W, T, P>,
+    source: &mut Src,
+    trace: &mut FixedCommonObservabilityRecordTrace<R>,
+) -> Result<
+    bool,
+    SensorFrameAndRecordError<Src::Error, S::Error, C::Error, W::Error, T::Error, P::Error>,
+>
+where
+    S: CaptureSampleSource,
+    C: CaptureSink,
+    W: Watchdog,
+    T: TransportPublisher,
+    P: PersistedCalibrationStore,
+    Src: SensorFrameSource,
+{
+    let Some(frame) = source
+        .next_frame()
+        .map_err(SensorFrameAndRecordError::Source)?
+    else {
+        return Ok(false);
+    };
+
+    let capture = BoardSensorSnapshotCapture {
+        at_us: frame.at_us,
+        angle_x10: frame.angle_x10,
+        snapshot: board_sensor_snapshot_from_frame(frame),
+    };
+
+    adapter
+        .apply_event_and_record(BoardEvent::SensorSnapshotCapture { capture }, trace)
+        .map_err(|err| match err {
+            ApplyAndRecordError::Apply(err) => SensorFrameAndRecordError::Adapter(err),
+            ApplyAndRecordError::Record(err) => SensorFrameAndRecordError::Record(err),
+        })?;
+    Ok(true)
 }
 
 impl<S: BoardSensorSnapshotCaptureSource> CaptureSampleSource

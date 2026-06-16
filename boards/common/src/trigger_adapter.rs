@@ -1,5 +1,11 @@
-use crate::adapter::{AdapterResult, BoardAdapter, BoardEvent};
-use crate::live_inputs::SplitLiveTriggerEvent;
+use crate::adapter::{
+    AdapterResult, ApplyAndPushPairError, ApplyAndRecordError, BoardAdapter, BoardAdapterError,
+    BoardEvent, CommonObservabilityRecordTraceOverflow, CommonObservabilityTraceOverflow,
+    FixedCommonObservabilityRecordTrace, FixedCommonObservabilityTrace,
+    FixedCommonObservabilityTracePair,
+};
+use crate::live_inputs::{SplitLiveTriggerEvent, SplitSyncState};
+use crate::outputs::ScheduledActionExecutor;
 use crate::sensor_sample::SplitLiveEventSink;
 use ecu_board_api::{CaptureSampleSource, CaptureSink, EcuClock, Watchdog};
 use ecu_calibration::PersistedCalibrationStore;
@@ -110,6 +116,10 @@ impl<T: EcuClock> SplitTriggerAdapter<T> {
         self.decoder.synced()
     }
 
+    pub fn sync_state(&self) -> SplitSyncState {
+        SplitSyncState::from_authority(self.decoder.authority())
+    }
+
     pub fn live_trigger_event(&self, now_us: u32) -> SplitLiveTriggerEvent {
         SplitLiveTriggerEvent::new(self.rpm(), self.angle_x10(now_us), self.synced())
     }
@@ -145,140 +155,311 @@ where
     adapter.apply_event(event).map(|_| ())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::adapter::BoardAdapter;
-    use crate::noop::{NoopStore, NoopTransport, NoopWatchdog};
-    use crate::sensor_sample::FixedLoadSensor;
-    use ecu_board_api::CaptureSampleSource;
-    use ecu_domain::Kpa10;
-    use ecu_runtime::{Action, ActionExecutor};
-
-    #[derive(Debug, Clone, Copy)]
-    struct MockTime;
-
-    impl EcuClock for MockTime {
-        fn now_us(&self) -> Micros {
-            Micros::new(0)
-        }
-    }
-
-    #[test]
-    fn trigger_adapter_reports_unsynced_before_missing_tooth() {
-        let mut adapter = SplitTriggerAdapter::new(MockTime);
-
-        let event = adapter.on_trigger_edge(1_000);
-
-        assert_eq!(
-            event,
-            BoardEvent::TriggerEdge {
-                at_us: Micros::new(1_000),
-                rpm: Rpm::new(0),
-                angle_x10: Degrees10::new(0),
-                authority: adapter.authority(),
-                synced: false,
-            }
-        );
-    }
-
-    #[test]
-    fn trigger_adapter_rejects_invalid_profile_without_panicking() {
-        let mut profile = default_trigger_profile();
-        profile.pattern = TriggerPattern::MissingTooth {
-            nominal_teeth: 2,
-            missing_teeth: 2,
-        };
-
-        assert!(matches!(
-            SplitTriggerAdapter::with_profile(MockTime, profile),
-            Err(TriggerValidationError::MissingTeethNotLessThanNominal)
-        ));
-    }
-
-    #[test]
-    fn trigger_adapter_reports_sync_and_rpm_after_missing_tooth() {
-        let mut adapter = SplitTriggerAdapter::new(MockTime);
-
-        let _ = adapter.on_trigger_edge(1_000);
-        let _ = adapter.on_trigger_edge(2_000);
-        let event = adapter.on_trigger_edge(4_000);
-
-        assert_eq!(
-            event,
-            BoardEvent::TriggerEdge {
-                at_us: Micros::new(4_000),
-                rpm: Rpm::new(1_000),
-                angle_x10: Degrees10::new(0),
-                authority: adapter.authority(),
-                synced: true,
-            }
-        );
-        assert_eq!(adapter.rpm(), Rpm::new(1_000));
-        assert!(adapter.synced());
-    }
-
-    #[test]
-    fn trigger_adapter_angle_advances_from_decoder_estimate() {
-        let mut adapter = SplitTriggerAdapter::new(MockTime);
-
-        let _ = adapter.on_trigger_edge(1_000);
-        let _ = adapter.on_trigger_edge(2_000);
-        let _ = adapter.on_trigger_edge(4_000);
-        let angle = adapter.angle_x10(18_500);
-
-        assert_eq!(angle, Degrees10::new(900));
-    }
-
-    #[test]
-    fn trigger_adapter_reset_clears_split_observation_state() {
-        let mut adapter = SplitTriggerAdapter::new(MockTime);
-
-        let _ = adapter.on_trigger_edge(1_000);
-        let _ = adapter.on_trigger_edge(2_000);
-        let _ = adapter.on_trigger_edge(4_000);
-        adapter.reset_sync();
-
-        assert_eq!(adapter.rpm(), Rpm::new(0));
-        assert_eq!(adapter.angle_x10(18_500), Degrees10::new(0));
-        assert!(!adapter.synced());
-    }
-
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-    struct MockActions;
-
-    impl ActionExecutor for MockActions {
-        type Error = core::convert::Infallible;
-
-        fn execute(&mut self, _action: Action) -> Result<(), Self::Error> {
-            Ok(())
-        }
-    }
-
-    #[test]
-    fn apply_trigger_timestamp_to_runtime_adapter_updates_sensor_live_state_before_runtime_event() {
-        let mut board = BoardAdapter::new(
-            FixedLoadSensor::new(MockTime, Kpa10::new(700)),
-            crate::noop::NoopCapture,
-            MockActions,
-            NoopWatchdog,
-            NoopTransport,
-            NoopStore,
-        );
-        let mut trigger = SplitTriggerAdapter::new(MockTime);
-
-        apply_trigger_timestamp_to_runtime_adapter(&mut board, &mut trigger, 1_000).unwrap();
-        apply_trigger_timestamp_to_runtime_adapter(&mut board, &mut trigger, 2_000).unwrap();
-        apply_trigger_timestamp_to_runtime_adapter(&mut board, &mut trigger, 4_000).unwrap();
-        let sample = board.sensor().sample().unwrap();
-
-        assert_eq!(sample.rpm, Rpm::new(1_000));
-        assert_eq!(sample.angle_x10, Degrees10::new(0));
-        assert_eq!(sample.load_kpa10, Kpa10::new(700));
-        assert!(trigger.synced());
-        assert_eq!(
-            board.runtime().snapshot().engine.engine_time_authority,
-            trigger.authority()
-        );
-    }
+#[allow(clippy::type_complexity)]
+pub fn apply_trigger_timestamp_to_runtime_adapter_and_record<
+    S,
+    C,
+    W,
+    T,
+    P,
+    D,
+    const Q: usize,
+    const R: usize,
+>(
+    adapter: &mut BoardAdapter<S, C, ScheduledActionExecutor<Q>, W, T, P>,
+    trigger: &mut SplitTriggerAdapter<D>,
+    timestamp_us: u32,
+    trace: &mut FixedCommonObservabilityRecordTrace<R>,
+) -> Result<
+    (),
+    ApplyAndRecordError<
+        S::Error,
+        C::Error,
+        <ScheduledActionExecutor<Q> as ActionExecutor>::Error,
+        W::Error,
+        T::Error,
+        P::Error,
+    >,
+>
+where
+    S: CaptureSampleSource + SplitLiveEventSink,
+    C: CaptureSink,
+    W: Watchdog,
+    T: TransportPublisher,
+    P: PersistedCalibrationStore,
+    D: EcuClock,
+{
+    let event = trigger.on_trigger_edge(timestamp_us);
+    let live_event = trigger.live_trigger_event(timestamp_us);
+    adapter.sensor().apply_live_event(live_event);
+    adapter.apply_event_and_record(event, trace).map(|_| ())
 }
+
+pub type TriggerAdapterError<S, C, A, W, T, P> = BoardAdapterError<S, C, A, W, T, P>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TriggerAndPushPairError<S, C, A, W, T, P> {
+    Trigger(TriggerAdapterError<S, C, A, W, T, P>),
+    Record(CommonObservabilityRecordTraceOverflow),
+    Sample(CommonObservabilityTraceOverflow),
+}
+
+#[allow(clippy::type_complexity)]
+pub fn apply_trigger_timestamp_to_runtime_adapter_and_push_pair<
+    S,
+    C,
+    W,
+    T,
+    P,
+    D,
+    const N: usize,
+    const SM: usize,
+    const RM: usize,
+>(
+    adapter: &mut BoardAdapter<S, C, ScheduledActionExecutor<N>, W, T, P>,
+    trigger: &mut SplitTriggerAdapter<D>,
+    timestamp_us: u32,
+    sample_trace: &mut FixedCommonObservabilityTrace<SM>,
+    record_trace: &mut FixedCommonObservabilityRecordTrace<RM>,
+) -> Result<
+    (),
+    TriggerAndPushPairError<
+        S::Error,
+        C::Error,
+        <ScheduledActionExecutor<N> as ActionExecutor>::Error,
+        W::Error,
+        T::Error,
+        P::Error,
+    >,
+>
+where
+    S: CaptureSampleSource + SplitLiveEventSink,
+    C: CaptureSink,
+    W: Watchdog,
+    T: TransportPublisher,
+    P: PersistedCalibrationStore,
+    D: EcuClock,
+{
+    let event = trigger.on_trigger_edge(timestamp_us);
+    let live_event = trigger.live_trigger_event(timestamp_us);
+    adapter.sensor().apply_live_event(live_event);
+    adapter
+        .apply_event_and_push_pair(event, sample_trace, record_trace)
+        .map(|_| ())
+        .map_err(|err| match err {
+            ApplyAndPushPairError::Apply(err) => TriggerAndPushPairError::Trigger(err),
+            ApplyAndPushPairError::Record(err) => TriggerAndPushPairError::Record(err),
+            ApplyAndPushPairError::Sample(err) => TriggerAndPushPairError::Sample(err),
+        })
+}
+
+#[allow(clippy::type_complexity)]
+pub fn apply_trigger_timestamp_to_runtime_adapter_and_push_to_trace_pair<
+    S,
+    C,
+    W,
+    T,
+    P,
+    D,
+    const N: usize,
+    const SM: usize,
+    const RM: usize,
+>(
+    adapter: &mut BoardAdapter<S, C, ScheduledActionExecutor<N>, W, T, P>,
+    trigger: &mut SplitTriggerAdapter<D>,
+    timestamp_us: u32,
+    traces: &mut FixedCommonObservabilityTracePair<SM, RM>,
+) -> Result<
+    (),
+    TriggerAndPushPairError<
+        S::Error,
+        C::Error,
+        <ScheduledActionExecutor<N> as ActionExecutor>::Error,
+        W::Error,
+        T::Error,
+        P::Error,
+    >,
+>
+where
+    S: CaptureSampleSource + SplitLiveEventSink,
+    C: CaptureSink,
+    W: Watchdog,
+    T: TransportPublisher,
+    P: PersistedCalibrationStore,
+    D: EcuClock,
+{
+    let event = trigger.on_trigger_edge(timestamp_us);
+    let live_event = trigger.live_trigger_event(timestamp_us);
+    adapter.sensor().apply_live_event(live_event);
+    adapter
+        .apply_event_and_push_to_trace_pair(event, traces)
+        .map(|_| ())
+        .map_err(|err| match err {
+            ApplyAndPushPairError::Apply(err) => TriggerAndPushPairError::Trigger(err),
+            ApplyAndPushPairError::Record(err) => TriggerAndPushPairError::Record(err),
+            ApplyAndPushPairError::Sample(err) => TriggerAndPushPairError::Sample(err),
+        })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CamObservationAndRecordError<S, C, A, W, T, P> {
+    Apply(BoardAdapterError<S, C, A, W, T, P>),
+    Record(CommonObservabilityRecordTraceOverflow),
+}
+
+#[allow(clippy::type_complexity)]
+pub fn apply_cam_observation_to_runtime_adapter_and_record<
+    S,
+    C,
+    W,
+    T,
+    P,
+    const Q: usize,
+    const R: usize,
+>(
+    adapter: &mut BoardAdapter<S, C, ScheduledActionExecutor<Q>, W, T, P>,
+    at_us: u32,
+    cam_seen: bool,
+    trace: &mut FixedCommonObservabilityRecordTrace<R>,
+) -> Result<
+    (),
+    CamObservationAndRecordError<
+        S::Error,
+        C::Error,
+        <ScheduledActionExecutor<Q> as ActionExecutor>::Error,
+        W::Error,
+        T::Error,
+        P::Error,
+    >,
+>
+where
+    S: CaptureSampleSource,
+    C: CaptureSink,
+    W: Watchdog,
+    T: TransportPublisher,
+    P: PersistedCalibrationStore,
+{
+    adapter
+        .apply_event_and_record(
+            BoardEvent::CamEdge {
+                at_us: Micros::new(at_us),
+                cam_seen,
+            },
+            trace,
+        )
+        .map_err(|err| match err {
+            ApplyAndRecordError::Apply(err) => CamObservationAndRecordError::Apply(err),
+            ApplyAndRecordError::Record(err) => CamObservationAndRecordError::Record(err),
+        })?;
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CamObservationAndPushPairError<S, C, A, W, T, P> {
+    Apply(BoardAdapterError<S, C, A, W, T, P>),
+    Record(CommonObservabilityRecordTraceOverflow),
+    Sample(CommonObservabilityTraceOverflow),
+}
+
+#[allow(clippy::type_complexity)]
+pub fn apply_cam_observation_to_runtime_adapter_and_push_pair<
+    S,
+    C,
+    W,
+    T,
+    P,
+    const Q: usize,
+    const SM: usize,
+    const RM: usize,
+>(
+    adapter: &mut BoardAdapter<S, C, ScheduledActionExecutor<Q>, W, T, P>,
+    at_us: u32,
+    cam_seen: bool,
+    sample_trace: &mut FixedCommonObservabilityTrace<SM>,
+    record_trace: &mut FixedCommonObservabilityRecordTrace<RM>,
+) -> Result<
+    (),
+    CamObservationAndPushPairError<
+        S::Error,
+        C::Error,
+        <ScheduledActionExecutor<Q> as ActionExecutor>::Error,
+        W::Error,
+        T::Error,
+        P::Error,
+    >,
+>
+where
+    S: CaptureSampleSource,
+    C: CaptureSink,
+    W: Watchdog,
+    T: TransportPublisher,
+    P: PersistedCalibrationStore,
+{
+    adapter
+        .apply_event_and_push_pair(
+            BoardEvent::CamEdge {
+                at_us: Micros::new(at_us),
+                cam_seen,
+            },
+            sample_trace,
+            record_trace,
+        )
+        .map(|_| ())
+        .map_err(|err| match err {
+            ApplyAndPushPairError::Apply(err) => CamObservationAndPushPairError::Apply(err),
+            ApplyAndPushPairError::Record(err) => CamObservationAndPushPairError::Record(err),
+            ApplyAndPushPairError::Sample(err) => CamObservationAndPushPairError::Sample(err),
+        })
+}
+
+#[allow(clippy::type_complexity)]
+pub fn apply_cam_observation_to_runtime_adapter_and_push_to_trace_pair<
+    S,
+    C,
+    W,
+    T,
+    P,
+    const Q: usize,
+    const SM: usize,
+    const RM: usize,
+>(
+    adapter: &mut BoardAdapter<S, C, ScheduledActionExecutor<Q>, W, T, P>,
+    at_us: u32,
+    cam_seen: bool,
+    traces: &mut FixedCommonObservabilityTracePair<SM, RM>,
+) -> Result<
+    (),
+    CamObservationAndPushPairError<
+        S::Error,
+        C::Error,
+        <ScheduledActionExecutor<Q> as ActionExecutor>::Error,
+        W::Error,
+        T::Error,
+        P::Error,
+    >,
+>
+where
+    S: CaptureSampleSource,
+    C: CaptureSink,
+    W: Watchdog,
+    T: TransportPublisher,
+    P: PersistedCalibrationStore,
+{
+    adapter
+        .apply_event_and_push_to_trace_pair(
+            BoardEvent::CamEdge {
+                at_us: Micros::new(at_us),
+                cam_seen,
+            },
+            traces,
+        )
+        .map(|_| ())
+        .map_err(|err| match err {
+            ApplyAndPushPairError::Apply(err) => CamObservationAndPushPairError::Apply(err),
+            ApplyAndPushPairError::Record(err) => CamObservationAndPushPairError::Record(err),
+            ApplyAndPushPairError::Sample(err) => CamObservationAndPushPairError::Sample(err),
+        })
+}
+
+#[cfg(test)]
+mod tests;

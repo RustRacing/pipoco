@@ -630,6 +630,7 @@ fn runtime_step_inputs() -> StepInputs {
         cam_seen: true,
         launch_armed: false,
         flat_shift_armed: false,
+        safety_latch_request: false,
     }
 }
 
@@ -658,6 +659,7 @@ fn runtime_control_inputs() -> ControlInputs {
             false,
             Rpm::new(3_000),
         ),
+        knock_intensity_x100: 0,
     }
 }
 

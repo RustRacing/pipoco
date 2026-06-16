@@ -63,6 +63,8 @@ impl SplitControlSignalsSource for Rp2040ControlSignals {
         });
         Ok(SplitControlSignals {
             clt_c,
+            launch_armed: false,
+            flat_shift_armed: false,
             lambda_valid,
             measured_lambda100: Lambda100::new(lambda_x100),
             requested_open_loop: false,

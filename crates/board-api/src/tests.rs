@@ -1,4 +1,5 @@
 use super::*;
+use crate::frontier::{TimingIslandPermitMask, TimingIslandStopReason};
 use crate::safety::{SafetyGateInput, SafetyGateReason, SafetyGateStatus, SafetyPermitMask};
 use crate::timing_island::{
     EdgeBatch, TimingIslandCommand, TimingIslandEvent, TimingIslandFaultStatus,
@@ -11,6 +12,12 @@ use crate::wire::{
     SAFETY_GATE_INPUT_WIRE_LEN, SAFETY_GATE_STATUS_WIRE_LEN, TIMING_ISLAND_COMMAND_TAG_ARM_OUTPUT,
     TIMING_ISLAND_COMMAND_TAG_FEED_WATCHDOG, TIMING_ISLAND_COMMAND_WIRE_LEN,
     TIMING_ISLAND_EVENT_TAG_REJECTED, TIMING_ISLAND_EVENT_WIRE_LEN, TIMING_ISLAND_WIRE_VERSION,
+};
+use crate::{
+    CommonFrontierTelemetry, CommonFuelStrategyMode, CommonPendingInputTelemetry,
+    CommonSchedulerMode, CommonSchedulerOwnershipTelemetry, CommonSchedulerReservationTelemetry,
+    CommonSchedulerStateSummaryTelemetry, CommonSchedulerWindowTelemetry,
+    CommonShiftArmingTelemetry,
 };
 use core::mem::needs_drop;
 use ecu_domain::{
@@ -88,6 +95,31 @@ fn core_types_are_copy_and_do_not_need_drop() {
     assert_copy::<TriggerEdge>();
     assert_copy::<OutputTransition>();
     assert_copy::<AuxCommand>();
+    assert_copy::<CommonSyncTelemetryState>();
+    assert_copy::<CommonDiagnosticsTelemetry>();
+    assert_copy::<CommonDecisionTelemetry>();
+    assert_copy::<CommonShiftArmingTelemetry>();
+    assert_copy::<CommonSchedulerMode>();
+    assert_copy::<CommonSchedulerOwnershipTelemetry>();
+    assert_copy::<CommonSchedulerReservationTelemetry>();
+    assert_copy::<CommonSchedulerStateSummaryTelemetry>();
+    assert_copy::<CommonSchedulerWindowTelemetry>();
+    assert_copy::<CommonControlTelemetry>();
+    assert_copy::<CommonFrontierTelemetry>();
+    assert_copy::<CommonLambdaMode>();
+    assert_copy::<CommonIgnitionLimitReason>();
+    assert_copy::<CommonTorqueLimitReason>();
+    assert_copy::<CommonControlReasonTelemetry>();
+    assert_copy::<CommonPendingInputTelemetry>();
+    assert_copy::<CommonFuelObservationTelemetry>();
+    assert_copy::<CommonEnrichmentTelemetry>();
+    assert_copy::<CommonActionTelemetry>();
+    assert_copy::<CommonTorqueTelemetry>();
+    assert_copy::<CommonEngineTelemetry>();
+    assert_copy::<CommonTriggerEdgeTelemetry>();
+    assert_copy::<CommonCamEdgeTelemetry>();
+    assert_copy::<CommonValidatedInputTelemetry>();
+    assert_copy::<CommonFaultTransitionTelemetry>();
     assert_copy::<EngineTimeAuthorityTelemetry>();
     assert_copy::<SensorSnapshot>();
     assert_copy::<TelemetryFrame>();
@@ -98,6 +130,31 @@ fn core_types_are_copy_and_do_not_need_drop() {
     assert!(!needs_drop::<TriggerEdge>());
     assert!(!needs_drop::<OutputTransition>());
     assert!(!needs_drop::<AuxCommand>());
+    assert!(!needs_drop::<CommonSyncTelemetryState>());
+    assert!(!needs_drop::<CommonDiagnosticsTelemetry>());
+    assert!(!needs_drop::<CommonDecisionTelemetry>());
+    assert!(!needs_drop::<CommonShiftArmingTelemetry>());
+    assert!(!needs_drop::<CommonSchedulerMode>());
+    assert!(!needs_drop::<CommonSchedulerOwnershipTelemetry>());
+    assert!(!needs_drop::<CommonSchedulerReservationTelemetry>());
+    assert!(!needs_drop::<CommonSchedulerStateSummaryTelemetry>());
+    assert!(!needs_drop::<CommonSchedulerWindowTelemetry>());
+    assert!(!needs_drop::<CommonControlTelemetry>());
+    assert!(!needs_drop::<CommonFrontierTelemetry>());
+    assert!(!needs_drop::<CommonLambdaMode>());
+    assert!(!needs_drop::<CommonIgnitionLimitReason>());
+    assert!(!needs_drop::<CommonTorqueLimitReason>());
+    assert!(!needs_drop::<CommonControlReasonTelemetry>());
+    assert!(!needs_drop::<CommonPendingInputTelemetry>());
+    assert!(!needs_drop::<CommonFuelObservationTelemetry>());
+    assert!(!needs_drop::<CommonEnrichmentTelemetry>());
+    assert!(!needs_drop::<CommonActionTelemetry>());
+    assert!(!needs_drop::<CommonTorqueTelemetry>());
+    assert!(!needs_drop::<CommonEngineTelemetry>());
+    assert!(!needs_drop::<CommonTriggerEdgeTelemetry>());
+    assert!(!needs_drop::<CommonCamEdgeTelemetry>());
+    assert!(!needs_drop::<CommonValidatedInputTelemetry>());
+    assert!(!needs_drop::<CommonFaultTransitionTelemetry>());
     assert!(!needs_drop::<EngineTimeAuthorityTelemetry>());
     assert!(!needs_drop::<SensorSnapshot>());
     assert!(!needs_drop::<ProfileId>());
@@ -109,6 +166,342 @@ fn core_types_are_copy_and_do_not_need_drop() {
     assert!(!needs_drop::<EdgeBatch<4>>());
     assert!(!needs_drop::<OutputTransitionBatch<4>>());
     assert!(!needs_drop::<AuxCommandBatch<4>>());
+}
+
+#[test]
+fn common_diagnostics_telemetry_defaults_cleanly() {
+    assert_eq!(
+        CommonDiagnosticsTelemetry::default(),
+        CommonDiagnosticsTelemetry {
+            sync_state: CommonSyncTelemetryState::NoSignal,
+            fault_code: FaultCode::None,
+            fault_severity: FaultSeverity::Info,
+            cancel_reason: CancelReason::Manual,
+            late_event_count: 0,
+            max_lateness_us: 0,
+            queue_high_water_mark: 0,
+            last_drain_count: 0,
+            active_queue_count: 0,
+            free_queue_slots: 0,
+            queue_capacity: 0,
+        }
+    );
+}
+
+#[test]
+fn common_decision_telemetry_defaults_cleanly() {
+    assert_eq!(
+        CommonDecisionTelemetry::default(),
+        CommonDecisionTelemetry {
+            control_mode: ControlMode::default(),
+            rev_soft_active: false,
+            rev_hard_active: false,
+            launch_active: false,
+            flat_shift_active: false,
+            fuel_cut: false,
+            spark_cut: false,
+        }
+    );
+}
+
+#[test]
+fn common_shift_arming_telemetry_defaults_cleanly() {
+    assert_eq!(
+        CommonShiftArmingTelemetry::default(),
+        CommonShiftArmingTelemetry {
+            launch_armed: false,
+            flat_shift_armed: false,
+        }
+    );
+}
+
+#[test]
+fn common_scheduler_mode_defaults_cleanly() {
+    assert_eq!(CommonSchedulerMode::default(), CommonSchedulerMode::Idle);
+}
+
+#[test]
+fn common_scheduler_ownership_telemetry_defaults_cleanly() {
+    assert_eq!(
+        CommonSchedulerOwnershipTelemetry::default(),
+        CommonSchedulerOwnershipTelemetry {
+            mode: CommonSchedulerMode::Idle,
+            active_groups: 0,
+            injection_count: 0,
+            ignition_count: 0,
+        }
+    );
+}
+
+#[test]
+fn common_scheduler_reservation_telemetry_defaults_cleanly() {
+    assert_eq!(
+        CommonSchedulerReservationTelemetry::default(),
+        CommonSchedulerReservationTelemetry {
+            injector_channels: 0,
+            ignition_channels: 0,
+            idle_channels: 0,
+            fan_channels: 0,
+        }
+    );
+}
+
+#[test]
+fn common_scheduler_state_summary_telemetry_defaults_cleanly() {
+    assert_eq!(
+        CommonSchedulerStateSummaryTelemetry::default(),
+        CommonSchedulerStateSummaryTelemetry { armed: false }
+    );
+}
+
+#[test]
+fn common_scheduler_window_telemetry_defaults_cleanly() {
+    assert_eq!(
+        CommonSchedulerWindowTelemetry::default(),
+        CommonSchedulerWindowTelemetry {
+            last_injection_start: None,
+            last_injection_end: None,
+            last_ignition_start: None,
+            last_ignition_end: None,
+        }
+    );
+}
+
+#[test]
+fn common_pending_input_telemetry_defaults_cleanly() {
+    assert_eq!(
+        CommonPendingInputTelemetry::default(),
+        CommonPendingInputTelemetry {
+            now_us: Micros::new(0),
+            rpm: Rpm::default(),
+            load_kpa10: Kpa10::default(),
+            angle_x10: Degrees10::default(),
+            authority: EngineTimeAuthority::default(),
+        }
+    );
+}
+
+#[test]
+fn common_pending_input_telemetry_is_copy_and_does_not_need_drop() {
+    fn assert_copy<T: Copy>() {}
+
+    assert_copy::<CommonPendingInputTelemetry>();
+    assert!(!needs_drop::<CommonPendingInputTelemetry>());
+}
+
+#[test]
+fn common_control_telemetry_defaults_cleanly() {
+    assert_eq!(
+        CommonControlTelemetry::default(),
+        CommonControlTelemetry {
+            fuel_pulse_width: PulseWidthUs::default(),
+            ignition_advance: Degrees10::default(),
+            dwell: DwellUs::default(),
+            lambda_target: Lambda100::default(),
+            torque_limit_x100: u16::default(),
+        }
+    );
+}
+
+#[test]
+fn common_frontier_telemetry_defaults_cleanly() {
+    assert_eq!(
+        CommonFrontierTelemetry::default(),
+        CommonFrontierTelemetry {
+            active_horizon_id: None,
+            horizon_start_us: None,
+            horizon_end_us: None,
+            last_accepted_horizon_id: None,
+            last_accepted_horizon_start_us: None,
+            last_accepted_horizon_end_us: None,
+            heartbeat_deadline_us: None,
+            active_permit_mask: TimingIslandPermitMask::NONE,
+            active_stop_reason: TimingIslandStopReason::None,
+        }
+    );
+}
+
+#[test]
+fn common_control_reason_enums_default_cleanly() {
+    assert_eq!(CommonLambdaMode::default(), CommonLambdaMode::OpenLoop);
+    assert_eq!(
+        CommonIgnitionLimitReason::default(),
+        CommonIgnitionLimitReason::None
+    );
+    assert_eq!(
+        CommonTorqueLimitReason::default(),
+        CommonTorqueLimitReason::None
+    );
+}
+
+#[test]
+fn common_control_reason_telemetry_defaults_cleanly() {
+    assert_eq!(
+        CommonControlReasonTelemetry::default(),
+        CommonControlReasonTelemetry {
+            lambda_mode: CommonLambdaMode::OpenLoop,
+            lambda_active: false,
+            lambda_trim_x100: 0,
+            ignition_limit_reason: CommonIgnitionLimitReason::None,
+            torque_limit_reason: CommonTorqueLimitReason::None,
+        }
+    );
+}
+
+#[test]
+fn common_fuel_strategy_mode_defaults_cleanly() {
+    assert_eq!(
+        CommonFuelStrategyMode::default(),
+        CommonFuelStrategyMode::DirectPulseWidthTable
+    );
+}
+
+#[test]
+fn common_fuel_strategy_mode_is_copy_and_does_not_need_drop() {
+    fn assert_copy<T: Copy>() {}
+
+    assert_copy::<CommonFuelStrategyMode>();
+    assert!(!needs_drop::<CommonFuelStrategyMode>());
+}
+
+#[test]
+fn common_fuel_observation_telemetry_defaults_cleanly() {
+    assert_eq!(
+        CommonFuelObservationTelemetry::default(),
+        CommonFuelObservationTelemetry {
+            base_fuel_pulse_width: PulseWidthUs::default(),
+            enriched_fuel_pulse_width: PulseWidthUs::default(),
+        }
+    );
+}
+
+#[test]
+fn common_enrichment_telemetry_defaults_cleanly() {
+    assert_eq!(
+        CommonEnrichmentTelemetry::default(),
+        CommonEnrichmentTelemetry {
+            startup_x100: 0,
+            warmup_x100: 0,
+            after_start_x100: 0,
+            acceleration_x100: 0,
+            total_x100: 0,
+        }
+    );
+}
+
+#[test]
+fn common_action_telemetry_defaults_cleanly() {
+    assert_eq!(
+        CommonActionTelemetry::default(),
+        CommonActionTelemetry {
+            total_action_count: 0,
+            arm_scheduler_count: 0,
+            arm_injection_count: 0,
+            arm_ignition_count: 0,
+            apply_aux_count: 0,
+            apply_aux_command_count: 0,
+            idle_count: 0,
+            publish_snapshot_count: 0,
+            publish_snapshot: false,
+            persist_calibration: false,
+            persist_calibration_count: 0,
+            cancel_scheduler: false,
+            cancel_reason: CancelReason::Manual,
+            cancel_scheduler_count: 0,
+            multiple_cancel_reasons: false,
+        }
+    );
+}
+
+#[test]
+fn common_torque_telemetry_defaults_cleanly() {
+    assert_eq!(
+        CommonTorqueTelemetry::default(),
+        CommonTorqueTelemetry {
+            request_x1000: u16::default(),
+            allowed_x1000: u16::default(),
+            actuated_x1000: u16::default(),
+        }
+    );
+}
+
+#[test]
+fn common_engine_telemetry_defaults_cleanly() {
+    assert_eq!(
+        CommonEngineTelemetry::default(),
+        CommonEngineTelemetry {
+            rpm: Rpm::default(),
+            load_kpa10: Kpa10::default(),
+            angle_x10: Degrees10::default(),
+            phase: EnginePhase::default(),
+        }
+    );
+}
+
+#[test]
+fn common_trigger_edge_telemetry_defaults_cleanly() {
+    assert_eq!(
+        CommonTriggerEdgeTelemetry::default(),
+        CommonTriggerEdgeTelemetry {
+            seen: false,
+            at_us: Micros::new(0),
+            rpm: Rpm::default(),
+            angle_x10: Degrees10::default(),
+            authority: EngineTimeAuthority::none(),
+            synced: false,
+        }
+    );
+}
+
+#[test]
+fn common_cam_edge_telemetry_defaults_cleanly() {
+    assert_eq!(
+        CommonCamEdgeTelemetry::default(),
+        CommonCamEdgeTelemetry {
+            seen: false,
+            at_us: Micros::new(0),
+            cam_seen: false,
+        }
+    );
+}
+
+#[test]
+fn common_validated_input_telemetry_defaults_cleanly() {
+    assert_eq!(
+        CommonValidatedInputTelemetry::default(),
+        CommonValidatedInputTelemetry {
+            rpm: Rpm::default(),
+            load_kpa10: Kpa10::default(),
+            angle_x10: Degrees10::default(),
+            clamped: false,
+        }
+    );
+}
+
+#[test]
+fn common_fault_transition_telemetry_defaults_cleanly() {
+    assert_eq!(
+        CommonFaultTransitionTelemetry::default(),
+        CommonFaultTransitionTelemetry {
+            changed: false,
+            at_us: Micros::new(0),
+            previous_fault: FaultCode::None,
+            previous_severity: FaultSeverity::Info,
+            previous_cancel_reason: CancelReason::Manual,
+            current_fault: FaultCode::None,
+            current_severity: FaultSeverity::Info,
+            current_cancel_reason: CancelReason::Manual,
+        }
+    );
+}
+
+#[test]
+fn common_sync_telemetry_state_is_explicit_and_stable() {
+    assert_eq!(CommonSyncTelemetryState::NoSignal as u8, 0);
+    assert_eq!(CommonSyncTelemetryState::Unsynced as u8, 1);
+    assert_eq!(CommonSyncTelemetryState::CrankSynced as u8, 2);
+    assert_eq!(CommonSyncTelemetryState::FullSequentialAuthorized as u8, 3);
+    assert_eq!(CommonSyncTelemetryState::SyncLost as u8, 4);
 }
 
 #[test]

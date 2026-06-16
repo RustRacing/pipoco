@@ -306,8 +306,9 @@ fn authority_step_inputs(
         load_kpa10: input.load_kpa10.get() as u32,
         angle_x10: input.crank_angle_x10.get() as i32,
         authority,
-        launch_armed: false,
-        flat_shift_armed: false,
+        launch_armed: input.launch_armed,
+        flat_shift_armed: input.flat_shift_armed,
+        safety_latch_request: false,
     }
 }
 
@@ -329,6 +330,7 @@ fn conservative_control_inputs(input: Atmega2560StepInput) -> ControlInputs {
         },
         torque: TorqueInputs::new(100, 0, 100, 100, 100),
         ignition: IgnitionInputs::new(Degrees10::new(100), 0, 0, 0, false, input.rpm),
+        knock_intensity_x100: 0,
     }
 }
 
@@ -369,4 +371,36 @@ fn telemetry(
         snapshot.control.dwell,
         snapshot.control.fuel_pulse_width,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ecu_domain::{Kpa10, Micros, Rpm};
+
+    #[test]
+    fn authority_step_inputs_preserve_launch_arming() {
+        let input =
+            Atmega2560StepInput::bench_synced(Micros::new(1_000), Rpm::new(3_000), Kpa10::new(800))
+                .with_launch_armed(true)
+                .with_flat_shift_armed(false);
+        let mapped = authority_step_inputs(input, input.engine_time_authority);
+
+        assert!(mapped.launch_armed);
+        assert!(!mapped.flat_shift_armed);
+        assert_eq!(mapped.authority, input.engine_time_authority);
+    }
+
+    #[test]
+    fn authority_step_inputs_preserve_flat_shift_arming() {
+        let input =
+            Atmega2560StepInput::bench_synced(Micros::new(1_000), Rpm::new(3_000), Kpa10::new(800))
+                .with_launch_armed(false)
+                .with_flat_shift_armed(true);
+        let mapped = authority_step_inputs(input, input.engine_time_authority);
+
+        assert!(!mapped.launch_armed);
+        assert!(mapped.flat_shift_armed);
+        assert_eq!(mapped.authority, input.engine_time_authority);
+    }
 }

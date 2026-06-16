@@ -1,7 +1,10 @@
 use super::*;
 use ecu_domain::{FaultCode, FaultSeverity, Lambda100, PulseWidthUs};
 use ecu_runtime::{
-    BaseFuelModel, EngineRuntime, EnrichmentInputs, IgnitionInputs, LambdaTrimInputs, TorqueInputs,
+    BaseFuelModel, EngineRuntime, EnrichmentInputs, IgnitionInputs, LambdaTrimInputs,
+    RuntimeFuelStrategy, RuntimeSemanticAxis16, RuntimeSemanticCalibration,
+    RuntimeSemanticCurve16U16, RuntimeSemanticState, RuntimeSemanticTable2dU16, TorqueInputs,
+    RUNTIME_SEMANTIC_TABLE_LEN,
 };
 
 fn control_inputs() -> ControlInputs {
@@ -22,6 +25,7 @@ fn control_inputs() -> ControlInputs {
         },
         torque: TorqueInputs::new(90, 90, 90, 90, 90),
         ignition: IgnitionInputs::new(Degrees10::new(100), 0, 0, 0, false, Rpm::new(3000)),
+        knock_intensity_x100: 0,
     }
 }
 
@@ -31,6 +35,89 @@ fn nonzero_fuel_model() -> BaseFuelModel {
         [Kpa10::new(600); 16],
         [[PulseWidthUs::new(2500); 16]; 16],
     )
+}
+
+fn semantic_axis2() -> RuntimeSemanticAxis16 {
+    RuntimeSemanticAxis16 {
+        len: 2,
+        values: [0, 2_000, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    }
+}
+
+fn semantic_curve_u16(value: u16) -> RuntimeSemanticCurve16U16 {
+    RuntimeSemanticCurve16U16 {
+        axis: semantic_axis2(),
+        values: [value; RUNTIME_SEMANTIC_TABLE_LEN],
+    }
+}
+
+fn semantic_table_u16(value: u16) -> RuntimeSemanticTable2dU16 {
+    RuntimeSemanticTable2dU16 {
+        rpm_axis: semantic_axis2(),
+        load_axis: semantic_axis2(),
+        values: [[value; RUNTIME_SEMANTIC_TABLE_LEN]; RUNTIME_SEMANTIC_TABLE_LEN],
+    }
+}
+
+fn semantic_shift_strategy(launch_rpm_limit: u16, flat_shift_rpm_min: u16) -> RuntimeFuelStrategy {
+    RuntimeFuelStrategy::SpeedDensityVe {
+        calibration: RuntimeSemanticCalibration {
+            ve_table: semantic_table_u16(7_000),
+            afr_target_table: semantic_table_u16(1_470),
+            deadtime_table_us: semantic_table_u16(0),
+            clt_corr_curve: semantic_curve_u16(1_000),
+            iat_corr_curve: semantic_curve_u16(1_000),
+            baro_corr_curve: semantic_curve_u16(1_000),
+            vbat_corr_curve: semantic_curve_u16(1_000),
+            cranking_curve: semantic_curve_u16(1_000),
+            afterstart_table: semantic_table_u16(1_000),
+            warmup_curve: semantic_curve_u16(1_000),
+            ae_tps_threshold_curve: semantic_curve_u16(1_000),
+            ae_map_threshold_curve: semantic_curve_u16(1_000),
+            ae_shot_curve_us: semantic_curve_u16(0),
+            ae_decay_steps_curve: semantic_curve_u16(1),
+            ae_decay_ratio_curve_x1000: semantic_curve_u16(1_000),
+            required_fuel_us: 1_000,
+            pref_kpa10: 1_000,
+            stoich_afr_x100: 1_470,
+            pw_max_us: 20_000,
+            afterstart_window_cycles: 0,
+            dfco_entry_rpm: 9_000,
+            dfco_exit_rpm: 8_900,
+            dfco_entry_tps_x100: 1,
+            dfco_exit_tps_x100: 2,
+            dfco_entry_map_kpa10: 20,
+            dfco_delay_cycles: 1,
+            soft_rev_rpm: 9_000,
+            hard_rev_rpm: 10_000,
+            rev_hysteresis_rpm: 100,
+            soft_retard_max_deg10: 0,
+            launch_rpm_limit,
+            launch_cut_cycles: 0,
+            flat_shift_rpm_min,
+            flat_shift_cut_cycles: 0,
+            knock_threshold_x100: 10_000,
+            knock_retard_step_deg10: 0,
+            knock_retard_max_deg10: 0,
+            knock_recovery_step_deg10: 0,
+            knock_recovery_delay_cycles: 0,
+            lambda_kp_x1000: 0,
+            lambda_ki_x1000: 0,
+        },
+        state: RuntimeSemanticState::default(),
+    }
+}
+
+fn semantic_shift_harness(
+    launch_rpm_limit: u16,
+    flat_shift_rpm_min: u16,
+) -> SimulationHarness<4, 4> {
+    let mut sim = SimulationHarness::default();
+    sim.configure_runtime_fuel_strategy(semantic_shift_strategy(
+        launch_rpm_limit,
+        flat_shift_rpm_min,
+    ));
+    sim
 }
 
 #[test]
@@ -68,6 +155,27 @@ fn harness_applies_board_like_events_to_runtime() {
 }
 
 #[test]
+fn default_shift_arming_leaves_semantic_cuts_inactive() {
+    let mut sim = semantic_shift_harness(2_500, 9_000);
+
+    sim.trigger_edge(Micros::new(10), Rpm::new(3_000), Degrees10::new(12), true)
+        .unwrap();
+    sim.sensor_frame(
+        Micros::new(12),
+        Rpm::new(3_000),
+        Kpa10::new(450),
+        Degrees10::new(12),
+    )
+    .unwrap();
+    sim.tick(Micros::new(20), control_inputs()).unwrap();
+    sim.drain_until_idle();
+
+    let result = sim.last_result().expect("tick result");
+    assert!(!result.control.fuel_intent.fuel_cut);
+    assert!(!result.control.fuel_intent.spark_cut);
+}
+
+#[test]
 fn fast_events_coalesce_by_kind() {
     let mut sim: SimulationHarness<2, 1> = SimulationHarness::default();
 
@@ -83,6 +191,50 @@ fn fast_events_coalesce_by_kind() {
     let snapshot = sim.runtime().snapshot();
     assert_eq!(snapshot.engine.rpm.get(), 1500);
     assert_eq!(snapshot.engine.angle_x10.get(), 40);
+}
+
+#[test]
+fn launch_shift_arming_can_trigger_semantic_cut() {
+    let mut sim = semantic_shift_harness(2_500, 9_000);
+
+    sim.trigger_edge(Micros::new(10), Rpm::new(3_000), Degrees10::new(12), true)
+        .unwrap();
+    sim.sensor_frame(
+        Micros::new(12),
+        Rpm::new(3_000),
+        Kpa10::new(450),
+        Degrees10::new(12),
+    )
+    .unwrap();
+    sim.set_shift_arming(true, false);
+    sim.tick(Micros::new(20), control_inputs()).unwrap();
+    sim.drain_until_idle();
+
+    let result = sim.last_result().expect("tick result");
+    assert!(result.control.fuel_intent.fuel_cut);
+    assert!(result.control.fuel_intent.spark_cut);
+}
+
+#[test]
+fn flat_shift_arming_can_trigger_semantic_cut() {
+    let mut sim = semantic_shift_harness(9_000, 2_500);
+
+    sim.trigger_edge(Micros::new(10), Rpm::new(3_000), Degrees10::new(12), true)
+        .unwrap();
+    sim.sensor_frame(
+        Micros::new(12),
+        Rpm::new(3_000),
+        Kpa10::new(450),
+        Degrees10::new(12),
+    )
+    .unwrap();
+    sim.set_shift_arming(false, true);
+    sim.tick(Micros::new(20), control_inputs()).unwrap();
+    sim.drain_until_idle();
+
+    let result = sim.last_result().expect("tick result");
+    assert!(result.control.fuel_intent.fuel_cut);
+    assert!(result.control.fuel_intent.spark_cut);
 }
 
 #[test]
@@ -141,10 +293,10 @@ fn hot_start_scenario_arms_scheduler_and_reaches_closed_loop() {
 
 #[test]
 fn simulator_can_run_injection_only_product_without_arm_scheduler() {
-    let mut runtime = EngineRuntime::new();
-    runtime.configure_fuel_model(nonzero_fuel_model());
-    runtime.configure_batch_injection(2);
+    let runtime = EngineRuntime::new();
     let mut sim: SimulationHarness<4, 2> = SimulationHarness::new(runtime);
+    sim.configure_batch_injection(2);
+    sim.configure_fuel_model(nonzero_fuel_model());
 
     sim.trigger_edge(Micros::new(20), Rpm::new(1800), Degrees10::new(30), true)
         .unwrap();
@@ -273,7 +425,7 @@ fn sync_loss_and_recovery_scenario_cancels_then_rearms_outputs() {
 #[test]
 fn sensor_fault_scenario_surfaces_limp_home_state() {
     let mut sim: SimulationHarness<4, 2> = SimulationHarness::default();
-    sim.runtime.set_fault_state(
+    sim.set_fault_state(
         FaultCode::SensorOutOfRange,
         FaultSeverity::Warning,
         ecu_domain::CancelReason::Manual,
@@ -356,7 +508,7 @@ fn sync_loss_cancels_pending_outputs_through_scheduler() {
 #[test]
 fn degraded_and_substituted_inputs_remain_visible_in_snapshot_and_faults() {
     let mut sim: SimulationHarness<4, 2> = SimulationHarness::default();
-    sim.runtime.set_fault_state(
+    sim.set_fault_state(
         FaultCode::SensorOutOfRange,
         FaultSeverity::Warning,
         ecu_domain::CancelReason::Manual,

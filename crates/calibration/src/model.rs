@@ -117,6 +117,40 @@ pub struct CalibrationSnapshot {
     pub staged: StagedCalibration,
 }
 
+/// Compact calibration package identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CalibrationPackageIdentity {
+    pub schema_version: CalibrationSchemaVersion,
+    pub active_revision: CalibrationRevision,
+    pub staged_base_revision: CalibrationRevision,
+    pub staged_revision: CalibrationRevision,
+    pub staged_dirty: bool,
+}
+
+impl CalibrationPackageIdentity {
+    pub const fn from_snapshot(snapshot: CalibrationSnapshot) -> Self {
+        Self {
+            schema_version: CalibrationSchemaVersion::CURRENT,
+            active_revision: snapshot.active.revision(),
+            staged_base_revision: snapshot.staged.base_revision(),
+            staged_revision: snapshot.staged.revision(),
+            staged_dirty: snapshot.staged.is_dirty(),
+        }
+    }
+
+    pub const fn from_blob(blob: PersistedCalibrationBlob) -> Self {
+        let snapshot = blob.snapshot();
+
+        Self {
+            schema_version: blob.schema_version(),
+            active_revision: snapshot.active.revision(),
+            staged_base_revision: snapshot.staged.base_revision(),
+            staged_revision: snapshot.staged.revision(),
+            staged_dirty: snapshot.staged.is_dirty(),
+        }
+    }
+}
+
 /// Persisted calibration schema version.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct CalibrationSchemaVersion(u16);

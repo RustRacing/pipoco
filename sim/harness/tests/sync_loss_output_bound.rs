@@ -17,11 +17,15 @@ use ecu_scheduler::{
     ChannelId, DwellUs, ExclusiveChannel, IgnitionPlan, InjectionPlan, OutputGroup,
     TimedIgnitionPlan, TimedInjectionPlan, TransitionDrainBuffer,
 };
-use ecu_target_common::adapter::{BoardAdapter, BoardEvent};
+use ecu_target_common::adapter::{
+    BoardAdapter, BoardEvent, CommonObservabilityDrainCycleReport, CommonObservabilityRecord,
+    CommonObservabilityRecordKind, CommonObservabilitySample, CommonObservabilityTraceCycleReport,
+    FixedCommonObservabilityTracePair,
+};
 use ecu_target_common::outputs::{
     RawScheduledOutputPin, ScheduledActionExecutor, ScheduledOutputs4,
 };
-use ecu_target_common::split_tick::run_runtime_scheduled_output_tick;
+use ecu_target_common::split_tick::run_runtime_scheduled_output_tick_and_push_to_trace_pair;
 
 /// ADR-0002: all energized outputs must reach safe (low) state within this
 /// bound of the sync-loss observation.
@@ -106,6 +110,53 @@ impl RawScheduledOutputPin for RecordingPin {
     }
 }
 
+#[inline]
+fn empty_observability_record() -> CommonObservabilityRecord {
+    CommonObservabilityRecord {
+        kind: CommonObservabilityRecordKind::Tick,
+        sample: CommonObservabilitySample::default(),
+    }
+}
+
+#[inline]
+fn empty_drain_report() -> CommonObservabilityDrainCycleReport {
+    CommonObservabilityDrainCycleReport {
+        sample: CommonObservabilityTraceCycleReport {
+            drained: 0,
+            overflow_count: 0,
+            status: Default::default(),
+        },
+        record: CommonObservabilityTraceCycleReport {
+            drained: 0,
+            overflow_count: 0,
+            status: Default::default(),
+        },
+    }
+}
+
+#[inline]
+fn drain_observability_pair<const S: usize, const R: usize, const SO: usize, const RO: usize>(
+    traces: &mut FixedCommonObservabilityTracePair<S, R>,
+    sample_out: &mut [CommonObservabilitySample; SO],
+    record_out: &mut [CommonObservabilityRecord; RO],
+    report: &mut CommonObservabilityDrainCycleReport,
+) {
+    *report = traces.drain_cycle(sample_out, record_out);
+}
+
+#[inline]
+fn assert_observability_drain(
+    report: &CommonObservabilityDrainCycleReport,
+    record: &CommonObservabilityRecord,
+    expected_kind: CommonObservabilityRecordKind,
+) {
+    assert_eq!(report.sample.drained, 1);
+    assert_eq!(report.record.drained, 1);
+    assert_eq!(report.sample.overflow_count, 0);
+    assert_eq!(report.record.overflow_count, 0);
+    assert_eq!(record.kind, expected_kind);
+}
+
 type Adapter = BoardAdapter<
     MockSensor,
     MockCapture,
@@ -133,6 +184,7 @@ fn control_inputs(now_us: Micros) -> ControlInputs {
         },
         torque: TorqueInputs::new(90, 90, 90, 90, 90),
         ignition: IgnitionInputs::new(Degrees10::new(100), 0, 0, 0, false, Rpm::new(3000)),
+        knock_intensity_x100: 0,
     }
 }
 
@@ -181,6 +233,11 @@ fn fuel_model() -> BaseFuelModel {
 }
 
 fn synced_running_adapter() -> Adapter {
+    let mut observability_traces: FixedCommonObservabilityTracePair<8, 8> =
+        FixedCommonObservabilityTracePair::new();
+    let mut observability_sample_scratch = [CommonObservabilitySample::default(); 8];
+    let mut observability_record_scratch = [empty_observability_record(); 8];
+    let mut last_drain_report = empty_drain_report();
     let sensor = MockSensor(CaptureSample {
         at_us: Micros::new(80),
         rpm: Rpm::new(3000),
@@ -195,45 +252,119 @@ fn synced_running_adapter() -> Adapter {
         MockTransport,
         MockStore,
     );
-    adapter.configure_fuel_model(fuel_model());
-    adapter.poll_sensor().expect("sensor sample");
     adapter
-        .apply_event(BoardEvent::TriggerEdge {
-            at_us: Micros::new(86),
-            rpm: Rpm::new(3000),
-            angle_x10: Degrees10::new(15),
-            authority: ecu_domain::EngineTimeAuthority::new(
-                ecu_domain::CrankSyncState::PrimaryLocked,
-                ecu_domain::PhaseSyncState::CrankOnly360,
-                ecu_domain::AbsoluteTimeAuthority::None,
-                500,
-                0,
-            ),
-            synced: true,
-        })
+        .configure_fuel_model_and_push_to_trace_pair(fuel_model(), &mut observability_traces)
+        .expect("fuel model config");
+    drain_observability_pair(
+        &mut observability_traces,
+        &mut observability_sample_scratch,
+        &mut observability_record_scratch,
+        &mut last_drain_report,
+    );
+    assert_observability_drain(
+        &last_drain_report,
+        &observability_record_scratch[0],
+        CommonObservabilityRecordKind::FuelModelConfig,
+    );
+    adapter
+        .poll_sensor_and_push_to_trace_pair(&mut observability_traces)
+        .expect("sensor sample");
+    drain_observability_pair(
+        &mut observability_traces,
+        &mut observability_sample_scratch,
+        &mut observability_record_scratch,
+        &mut last_drain_report,
+    );
+    assert_observability_drain(
+        &last_drain_report,
+        &observability_record_scratch[0],
+        CommonObservabilityRecordKind::SensorPoll,
+    );
+    adapter
+        .apply_event_and_push_to_trace_pair(
+            BoardEvent::TriggerEdge {
+                at_us: Micros::new(86),
+                rpm: Rpm::new(3000),
+                angle_x10: Degrees10::new(15),
+                authority: ecu_domain::EngineTimeAuthority::new(
+                    ecu_domain::CrankSyncState::PrimaryLocked,
+                    ecu_domain::PhaseSyncState::CrankOnly360,
+                    ecu_domain::AbsoluteTimeAuthority::None,
+                    500,
+                    0,
+                ),
+                synced: true,
+            },
+            &mut observability_traces,
+        )
         .expect("trigger edge");
+    drain_observability_pair(
+        &mut observability_traces,
+        &mut observability_sample_scratch,
+        &mut observability_record_scratch,
+        &mut last_drain_report,
+    );
+    assert_observability_drain(
+        &last_drain_report,
+        &observability_record_scratch[0],
+        CommonObservabilityRecordKind::TriggerEdge,
+    );
     adapter
-        .apply_event(BoardEvent::CamEdge {
-            at_us: Micros::new(87),
-            cam_seen: true,
-        })
+        .apply_event_and_push_to_trace_pair(
+            BoardEvent::CamEdge {
+                at_us: Micros::new(87),
+                cam_seen: true,
+            },
+            &mut observability_traces,
+        )
         .expect("cam edge");
+    drain_observability_pair(
+        &mut observability_traces,
+        &mut observability_sample_scratch,
+        &mut observability_record_scratch,
+        &mut last_drain_report,
+    );
+    assert_observability_drain(
+        &last_drain_report,
+        &observability_record_scratch[0],
+        CommonObservabilityRecordKind::CamEdge,
+    );
     adapter
 }
 
 #[test]
 fn outputs_deenergize_within_1000us_of_sync_loss() {
     let mut adapter = synced_running_adapter();
+    let mut observability_traces: FixedCommonObservabilityTracePair<8, 8> =
+        FixedCommonObservabilityTracePair::new();
+    let mut observability_sample_scratch = [CommonObservabilitySample::default(); 8];
+    let mut observability_record_scratch = [empty_observability_record(); 8];
+    let mut last_drain_report = empty_drain_report();
 
     // Running engine: arm a full injector + ignition pair (energized outputs
     // pending in the future, well beyond the bound under test).
     adapter
-        .apply_event(BoardEvent::Tick {
-            now_us: Micros::new(9_000),
-            control: control_inputs(Micros::new(9_000)),
-        })
+        .apply_event_and_push_to_trace_pair(
+            BoardEvent::Tick {
+                now_us: Micros::new(9_000),
+                control: control_inputs(Micros::new(9_000)),
+            },
+            &mut observability_traces,
+        )
         .expect("runtime arms scheduler");
+    drain_observability_pair(
+        &mut observability_traces,
+        &mut observability_sample_scratch,
+        &mut observability_record_scratch,
+        &mut last_drain_report,
+    );
+    assert_observability_drain(
+        &last_drain_report,
+        &observability_record_scratch[0],
+        CommonObservabilityRecordKind::Tick,
+    );
     adapter.actions().queue_mut().cancel_all();
+    adapter.actions().frontier_mut().cancel_all();
     adapter
         .actions()
         .execute(Action::ArmScheduler {
@@ -265,20 +396,48 @@ fn outputs_deenergize_within_1000us_of_sync_loss() {
     // Sync loss observed at this instant.
     let sync_loss_us = Micros::new(20_000);
     adapter
-        .apply_event(BoardEvent::TriggerEdge {
-            at_us: sync_loss_us,
-            rpm: Rpm::new(0),
-            angle_x10: Degrees10::new(15),
-            authority: ecu_domain::EngineTimeAuthority::none(),
-            synced: false,
-        })
+        .apply_event_and_push_to_trace_pair(
+            BoardEvent::TriggerEdge {
+                at_us: sync_loss_us,
+                rpm: Rpm::new(0),
+                angle_x10: Degrees10::new(15),
+                authority: ecu_domain::EngineTimeAuthority::none(),
+                synced: false,
+            },
+            &mut observability_traces,
+        )
         .expect("unsync trigger");
+    drain_observability_pair(
+        &mut observability_traces,
+        &mut observability_sample_scratch,
+        &mut observability_record_scratch,
+        &mut last_drain_report,
+    );
+    assert_observability_drain(
+        &last_drain_report,
+        &observability_record_scratch[0],
+        CommonObservabilityRecordKind::TriggerEdge,
+    );
     adapter
-        .apply_event(BoardEvent::CamEdge {
-            at_us: Micros::new(sync_loss_us.get() + 1),
-            cam_seen: false,
-        })
+        .apply_event_and_push_to_trace_pair(
+            BoardEvent::CamEdge {
+                at_us: Micros::new(sync_loss_us.get() + 1),
+                cam_seen: false,
+            },
+            &mut observability_traces,
+        )
         .expect("cam missing");
+    drain_observability_pair(
+        &mut observability_traces,
+        &mut observability_sample_scratch,
+        &mut observability_record_scratch,
+        &mut last_drain_report,
+    );
+    assert_observability_drain(
+        &last_drain_report,
+        &observability_record_scratch[0],
+        CommonObservabilityRecordKind::CamEdge,
+    );
 
     // Drive the shared scheduled-output seam at exactly the ADR-0002 bound.
     let deadline_us = Micros::new(sync_loss_us.get() + SYNC_LOSS_OUTPUT_BOUND_US);
@@ -290,14 +449,26 @@ fn outputs_deenergize_within_1000us_of_sync_loss() {
     );
     let mut drain = TransitionDrainBuffer::<8>::new();
 
-    let result = run_runtime_scheduled_output_tick(
+    let result = run_runtime_scheduled_output_tick_and_push_to_trace_pair(
         &mut adapter,
         deadline_us,
         control_inputs(deadline_us),
+        &mut observability_traces,
         &mut outputs,
         &mut drain,
     )
     .expect("split tick succeeds");
+    drain_observability_pair(
+        &mut observability_traces,
+        &mut observability_sample_scratch,
+        &mut observability_record_scratch,
+        &mut last_drain_report,
+    );
+    assert_observability_drain(
+        &last_drain_report,
+        &observability_record_scratch[0],
+        CommonObservabilityRecordKind::Tick,
+    );
 
     // Within the bound the pending energize transitions are cancelled: nothing
     // is drained or applied, and no pin is ever driven high.

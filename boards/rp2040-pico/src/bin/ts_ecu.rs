@@ -45,6 +45,40 @@ const OUTPUT_TEST_MAX_MS: u32 = 1000;
 const OUTPUT_TEST_MAX_REPS: u8 = 5;
 const OUTPUT_TEST_CHUNK_MS: u32 = 50;
 
+#[inline]
+fn empty_observability_record() -> CommonObservabilityRecord {
+    CommonObservabilityRecord {
+        kind: CommonObservabilityRecordKind::Tick,
+        sample: CommonObservabilitySample::default(),
+    }
+}
+
+#[inline]
+fn empty_drain_report() -> CommonObservabilityDrainCycleReport {
+    CommonObservabilityDrainCycleReport {
+        sample: CommonObservabilityTraceCycleReport {
+            drained: 0,
+            overflow_count: 0,
+            status: Default::default(),
+        },
+        record: CommonObservabilityTraceCycleReport {
+            drained: 0,
+            overflow_count: 0,
+            status: Default::default(),
+        },
+    }
+}
+
+#[inline]
+fn drain_observability_pair<const S: usize, const R: usize, const SO: usize, const RO: usize>(
+    traces: &mut FixedCommonObservabilityTracePair<S, R>,
+    sample_out: &mut [CommonObservabilitySample; SO],
+    record_out: &mut [CommonObservabilityRecord; RO],
+    report: &mut CommonObservabilityDrainCycleReport,
+) {
+    *report = traces.drain_cycle(sample_out, record_out);
+}
+
 #[cfg(feature = "capture-cam")]
 use core::sync::atomic::{AtomicBool, Ordering};
 use ecu_calibration::DfcoConfig;
@@ -59,12 +93,19 @@ use ecu_target_common::ts::service::TsService;
 use ecu_target_common::ts::state_ptr::StateRef;
 use ecu_target_common::{
     adapter::BoardAdapter,
+    adapter::{
+        CommonObservabilityDrainCycleReport, CommonObservabilityRecord,
+        CommonObservabilityRecordKind, CommonObservabilitySample,
+        CommonObservabilityTraceCycleReport, FixedCommonObservabilityTracePair,
+    },
     bringup::bringup_fuel_model,
-    control_inputs::split_control_inputs_from,
+    control_inputs::split_control_frame_from,
     outputs::{ScheduledActionExecutor, ScheduledOutputs4},
     sensor_sample::{BoardSensorSnapshotSampleSource, LiveLoadSensor},
-    split_tick::run_runtime_scheduled_output_tick,
-    trigger_adapter::{apply_trigger_timestamp_to_runtime_adapter, SplitTriggerAdapter},
+    split_tick::run_runtime_scheduled_output_tick_and_push_to_trace_pair,
+    trigger_adapter::{
+        apply_trigger_timestamp_to_runtime_adapter_and_push_to_trace_pair, SplitTriggerAdapter,
+    },
 };
 use ecu_ts::outpc::Outpc;
 use ecu_ts::persistence::{written_pages_require_runtime_fuel_retune, PersistedTsPageStore};
@@ -418,6 +459,11 @@ fn main() -> ! {
     let ign2 = IGN2_GPIO!(pins);
     let mut outputs = ScheduledOutputs4::new(inj1, inj2, ign1, ign2);
     let mut drain = TransitionDrainBuffer::<8>::new();
+    let mut observability_traces: FixedCommonObservabilityTracePair<16, 16> =
+        FixedCommonObservabilityTracePair::new();
+    let mut observability_sample_scratch = [CommonObservabilitySample::default(); 16];
+    let mut observability_record_scratch = [empty_observability_record(); 16];
+    let mut last_drain_report = empty_drain_report();
     // Hardware watchdog for the safety role. 500 ms is comfortably above the
     // worst-case main-loop iteration (sensor sample + USB pump + scheduler tick,
     // plus any clamped output test which feeds the watchdog mid-loop) yet tight
@@ -431,7 +477,16 @@ fn main() -> ! {
         AbsentTransport,
         AbsentStore,
     );
-    adapter.configure_fuel_model(bringup_fuel_model());
+    let _ = adapter.configure_fuel_model_and_push_to_trace_pair(
+        bringup_fuel_model(),
+        &mut observability_traces,
+    );
+    drain_observability_pair(
+        &mut observability_traces,
+        &mut observability_sample_scratch,
+        &mut observability_record_scratch,
+        &mut last_drain_report,
+    );
     let mut control_signals = Rp2040ControlSignals;
     let mut trigger_adapter = SplitTriggerAdapter::new(RpTime);
     #[cfg(feature = "synthetic-trigger-demo")]
@@ -473,9 +528,16 @@ fn main() -> ! {
     let mut store =
         PersistedTsPageStore::new(EcuStatePageStoreProvider::new(state), RamKv512::new());
     store.try_load();
-    adapter.configure_runtime_fuel_strategy(ecu_runtime::runtime_fuel_strategy_from_fuel_tune(
-        &store.runtime_fuel_tune(),
-    ));
+    let _ = adapter.configure_runtime_fuel_strategy_and_push_to_trace_pair(
+        ecu_runtime::runtime_fuel_strategy_from_fuel_tune(&store.runtime_fuel_tune()),
+        &mut observability_traces,
+    );
+    drain_observability_pair(
+        &mut observability_traces,
+        &mut observability_sample_scratch,
+        &mut observability_record_scratch,
+        &mut last_drain_report,
+    );
     refresh_ts_outpc_config_from_state(state);
     let mut ts = TsService::new(ecu_ts::TS_SIGNATURE, provider, store);
 
@@ -592,8 +654,15 @@ fn main() -> ! {
             if let Some(pages) = ts.server.store_mut().take_written_pages() {
                 if written_pages_require_runtime_fuel_retune(pages) {
                     let tune = ts.server.store().runtime_fuel_tune();
-                    adapter.configure_runtime_fuel_strategy(
+                    let _ = adapter.configure_runtime_fuel_strategy_and_push_to_trace_pair(
                         ecu_runtime::runtime_fuel_strategy_from_fuel_tune(&tune),
+                        &mut observability_traces,
+                    );
+                    drain_observability_pair(
+                        &mut observability_traces,
+                        &mut observability_sample_scratch,
+                        &mut observability_record_scratch,
+                        &mut last_drain_report,
                     );
                 }
             }
@@ -649,19 +718,54 @@ fn main() -> ! {
         }
 
         while let Some(ts) = capture_pop() {
-            let _ =
-                apply_trigger_timestamp_to_runtime_adapter(&mut adapter, &mut trigger_adapter, ts);
+            let _ = apply_trigger_timestamp_to_runtime_adapter_and_push_to_trace_pair(
+                &mut adapter,
+                &mut trigger_adapter,
+                ts,
+                &mut observability_traces,
+            );
+            drain_observability_pair(
+                &mut observability_traces,
+                &mut observability_sample_scratch,
+                &mut observability_record_scratch,
+                &mut last_drain_report,
+            );
         }
-        let _ = adapter.poll_sensor();
+        let _ = adapter.poll_sensor_and_push_to_trace_pair(&mut observability_traces);
+        drain_observability_pair(
+            &mut observability_traces,
+            &mut observability_sample_scratch,
+            &mut observability_record_scratch,
+            &mut last_drain_report,
+        );
 
         let now = Micros::new(RpTime.micros());
-        let _ = run_runtime_scheduled_output_tick(
+        let frame = split_control_frame_from(&mut control_signals, now, trigger_adapter.rpm())
+            .unwrap_or_else(|never| match never {});
+        let _ = adapter.set_shift_arming_and_push_to_trace_pair(
+            frame.launch_armed,
+            frame.flat_shift_armed,
+            &mut observability_traces,
+        );
+        drain_observability_pair(
+            &mut observability_traces,
+            &mut observability_sample_scratch,
+            &mut observability_record_scratch,
+            &mut last_drain_report,
+        );
+        let _ = run_runtime_scheduled_output_tick_and_push_to_trace_pair(
             &mut adapter,
             now,
-            split_control_inputs_from(&mut control_signals, now, trigger_adapter.rpm())
-                .unwrap_or_else(|never| match never {}),
+            frame.control,
+            &mut observability_traces,
             &mut outputs,
             &mut drain,
+        );
+        drain_observability_pair(
+            &mut observability_traces,
+            &mut observability_sample_scratch,
+            &mut observability_record_scratch,
+            &mut last_drain_report,
         );
 
         // Demo-only synthetic trigger source. Flashable firmware uses PIO capture.
@@ -687,10 +791,19 @@ fn main() -> ! {
             let cam_phase = CAM_PHASE.load(Ordering::Relaxed);
             if cam_phase != last_cam_phase {
                 last_cam_phase = cam_phase;
-                let _ = adapter.apply_event(BoardEvent::CamEdge {
-                    at_us: Micros::new(RpTime.micros()),
-                    cam_seen: cam_phase,
-                });
+                let _ = adapter.apply_event_and_push_to_trace_pair(
+                    BoardEvent::CamEdge {
+                        at_us: Micros::new(RpTime.micros()),
+                        cam_seen: cam_phase,
+                    },
+                    &mut observability_traces,
+                );
+                drain_observability_pair(
+                    &mut observability_traces,
+                    &mut observability_sample_scratch,
+                    &mut observability_record_scratch,
+                    &mut last_drain_report,
+                );
             }
         }
     }

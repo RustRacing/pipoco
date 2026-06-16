@@ -61,7 +61,18 @@ pub use sensors::{
     BoardSensorSnapshot, BoardSensorSnapshotCapture, BoardSensorSnapshotCaptureSource,
     BoardSensorValidityFlags, CaptureSample, CaptureSampleSource, CaptureSink, SensorSnapshot,
 };
-pub use telemetry::{EngineTimeAuthorityTelemetry, IgnitionProfileMode, TelemetryFrame};
+pub use telemetry::{
+    CommonActionTelemetry, CommonCamEdgeTelemetry, CommonControlReasonTelemetry,
+    CommonControlTelemetry, CommonDecisionTelemetry, CommonDiagnosticsTelemetry,
+    CommonEngineTelemetry, CommonEnrichmentTelemetry, CommonFaultTransitionTelemetry,
+    CommonFrontierTelemetry, CommonFuelObservationTelemetry, CommonFuelStrategyMode,
+    CommonIgnitionLimitReason, CommonLambdaMode, CommonPendingInputTelemetry, CommonSchedulerMode,
+    CommonSchedulerOwnershipTelemetry, CommonSchedulerReservationTelemetry,
+    CommonSchedulerStateSummaryTelemetry, CommonSchedulerWindowTelemetry,
+    CommonShiftArmingTelemetry, CommonSyncTelemetryState, CommonTorqueLimitReason,
+    CommonTorqueTelemetry, CommonTriggerEdgeTelemetry, CommonValidatedInputTelemetry,
+    EngineTimeAuthorityTelemetry, IgnitionProfileMode, TelemetryFrame,
+};
 pub use timing_island::{
     engine_time_authorizes_full_sequential, AuxCommand, AuxCommandBatch, AuxOutput, AuxValue,
     EcuOutput, EdgeBatch, EdgeKind, OutputLevel, OutputTransition, OutputTransitionBatch,

@@ -149,6 +149,7 @@ impl EcuSimHandle {
             },
             torque: TorqueInputs::new(driver_request, 30, 100, 100, 100),
             ignition: IgnitionInputs::new(Degrees10::new(100), 0, 0, 0, false, Rpm::new(self.rpm)),
+            knock_intensity_x100: 0,
         }
     }
 }

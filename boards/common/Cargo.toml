@@ -9,6 +9,7 @@ path = "src/lib.rs"
 
 [dependencies]
 ecu-calibration = { path = "../../crates/calibration" }
+ecu-spec = { path = "../../crates/spec" }
 ecu-ts = { path = "../../crates/ts", default-features = false, features = ["runtime"] }
 ecu-board-api = { path = "../../crates/board-api" }
 ecu-domain = { path = "../../crates/domain" }

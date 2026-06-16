@@ -204,18 +204,29 @@ fn evaluate_cut_arbitration(
     input: &RuntimeSemanticInputSnapshot,
     state: &mut RuntimeSemanticState,
 ) -> (bool, bool) {
-    // Priority 1: Safety latch
+    state.launch_active = false;
+    state.flat_shift_active = false;
+
+    // Priority 1: Direct per-channel cut requests on the live step path.
+    if input.direct_fuel_cut_request || input.direct_spark_cut_request {
+        return (
+            input.direct_fuel_cut_request,
+            input.direct_spark_cut_request,
+        );
+    }
+
+    // Priority 2: Safety latch
     let safety_latch = input.fuel_cut
         || input.spark_cut
         || matches!(input.mode, RuntimeSemanticEngineMode::Shutdown)
-        || state.sensor_plausibility_latched;
+        || input.safety_latch_request;
 
-    // Safety latch self-holding: clears when mode is Off AND cuts are false
+    // Safety latch self-holding: clears when mode is Off AND cuts are false.
     if state.safety_latched {
         if matches!(input.mode, RuntimeSemanticEngineMode::Off)
             && !input.fuel_cut
             && !input.spark_cut
-            && !state.sensor_plausibility_latched
+            && !input.safety_latch_request
         {
             state.safety_latched = false;
         }
@@ -227,7 +238,7 @@ fn evaluate_cut_arbitration(
         return (true, true);
     }
 
-    // Priority 2: Hard rev limit
+    // Priority 3: Hard rev limit
     state.rev_hard_active = latch_with_hysteresis(
         state.rev_hard_active,
         input.rpm.get(),
@@ -238,9 +249,10 @@ fn evaluate_cut_arbitration(
         return (true, true);
     }
 
-    // Priority 3: Launch cut
+    // Priority 4: Launch cut
     if input.launch_armed && input.rpm.get() >= cal.launch_rpm_limit {
         if cal.launch_cut_cycles == 0 {
+            state.launch_active = true;
             return (true, true);
         }
         let phase = state.launch_cut_cycle_count % (cal.launch_cut_cycles + 1);
@@ -250,9 +262,10 @@ fn evaluate_cut_arbitration(
         }
     }
 
-    // Priority 4: Flat-shift cut
+    // Priority 5: Flat-shift cut
     if input.flat_shift_armed && input.rpm.get() >= cal.flat_shift_rpm_min {
         if cal.flat_shift_cut_cycles == 0 {
+            state.flat_shift_active = true;
             return (true, true);
         }
         let phase = state.flat_shift_cut_cycle_count % (cal.flat_shift_cut_cycles + 1);
@@ -262,7 +275,7 @@ fn evaluate_cut_arbitration(
         }
     }
 
-    // Priority 5: DFCO (Running mode only)
+    // Priority 6: DFCO (Running mode only)
     if matches!(input.mode, RuntimeSemanticEngineMode::Running) {
         if state.dfco_active {
             state.dfco_active =
@@ -283,7 +296,7 @@ fn evaluate_cut_arbitration(
         }
     }
 
-    // Priority 6: Soft rev spark cut (no fuel cut)
+    // Priority 7: Soft rev spark cut (no fuel cut)
     state.rev_soft_active = latch_with_hysteresis(
         state.rev_soft_active,
         input.rpm.get(),
@@ -294,7 +307,7 @@ fn evaluate_cut_arbitration(
         return (false, true);
     }
 
-    // Priority 7: Knock (no cuts in v9)
+    // Priority 8: Knock (no cuts in v9)
     let knock_active = input.knock_intensity_x100 >= cal.knock_threshold_x100;
     if knock_active {
         state.knock_recovery_counter = 0;
@@ -375,6 +388,16 @@ fn semantic_abs_i32(value: i32) -> i32 {
 #[inline]
 fn semantic_effective_lambda_error(raw: i32) -> i32 {
     if semantic_abs_i32(raw) <= RUNTIME_SEMANTIC_LAMBDA_DEADBAND_X1000 {
+        0
+    } else {
+        raw
+    }
+}
+
+#[inline]
+fn semantic_effective_idle_rpm_error(target_rpm: u16, measured_rpm: u16) -> i32 {
+    let raw = i32::from(target_rpm) - i32::from(measured_rpm);
+    if semantic_abs_i32(raw) <= RUNTIME_SEMANTIC_IDLE_DEADBAND_RPM {
         0
     } else {
         raw
@@ -477,16 +500,71 @@ pub(crate) fn runtime_semantic_lambda_step(
     )
 }
 
+fn runtime_semantic_idle_step(
+    cal: &RuntimeSemanticCalibration,
+    input: &RuntimeSemanticInputSnapshot,
+    fuel_cut: bool,
+    spark_cut: bool,
+    idle_integrator_acc: i32,
+    ae_active_before_eval: bool,
+) -> (u16, RuntimeSemanticPiIntegratorState) {
+    let rpm_error = semantic_effective_idle_rpm_error(cal.idle_target_rpm, input.rpm.get());
+    let p_term = semantic_mul_div_floor_i32(rpm_error, cal.idle_kp_x1000 as i32, 1000);
+    let i_step = semantic_mul_div_floor_i32(rpm_error, cal.idle_ki_x1000 as i32, 1000);
+    let acc = idle_integrator_acc;
+    let base = i32::from(cal.idle_base_duty_x1000);
+    let duty_pre = base + p_term + acc;
+
+    let freeze_gate = input.clt_c10 < 700 || ae_active_before_eval || fuel_cut || spark_cut;
+    let anti_windup_freeze = (duty_pre <= i32::from(RUNTIME_SEMANTIC_IDLE_DUTY_MIN_X1000)
+        && i_step < 0)
+        || (duty_pre >= i32::from(RUNTIME_SEMANTIC_IDLE_DUTY_MAX_X1000) && i_step > 0);
+    let freeze = freeze_gate || anti_windup_freeze;
+
+    let acc_next = if freeze {
+        acc
+    } else {
+        acc.saturating_add(i_step)
+            .clamp(RUNTIME_SEMANTIC_IDLE_MIN_ACC, RUNTIME_SEMANTIC_IDLE_MAX_ACC)
+    };
+
+    let duty_pre = base + p_term + acc_next;
+    let idle_duty_x1000 = semantic_i32_to_u16_saturating(duty_pre).clamp(
+        RUNTIME_SEMANTIC_IDLE_DUTY_MIN_X1000,
+        RUNTIME_SEMANTIC_IDLE_DUTY_MAX_X1000,
+    );
+
+    (
+        idle_duty_x1000,
+        RuntimeSemanticPiIntegratorState {
+            acc: acc_next,
+            min_acc: RUNTIME_SEMANTIC_IDLE_MIN_ACC,
+            max_acc: RUNTIME_SEMANTIC_IDLE_MAX_ACC,
+            frozen: freeze,
+        },
+    )
+}
+
 /// The main v9 semantic fuel evaluator.
 ///
 /// Pure, deterministic, no_std/no_alloc, Verus-friendly.
 pub fn runtime_semantic_evaluate_fuel(
     cal: &RuntimeSemanticCalibration,
     input: RuntimeSemanticInputSnapshot,
-    mut state: RuntimeSemanticState,
+    state: RuntimeSemanticState,
 ) -> Result<RuntimeSemanticFuelObservations, RuntimeSemanticFuelError> {
+    runtime_semantic_evaluate_fuel_with_state(cal, input, state).map(|(obs, _)| obs)
+}
+
+pub(crate) fn runtime_semantic_evaluate_fuel_with_state(
+    cal: &RuntimeSemanticCalibration,
+    input: RuntimeSemanticInputSnapshot,
+    mut state: RuntimeSemanticState,
+) -> Result<(RuntimeSemanticFuelObservations, RuntimeSemanticState), RuntimeSemanticFuelError> {
     // Validate calibration axes
     validate_calibration(cal)?;
+
+    let ae_active_before_eval = state.ae_active;
 
     // VE lookup
     let ve_pct_x100 = semantic_bilerp_u16(&cal.ve_table, input.rpm.get(), input.load_kpa10.get());
@@ -575,6 +653,14 @@ pub fn runtime_semantic_evaluate_fuel(
         state.lambda_integrator_acc,
         ae_active_after_eval,
     );
+    let (idle_duty_x1000, idle_integrator_state) = runtime_semantic_idle_step(
+        cal,
+        &input,
+        fuel_cut_post_arbiter,
+        spark_cut_post_arbiter,
+        state.idle_integrator_acc,
+        ae_active_before_eval,
+    );
 
     let lambda_corr_x1000 = lambda_correction_x1000 as u32;
 
@@ -623,16 +709,24 @@ pub fn runtime_semantic_evaluate_fuel(
         pw.min(cal.pw_max_us)
     };
 
-    Ok(RuntimeSemanticFuelObservations {
-        ve_pct_x100: ve_pct_x100 as u16,
-        target_afr_x100: target_afr_x100 as u16,
-        pw_base_us,
-        pw_air_us,
-        pw_corr_us,
-        fuel_cut,
-        spark_cut,
-        lambda_correction_x1000,
-        lambda_integrator_state,
-        advance_deg10_trim,
-    })
+    state.lambda_integrator_acc = lambda_integrator_state.acc;
+    state.idle_integrator_acc = idle_integrator_state.acc;
+
+    Ok((
+        RuntimeSemanticFuelObservations {
+            ve_pct_x100: ve_pct_x100 as u16,
+            target_afr_x100: target_afr_x100 as u16,
+            pw_base_us,
+            pw_air_us,
+            pw_corr_us,
+            fuel_cut,
+            spark_cut,
+            lambda_correction_x1000,
+            lambda_integrator_state,
+            idle_duty_x1000,
+            idle_integrator_state,
+            advance_deg10_trim,
+        },
+        state,
+    ))
 }

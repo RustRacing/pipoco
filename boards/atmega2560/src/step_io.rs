@@ -24,6 +24,8 @@ pub struct Atmega2560StepInput {
     pub battery_mv: u16,
     pub lambda: Lambda100,
     pub engine_time_authority: EngineTimeAuthority,
+    pub launch_armed: bool,
+    pub flat_shift_armed: bool,
 }
 
 impl Atmega2560StepInput {
@@ -49,6 +51,8 @@ impl Atmega2560StepInput {
             battery_mv: 13_800,
             lambda: Lambda100::new(100),
             engine_time_authority: Self::expert_manual_authority(),
+            launch_armed: false,
+            flat_shift_armed: false,
         }
     }
 
@@ -64,6 +68,42 @@ impl Atmega2560StepInput {
             battery_mv: self.battery_mv,
             lambda: self.lambda,
             engine_time_authority: authority,
+            launch_armed: self.launch_armed,
+            flat_shift_armed: self.flat_shift_armed,
+        }
+    }
+
+    pub const fn with_launch_armed(self, launch_armed: bool) -> Self {
+        Self {
+            now_us: self.now_us,
+            rpm: self.rpm,
+            load_kpa10: self.load_kpa10,
+            crank_angle_x10: self.crank_angle_x10,
+            throttle: self.throttle,
+            coolant_temp_c10: self.coolant_temp_c10,
+            intake_temp_c10: self.intake_temp_c10,
+            battery_mv: self.battery_mv,
+            lambda: self.lambda,
+            engine_time_authority: self.engine_time_authority,
+            launch_armed,
+            flat_shift_armed: self.flat_shift_armed,
+        }
+    }
+
+    pub const fn with_flat_shift_armed(self, flat_shift_armed: bool) -> Self {
+        Self {
+            now_us: self.now_us,
+            rpm: self.rpm,
+            load_kpa10: self.load_kpa10,
+            crank_angle_x10: self.crank_angle_x10,
+            throttle: self.throttle,
+            coolant_temp_c10: self.coolant_temp_c10,
+            intake_temp_c10: self.intake_temp_c10,
+            battery_mv: self.battery_mv,
+            lambda: self.lambda,
+            engine_time_authority: self.engine_time_authority,
+            launch_armed: self.launch_armed,
+            flat_shift_armed,
         }
     }
 }

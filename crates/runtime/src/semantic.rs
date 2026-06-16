@@ -4,6 +4,7 @@ mod torque;
 mod types;
 
 pub use fuel::runtime_semantic_evaluate_fuel;
+pub(crate) use fuel::runtime_semantic_evaluate_fuel_with_state;
 #[cfg(test)]
 pub(crate) use fuel::runtime_semantic_lambda_step;
 pub use types::*;

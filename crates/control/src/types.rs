@@ -32,6 +32,7 @@ pub struct FuelInputSnapshot {
     pub map_kpa10: Kpa10,
     pub load_kpa10: Kpa10,
     pub tps_x100: u16,
+    pub knock_intensity_x100: u16,
     pub maf_x100: u16,
     pub clt_c10: i16,
     pub iat_c10: i16,
@@ -41,7 +42,10 @@ pub struct FuelInputSnapshot {
     pub lambda_measured: Lambda100,
     pub sync: SyncState,
     pub mode: FuelEngineMode,
+    pub launch_armed: bool,
+    pub flat_shift_armed: bool,
     pub fuel_cut_request: bool,
+    pub spark_cut_request: bool,
     pub target_afr_override_x100: FuelAfrOverride,
 }
 

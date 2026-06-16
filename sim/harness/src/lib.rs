@@ -5,10 +5,10 @@ pub mod plant;
 pub mod trace_replay;
 pub mod trigger_pattern;
 
-use ecu_domain::{Degrees10, Kpa10, Micros, Rpm};
+use ecu_domain::{CancelReason, Degrees10, FaultCode, FaultSeverity, Kpa10, Micros, Rpm};
 use ecu_runtime::{
-    ingress::AuthorityStepInputs, CamObservation, ControlInputs, DecoderObservation, EngineRuntime,
-    StepResult, TriggerObservation,
+    ingress::AuthorityStepInputs, BaseFuelModel, CamObservation, ControlInputs, DecoderObservation,
+    EngineRuntime, RuntimeFuelStrategy, StepResult, TriggerObservation,
 };
 
 /// Board-like simulation events that feed the runtime.
@@ -69,6 +69,10 @@ pub struct SimulationHarness<const FAST: usize, const SLOW: usize> {
 }
 
 impl<const FAST: usize, const SLOW: usize> SimulationHarness<FAST, SLOW> {
+    fn default_runtime() -> EngineRuntime {
+        EngineRuntime::new()
+    }
+
     pub fn new(runtime: EngineRuntime) -> Self {
         Self {
             runtime,
@@ -85,6 +89,18 @@ impl<const FAST: usize, const SLOW: usize> SimulationHarness<FAST, SLOW> {
 
     pub fn runtime(&self) -> &EngineRuntime {
         &self.runtime
+    }
+
+    pub fn configure_fuel_model(&mut self, fuel_model: BaseFuelModel) {
+        self.runtime.configure_fuel_model(fuel_model);
+    }
+
+    pub fn configure_runtime_fuel_strategy(&mut self, strategy: RuntimeFuelStrategy) {
+        self.runtime.configure_runtime_fuel_model(strategy);
+    }
+
+    pub fn configure_batch_injection(&mut self, cylinders: u8) {
+        self.runtime.configure_batch_injection(cylinders);
     }
 
     pub fn last_result(&self) -> Option<StepResult> {
@@ -142,6 +158,20 @@ impl<const FAST: usize, const SLOW: usize> SimulationHarness<FAST, SLOW> {
         control: ControlInputs,
     ) -> Result<QueueResult, QueueOverflow> {
         self.enqueue(SimEvent::Tick { now_us, control })
+    }
+
+    pub fn set_shift_arming(&mut self, launch_armed: bool, flat_shift_armed: bool) {
+        self.pending_launch_armed = launch_armed;
+        self.pending_flat_shift_armed = flat_shift_armed;
+    }
+
+    pub fn set_fault_state(
+        &mut self,
+        fault: FaultCode,
+        severity: FaultSeverity,
+        cancel_reason: CancelReason,
+    ) {
+        self.runtime.set_fault_state(fault, severity, cancel_reason);
     }
 
     pub fn drain_one(&mut self) -> Option<SimulationStep> {
@@ -216,6 +246,7 @@ impl<const FAST: usize, const SLOW: usize> SimulationHarness<FAST, SLOW> {
                     self.runtime.engine_time_authority(),
                     self.pending_launch_armed,
                     self.pending_flat_shift_armed,
+                    false,
                 );
                 let result = self.runtime.step_with_authority(inputs, control);
                 self.last_result = Some(result);
@@ -227,7 +258,7 @@ impl<const FAST: usize, const SLOW: usize> SimulationHarness<FAST, SLOW> {
 
 impl<const FAST: usize, const SLOW: usize> Default for SimulationHarness<FAST, SLOW> {
     fn default() -> Self {
-        Self::new(EngineRuntime::new())
+        Self::new(Self::default_runtime())
     }
 }
 

@@ -36,8 +36,9 @@ pub use profiles::{
     FuelOutputMode, FuelOutputProfile, FuelPlan, SparkOutputMode, SparkOutputProfile, SparkPlan,
 };
 pub use queue::{
-    ScheduleExport, ScheduledLevel, ScheduledTransition, ScheduledTransitionKind,
-    ScheduledTransitionQueue, ScheduledTransitionQueueSnapshot, TransitionDrainBuffer,
+    ScheduleExport, ScheduledLevel, ScheduledTimingMetrics, ScheduledTransition,
+    ScheduledTransitionKind, ScheduledTransitionQueue, ScheduledTransitionQueueSnapshot,
+    TransitionDrainBuffer,
 };
 pub use state::{SchedulerMode, SchedulerState};
 pub use types::{
@@ -50,8 +51,9 @@ pub use types::{
 /// Product code should use the scheduler state and planner APIs directly.
 pub mod test_support {
     pub use crate::conformance::{
-        observe_scheduler, SchedulerAdapterContract, SchedulerConformanceStatus,
-        SchedulerEventKind, SchedulerEventSnapshot, SchedulerObservedSurface,
+        observe_scheduler, observe_scheduler_queue, SchedulerAdapterContract,
+        SchedulerConformanceStatus, SchedulerEventKind, SchedulerEventSnapshot,
+        SchedulerObservedSurface,
     };
 }
 

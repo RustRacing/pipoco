@@ -75,8 +75,8 @@ pub mod units;
 /// Explicit compatibility namespace for legacy mirrors and migration shims.
 pub mod compat {
     pub use crate::compat_state::{
-        CoreAdapterContract, DiagnosticFlags, EcuConfig, EcuDerived, EcuFaults, EcuInputs,
-        EcuOutputs, RuntimeSignals, SafetyStatus,
+        CoreAdapterContract, CoreObservedSurface, DiagnosticFlags, EcuConfig, EcuDerived,
+        EcuFaults, EcuInputs, EcuOutputs, RuntimeSignals, SafetyStatus,
     };
     pub use crate::ecu_state::EcuState;
     pub use crate::runtime_adapter::{

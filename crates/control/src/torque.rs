@@ -18,6 +18,7 @@ pub enum TorqueLimitReason {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TorqueInputs {
     pub driver_request_x100: u16,
+    pub driver_request_x1000: Option<u16>,
     pub idle_request_x100: u16,
     pub rev_limit_x100: u16,
     pub knock_limit_x100: u16,
@@ -34,11 +35,17 @@ impl TorqueInputs {
     ) -> Self {
         Self {
             driver_request_x100,
+            driver_request_x1000: None,
             idle_request_x100,
             rev_limit_x100,
             knock_limit_x100,
             limp_limit_x100,
         }
+    }
+
+    pub fn with_driver_request_x1000(mut self, driver_request_x1000: u16) -> Self {
+        self.driver_request_x1000 = Some(driver_request_x1000);
+        self
     }
 }
 
@@ -49,15 +56,25 @@ impl TorqueInputs {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AllowedTorque {
     pub requested_x100: u16,
+    pub requested_x1000: u16,
     pub allowed_x100: u16,
+    pub allowed_x1000: u16,
     pub reason: TorqueLimitReason,
 }
 
 impl AllowedTorque {
-    pub const fn new(requested_x100: u16, allowed_x100: u16, reason: TorqueLimitReason) -> Self {
+    pub const fn new(
+        requested_x100: u16,
+        requested_x1000: u16,
+        allowed_x100: u16,
+        allowed_x1000: u16,
+        reason: TorqueLimitReason,
+    ) -> Self {
         Self {
             requested_x100,
+            requested_x1000,
             allowed_x100,
+            allowed_x1000,
             reason,
         }
     }
@@ -77,7 +94,13 @@ impl TorqueArbiter {
 
     pub fn evaluate(&self, inputs: TorqueInputs) -> AllowedTorque {
         let requested_x100 = inputs.driver_request_x100.max(inputs.idle_request_x100);
+        let driver_request_x1000 = inputs
+            .driver_request_x1000
+            .unwrap_or(inputs.driver_request_x100.saturating_mul(10));
+        let idle_request_x1000 = inputs.idle_request_x100.saturating_mul(10);
+        let requested_x1000 = core::cmp::max(driver_request_x1000, idle_request_x1000);
         let mut allowed_x100 = requested_x100;
+        let mut allowed_x1000 = requested_x1000;
         let mut reason = if inputs.idle_request_x100 >= inputs.driver_request_x100 {
             TorqueLimitReason::Idle
         } else {
@@ -85,14 +108,29 @@ impl TorqueArbiter {
         };
 
         let caps = [
-            (inputs.rev_limit_x100, TorqueLimitReason::RevLimiter),
-            (inputs.knock_limit_x100, TorqueLimitReason::Knock),
-            (inputs.limp_limit_x100, TorqueLimitReason::LimpMode),
+            (
+                inputs.rev_limit_x100,
+                inputs.rev_limit_x100.saturating_mul(10),
+                TorqueLimitReason::RevLimiter,
+            ),
+            (
+                inputs.knock_limit_x100,
+                inputs.knock_limit_x100.saturating_mul(10),
+                TorqueLimitReason::Knock,
+            ),
+            (
+                inputs.limp_limit_x100,
+                inputs.limp_limit_x100.saturating_mul(10),
+                TorqueLimitReason::LimpMode,
+            ),
         ];
-        for (cap, cap_reason) in caps {
-            if cap < allowed_x100 {
-                allowed_x100 = cap;
+        for (cap_x100, cap_x1000, cap_reason) in caps {
+            if cap_x100 < allowed_x100 {
+                allowed_x100 = cap_x100;
                 reason = cap_reason;
+            }
+            if cap_x1000 < allowed_x1000 {
+                allowed_x1000 = cap_x1000;
             }
         }
 
@@ -100,6 +138,12 @@ impl TorqueArbiter {
             reason = TorqueLimitReason::None;
         }
 
-        AllowedTorque::new(requested_x100, allowed_x100, reason)
+        AllowedTorque::new(
+            requested_x100,
+            requested_x1000,
+            allowed_x100,
+            allowed_x1000,
+            reason,
+        )
     }
 }

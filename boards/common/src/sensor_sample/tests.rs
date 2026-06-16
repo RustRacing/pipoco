@@ -1,4 +1,10 @@
 use super::*;
+use crate::adapter::{
+    CommonObservabilityRecord, CommonObservabilityRecordKind, FixedCommonObservabilityRecordTrace,
+    FixedCommonObservabilityTrace, FixedCommonObservabilityTracePair,
+};
+use crate::noop::{NoopCapture, NoopStore, NoopTransport, NoopWatchdog};
+use crate::outputs::ScheduledActionExecutor;
 use ecu_domain::{Degrees10, KnockLevelX100, Lambda100, MassAirFlowX100, Rpm, VehicleSpeedKph10};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -302,4 +308,863 @@ fn sensor_frame_sample_source_adapts_raw_frame_to_snapshot_compatibility_path() 
     assert_eq!(sample.angle_x10, frame.angle_x10);
     assert_eq!(source.last_frame(), Some(frame));
     assert_eq!(source.last_snapshot(), Some(snapshot));
+}
+
+#[test]
+fn apply_sensor_frame_to_runtime_adapter_and_record_records_snapshot_event() {
+    let mut board = BoardAdapter::new(
+        FixedLoadSensor::new(MockTime(0), Kpa10::new(700)),
+        NoopCapture,
+        ScheduledActionExecutor::<4>::new(),
+        NoopWatchdog,
+        NoopTransport,
+        NoopStore,
+    );
+    let frame = full_sensor_frame();
+    let mut source = MockFrameSource { frame: Some(frame) };
+    let mut trace: FixedCommonObservabilityRecordTrace<4> =
+        FixedCommonObservabilityRecordTrace::new();
+
+    let recorded =
+        apply_sensor_frame_to_runtime_adapter_and_record(&mut board, &mut source, &mut trace)
+            .unwrap();
+
+    assert!(recorded);
+    assert_eq!(trace.len(), 1);
+    assert_eq!(
+        trace.get(0),
+        Some(CommonObservabilityRecord {
+            kind: CommonObservabilityRecordKind::SensorSnapshotCapture,
+            sample: board.observability_sample(),
+        })
+    );
+}
+
+#[test]
+fn apply_sensor_frame_to_runtime_adapter_and_record_returns_false_when_missing() {
+    let mut board = BoardAdapter::new(
+        FixedLoadSensor::new(MockTime(0), Kpa10::new(700)),
+        NoopCapture,
+        ScheduledActionExecutor::<4>::new(),
+        NoopWatchdog,
+        NoopTransport,
+        NoopStore,
+    );
+    let mut source = MockFrameSource { frame: None };
+    let mut trace: FixedCommonObservabilityRecordTrace<4> =
+        FixedCommonObservabilityRecordTrace::new();
+
+    let recorded =
+        apply_sensor_frame_to_runtime_adapter_and_record(&mut board, &mut source, &mut trace)
+            .unwrap();
+
+    assert!(!recorded);
+    assert_eq!(trace.len(), 0);
+}
+
+#[test]
+fn apply_sensor_frame_to_runtime_adapter_and_record_reports_overflow_after_runtime_update() {
+    let mut board = BoardAdapter::new(
+        FixedLoadSensor::new(MockTime(0), Kpa10::new(700)),
+        NoopCapture,
+        ScheduledActionExecutor::<4>::new(),
+        NoopWatchdog,
+        NoopTransport,
+        NoopStore,
+    );
+    let frame = full_sensor_frame();
+    let snapshot = board_sensor_snapshot_from_frame(frame);
+    let mut source = MockFrameSource { frame: Some(frame) };
+    let mut trace: FixedCommonObservabilityRecordTrace<1> =
+        FixedCommonObservabilityRecordTrace::new();
+    trace
+        .push(CommonObservabilityRecord {
+            kind: CommonObservabilityRecordKind::SensorSnapshotCapture,
+            sample: board.observability_sample(),
+        })
+        .unwrap();
+
+    let err = apply_sensor_frame_to_runtime_adapter_and_record(&mut board, &mut source, &mut trace)
+        .unwrap_err();
+
+    assert!(matches!(err, SensorFrameAndRecordError::Record(_)));
+    assert_eq!(trace.len(), 1);
+    assert_eq!(board.runtime().snapshot().engine.rpm, snapshot.rpm);
+    assert_eq!(
+        board.runtime().snapshot().engine.load_kpa10,
+        snapshot.map_kpa10
+    );
+    assert_eq!(
+        board.runtime().snapshot().engine.angle_x10,
+        Degrees10::new(120)
+    );
+}
+
+#[test]
+fn apply_sensor_frame_to_runtime_adapter_and_push_pair_records_matching_traces() {
+    let mut board = BoardAdapter::new(
+        FixedLoadSensor::new(MockTime(0), Kpa10::new(700)),
+        NoopCapture,
+        ScheduledActionExecutor::<4>::new(),
+        NoopWatchdog,
+        NoopTransport,
+        NoopStore,
+    );
+    let frame = full_sensor_frame();
+    let mut source = MockFrameSource { frame: Some(frame) };
+    let mut sample_trace: FixedCommonObservabilityTrace<4> = FixedCommonObservabilityTrace::new();
+    let mut record_trace: FixedCommonObservabilityRecordTrace<4> =
+        FixedCommonObservabilityRecordTrace::new();
+
+    let recorded = apply_sensor_frame_to_runtime_adapter_and_push_pair(
+        &mut board,
+        &mut source,
+        &mut sample_trace,
+        &mut record_trace,
+    )
+    .unwrap();
+
+    let expected_sample = board.observability_sample();
+    assert!(recorded);
+    assert_eq!(sample_trace.len(), 1);
+    assert_eq!(record_trace.len(), 1);
+    assert_eq!(sample_trace.get(0), Some(expected_sample));
+    assert_eq!(
+        record_trace.get(0),
+        Some(CommonObservabilityRecord {
+            kind: CommonObservabilityRecordKind::SensorSnapshotCapture,
+            sample: expected_sample,
+        })
+    );
+}
+
+#[test]
+fn apply_sensor_frame_to_runtime_adapter_and_push_pair_returns_false_when_missing() {
+    let mut board = BoardAdapter::new(
+        FixedLoadSensor::new(MockTime(0), Kpa10::new(700)),
+        NoopCapture,
+        ScheduledActionExecutor::<4>::new(),
+        NoopWatchdog,
+        NoopTransport,
+        NoopStore,
+    );
+    let mut source = MockFrameSource { frame: None };
+    let initial_sample = board.observability_sample();
+    let mut sample_trace: FixedCommonObservabilityTrace<1> = FixedCommonObservabilityTrace::new();
+    let mut record_trace: FixedCommonObservabilityRecordTrace<1> =
+        FixedCommonObservabilityRecordTrace::new();
+    sample_trace.push(initial_sample).unwrap();
+    record_trace
+        .push(CommonObservabilityRecord {
+            kind: CommonObservabilityRecordKind::Tick,
+            sample: initial_sample,
+        })
+        .unwrap();
+
+    let recorded = apply_sensor_frame_to_runtime_adapter_and_push_pair(
+        &mut board,
+        &mut source,
+        &mut sample_trace,
+        &mut record_trace,
+    )
+    .unwrap();
+
+    assert!(!recorded);
+    assert_eq!(sample_trace.len(), 1);
+    assert_eq!(record_trace.len(), 1);
+    assert_eq!(sample_trace.get(0), Some(initial_sample));
+    assert_eq!(
+        record_trace.get(0),
+        Some(CommonObservabilityRecord {
+            kind: CommonObservabilityRecordKind::Tick,
+            sample: initial_sample,
+        })
+    );
+}
+
+#[test]
+fn apply_sensor_frame_to_runtime_adapter_and_push_pair_reports_record_overflow_before_sample_push()
+{
+    let mut board = BoardAdapter::new(
+        FixedLoadSensor::new(MockTime(0), Kpa10::new(700)),
+        NoopCapture,
+        ScheduledActionExecutor::<4>::new(),
+        NoopWatchdog,
+        NoopTransport,
+        NoopStore,
+    );
+    let frame = full_sensor_frame();
+    let mut source = MockFrameSource { frame: Some(frame) };
+    let mut sample_trace: FixedCommonObservabilityTrace<1> = FixedCommonObservabilityTrace::new();
+    let mut record_trace: FixedCommonObservabilityRecordTrace<1> =
+        FixedCommonObservabilityRecordTrace::new();
+    let initial_sample = board.observability_sample();
+    sample_trace.push(initial_sample).unwrap();
+    record_trace
+        .push(CommonObservabilityRecord {
+            kind: CommonObservabilityRecordKind::Tick,
+            sample: initial_sample,
+        })
+        .unwrap();
+
+    let err = apply_sensor_frame_to_runtime_adapter_and_push_pair(
+        &mut board,
+        &mut source,
+        &mut sample_trace,
+        &mut record_trace,
+    )
+    .unwrap_err();
+
+    assert!(matches!(err, SensorFrameAndPushPairError::Record(_)));
+    assert_eq!(sample_trace.len(), 1);
+    assert_eq!(record_trace.len(), 1);
+    assert_eq!(sample_trace.get(0), Some(initial_sample));
+    assert_eq!(
+        record_trace.get(0),
+        Some(CommonObservabilityRecord {
+            kind: CommonObservabilityRecordKind::Tick,
+            sample: initial_sample,
+        })
+    );
+}
+
+#[test]
+fn apply_sensor_frame_to_runtime_adapter_and_push_pair_reports_sample_overflow_after_record_push() {
+    let mut board = BoardAdapter::new(
+        FixedLoadSensor::new(MockTime(0), Kpa10::new(700)),
+        NoopCapture,
+        ScheduledActionExecutor::<4>::new(),
+        NoopWatchdog,
+        NoopTransport,
+        NoopStore,
+    );
+    let frame = full_sensor_frame();
+    let mut source = MockFrameSource { frame: Some(frame) };
+    let mut sample_trace: FixedCommonObservabilityTrace<1> = FixedCommonObservabilityTrace::new();
+    let mut record_trace: FixedCommonObservabilityRecordTrace<1> =
+        FixedCommonObservabilityRecordTrace::new();
+    let initial_sample = board.observability_sample();
+    sample_trace.push(initial_sample).unwrap();
+
+    let err = apply_sensor_frame_to_runtime_adapter_and_push_pair(
+        &mut board,
+        &mut source,
+        &mut sample_trace,
+        &mut record_trace,
+    )
+    .unwrap_err();
+
+    let expected_sample = board.observability_sample();
+    assert!(matches!(err, SensorFrameAndPushPairError::Sample(_)));
+    assert_eq!(sample_trace.len(), 1);
+    assert_eq!(record_trace.len(), 1);
+    assert_eq!(sample_trace.get(0), Some(initial_sample));
+    assert_eq!(
+        record_trace.get(0),
+        Some(CommonObservabilityRecord {
+            kind: CommonObservabilityRecordKind::SensorSnapshotCapture,
+            sample: expected_sample,
+        })
+    );
+}
+
+#[test]
+fn apply_sensor_frame_to_runtime_adapter_and_push_to_trace_pair_records_matching_traces() {
+    let mut board = BoardAdapter::new(
+        FixedLoadSensor::new(MockTime(0), Kpa10::new(700)),
+        NoopCapture,
+        ScheduledActionExecutor::<4>::new(),
+        NoopWatchdog,
+        NoopTransport,
+        NoopStore,
+    );
+    let frame = full_sensor_frame();
+    let mut source = MockFrameSource { frame: Some(frame) };
+    let mut traces: FixedCommonObservabilityTracePair<4, 4> =
+        FixedCommonObservabilityTracePair::new();
+
+    let recorded = apply_sensor_frame_to_runtime_adapter_and_push_to_trace_pair(
+        &mut board,
+        &mut source,
+        &mut traces,
+    )
+    .unwrap();
+
+    let expected_sample = board.observability_sample();
+    assert!(recorded);
+    assert_eq!(traces.sample().len(), 1);
+    assert_eq!(traces.record().len(), 1);
+    assert_eq!(traces.sample().get(0), Some(expected_sample));
+    assert_eq!(
+        traces.record().get(0),
+        Some(CommonObservabilityRecord {
+            kind: CommonObservabilityRecordKind::SensorSnapshotCapture,
+            sample: expected_sample,
+        })
+    );
+}
+
+#[test]
+fn apply_sensor_frame_to_runtime_adapter_and_push_to_trace_pair_returns_false_when_missing() {
+    let mut board = BoardAdapter::new(
+        FixedLoadSensor::new(MockTime(0), Kpa10::new(700)),
+        NoopCapture,
+        ScheduledActionExecutor::<4>::new(),
+        NoopWatchdog,
+        NoopTransport,
+        NoopStore,
+    );
+    let mut source = MockFrameSource { frame: None };
+    let initial_sample = board.observability_sample();
+    let mut traces: FixedCommonObservabilityTracePair<1, 1> =
+        FixedCommonObservabilityTracePair::new();
+    traces.sample_mut().push(initial_sample).unwrap();
+    traces
+        .record_mut()
+        .push(CommonObservabilityRecord {
+            kind: CommonObservabilityRecordKind::Tick,
+            sample: initial_sample,
+        })
+        .unwrap();
+
+    let recorded = apply_sensor_frame_to_runtime_adapter_and_push_to_trace_pair(
+        &mut board,
+        &mut source,
+        &mut traces,
+    )
+    .unwrap();
+
+    assert!(!recorded);
+    assert_eq!(traces.sample().len(), 1);
+    assert_eq!(traces.record().len(), 1);
+    assert_eq!(traces.sample().get(0), Some(initial_sample));
+    assert_eq!(
+        traces.record().get(0),
+        Some(CommonObservabilityRecord {
+            kind: CommonObservabilityRecordKind::Tick,
+            sample: initial_sample,
+        })
+    );
+}
+
+#[test]
+fn apply_sensor_frame_to_runtime_adapter_and_push_to_trace_pair_reports_record_overflow_before_sample_push(
+) {
+    let mut board = BoardAdapter::new(
+        FixedLoadSensor::new(MockTime(0), Kpa10::new(700)),
+        NoopCapture,
+        ScheduledActionExecutor::<4>::new(),
+        NoopWatchdog,
+        NoopTransport,
+        NoopStore,
+    );
+    let frame = full_sensor_frame();
+    let mut source = MockFrameSource { frame: Some(frame) };
+    let mut traces: FixedCommonObservabilityTracePair<1, 1> =
+        FixedCommonObservabilityTracePair::new();
+    let initial_sample = board.observability_sample();
+    traces.sample_mut().push(initial_sample).unwrap();
+    traces
+        .record_mut()
+        .push(CommonObservabilityRecord {
+            kind: CommonObservabilityRecordKind::Tick,
+            sample: initial_sample,
+        })
+        .unwrap();
+
+    let err = apply_sensor_frame_to_runtime_adapter_and_push_to_trace_pair(
+        &mut board,
+        &mut source,
+        &mut traces,
+    )
+    .unwrap_err();
+
+    assert!(matches!(err, SensorFrameAndPushPairError::Record(_)));
+    assert_eq!(traces.sample().len(), 1);
+    assert_eq!(traces.record().len(), 1);
+    assert_eq!(traces.sample().get(0), Some(initial_sample));
+    assert_eq!(
+        traces.record().get(0),
+        Some(CommonObservabilityRecord {
+            kind: CommonObservabilityRecordKind::Tick,
+            sample: initial_sample,
+        })
+    );
+}
+
+#[test]
+fn apply_sensor_frame_to_runtime_adapter_and_push_to_trace_pair_reports_sample_overflow_after_record_push(
+) {
+    let mut board = BoardAdapter::new(
+        FixedLoadSensor::new(MockTime(0), Kpa10::new(700)),
+        NoopCapture,
+        ScheduledActionExecutor::<4>::new(),
+        NoopWatchdog,
+        NoopTransport,
+        NoopStore,
+    );
+    let frame = full_sensor_frame();
+    let mut source = MockFrameSource { frame: Some(frame) };
+    let mut traces: FixedCommonObservabilityTracePair<1, 2> =
+        FixedCommonObservabilityTracePair::new();
+    let initial_sample = board.observability_sample();
+    traces.sample_mut().push(initial_sample).unwrap();
+
+    let err = apply_sensor_frame_to_runtime_adapter_and_push_to_trace_pair(
+        &mut board,
+        &mut source,
+        &mut traces,
+    )
+    .unwrap_err();
+
+    let expected_sample = board.observability_sample();
+    assert!(matches!(err, SensorFrameAndPushPairError::Sample(_)));
+    assert_eq!(traces.sample().len(), 1);
+    assert_eq!(traces.record().len(), 1);
+    assert_eq!(traces.sample().get(0), Some(initial_sample));
+    assert_eq!(
+        traces.record().get(0),
+        Some(CommonObservabilityRecord {
+            kind: CommonObservabilityRecordKind::SensorSnapshotCapture,
+            sample: expected_sample,
+        })
+    );
+}
+
+#[test]
+fn apply_snapshot_capture_to_runtime_adapter_and_record_records_snapshot_event() {
+    let mut board = BoardAdapter::new(
+        FixedLoadSensor::new(MockTime(0), Kpa10::new(700)),
+        NoopCapture,
+        ScheduledActionExecutor::<4>::new(),
+        NoopWatchdog,
+        NoopTransport,
+        NoopStore,
+    );
+    let snapshot = full_sensor_snapshot();
+    let mut source = MockSnapshotSource {
+        capture: Some(snapshot_capture(snapshot)),
+    };
+    let mut trace: FixedCommonObservabilityRecordTrace<4> =
+        FixedCommonObservabilityRecordTrace::new();
+
+    let recorded =
+        apply_snapshot_capture_to_runtime_adapter_and_record(&mut board, &mut source, &mut trace)
+            .unwrap();
+
+    assert!(recorded);
+    assert_eq!(trace.len(), 1);
+    assert_eq!(
+        trace.get(0),
+        Some(CommonObservabilityRecord {
+            kind: CommonObservabilityRecordKind::SensorSnapshotCapture,
+            sample: board.observability_sample(),
+        })
+    );
+}
+
+#[test]
+fn apply_snapshot_capture_to_runtime_adapter_and_record_returns_false_when_missing() {
+    let mut board = BoardAdapter::new(
+        FixedLoadSensor::new(MockTime(0), Kpa10::new(700)),
+        NoopCapture,
+        ScheduledActionExecutor::<4>::new(),
+        NoopWatchdog,
+        NoopTransport,
+        NoopStore,
+    );
+    let mut source = MockSnapshotSource { capture: None };
+    let mut trace: FixedCommonObservabilityRecordTrace<4> =
+        FixedCommonObservabilityRecordTrace::new();
+
+    let recorded =
+        apply_snapshot_capture_to_runtime_adapter_and_record(&mut board, &mut source, &mut trace)
+            .unwrap();
+
+    assert!(!recorded);
+    assert_eq!(trace.len(), 0);
+}
+
+#[test]
+fn apply_snapshot_capture_to_runtime_adapter_and_record_reports_overflow_after_runtime_update() {
+    let mut board = BoardAdapter::new(
+        FixedLoadSensor::new(MockTime(0), Kpa10::new(700)),
+        NoopCapture,
+        ScheduledActionExecutor::<4>::new(),
+        NoopWatchdog,
+        NoopTransport,
+        NoopStore,
+    );
+    let snapshot = full_sensor_snapshot();
+    let mut source = MockSnapshotSource {
+        capture: Some(snapshot_capture(snapshot)),
+    };
+    let mut trace: FixedCommonObservabilityRecordTrace<1> =
+        FixedCommonObservabilityRecordTrace::new();
+    trace
+        .push(CommonObservabilityRecord {
+            kind: CommonObservabilityRecordKind::SensorSnapshotCapture,
+            sample: board.observability_sample(),
+        })
+        .unwrap();
+
+    let err =
+        apply_snapshot_capture_to_runtime_adapter_and_record(&mut board, &mut source, &mut trace)
+            .unwrap_err();
+
+    assert!(matches!(err, SnapshotCaptureAndRecordError::Record(_)));
+    assert_eq!(trace.len(), 1);
+    assert_eq!(board.runtime().snapshot().engine.rpm, snapshot.rpm);
+    assert_eq!(
+        board.runtime().snapshot().engine.load_kpa10,
+        snapshot.map_kpa10
+    );
+    assert_eq!(
+        board.runtime().snapshot().engine.angle_x10,
+        Degrees10::new(120)
+    );
+}
+
+#[test]
+fn apply_snapshot_capture_to_runtime_adapter_and_push_pair_records_matching_traces() {
+    let mut board = BoardAdapter::new(
+        FixedLoadSensor::new(MockTime(0), Kpa10::new(700)),
+        NoopCapture,
+        ScheduledActionExecutor::<4>::new(),
+        NoopWatchdog,
+        NoopTransport,
+        NoopStore,
+    );
+    let snapshot = full_sensor_snapshot();
+    let mut source = MockSnapshotSource {
+        capture: Some(snapshot_capture(snapshot)),
+    };
+    let mut sample_trace: FixedCommonObservabilityTrace<4> = FixedCommonObservabilityTrace::new();
+    let mut record_trace: FixedCommonObservabilityRecordTrace<4> =
+        FixedCommonObservabilityRecordTrace::new();
+
+    let recorded = apply_snapshot_capture_to_runtime_adapter_and_push_pair(
+        &mut board,
+        &mut source,
+        &mut sample_trace,
+        &mut record_trace,
+    )
+    .unwrap();
+
+    let expected_sample = board.observability_sample();
+    assert!(recorded);
+    assert_eq!(sample_trace.len(), 1);
+    assert_eq!(record_trace.len(), 1);
+    assert_eq!(sample_trace.get(0), Some(expected_sample));
+    assert_eq!(
+        record_trace.get(0),
+        Some(CommonObservabilityRecord {
+            kind: CommonObservabilityRecordKind::SensorSnapshotCapture,
+            sample: expected_sample,
+        })
+    );
+}
+
+#[test]
+fn apply_snapshot_capture_to_runtime_adapter_and_push_pair_returns_false_when_missing() {
+    let mut board = BoardAdapter::new(
+        FixedLoadSensor::new(MockTime(0), Kpa10::new(700)),
+        NoopCapture,
+        ScheduledActionExecutor::<4>::new(),
+        NoopWatchdog,
+        NoopTransport,
+        NoopStore,
+    );
+    let mut source = MockSnapshotSource { capture: None };
+    let initial_sample = board.observability_sample();
+    let mut sample_trace: FixedCommonObservabilityTrace<1> = FixedCommonObservabilityTrace::new();
+    let mut record_trace: FixedCommonObservabilityRecordTrace<1> =
+        FixedCommonObservabilityRecordTrace::new();
+    sample_trace.push(initial_sample).unwrap();
+    record_trace
+        .push(CommonObservabilityRecord {
+            kind: CommonObservabilityRecordKind::Tick,
+            sample: initial_sample,
+        })
+        .unwrap();
+
+    let recorded = apply_snapshot_capture_to_runtime_adapter_and_push_pair(
+        &mut board,
+        &mut source,
+        &mut sample_trace,
+        &mut record_trace,
+    )
+    .unwrap();
+
+    assert!(!recorded);
+    assert_eq!(sample_trace.len(), 1);
+    assert_eq!(record_trace.len(), 1);
+    assert_eq!(sample_trace.get(0), Some(initial_sample));
+    assert_eq!(
+        record_trace.get(0),
+        Some(CommonObservabilityRecord {
+            kind: CommonObservabilityRecordKind::Tick,
+            sample: initial_sample,
+        })
+    );
+}
+
+#[test]
+fn apply_snapshot_capture_to_runtime_adapter_and_push_pair_reports_record_overflow_before_sample_push(
+) {
+    let mut board = BoardAdapter::new(
+        FixedLoadSensor::new(MockTime(0), Kpa10::new(700)),
+        NoopCapture,
+        ScheduledActionExecutor::<4>::new(),
+        NoopWatchdog,
+        NoopTransport,
+        NoopStore,
+    );
+    let snapshot = full_sensor_snapshot();
+    let mut source = MockSnapshotSource {
+        capture: Some(snapshot_capture(snapshot)),
+    };
+    let mut sample_trace: FixedCommonObservabilityTrace<1> = FixedCommonObservabilityTrace::new();
+    let mut record_trace: FixedCommonObservabilityRecordTrace<1> =
+        FixedCommonObservabilityRecordTrace::new();
+    let initial_sample = board.observability_sample();
+    sample_trace.push(initial_sample).unwrap();
+    record_trace
+        .push(CommonObservabilityRecord {
+            kind: CommonObservabilityRecordKind::Tick,
+            sample: initial_sample,
+        })
+        .unwrap();
+
+    let err = apply_snapshot_capture_to_runtime_adapter_and_push_pair(
+        &mut board,
+        &mut source,
+        &mut sample_trace,
+        &mut record_trace,
+    )
+    .unwrap_err();
+
+    assert!(matches!(err, SnapshotCaptureAndPushPairError::Record(_)));
+    assert_eq!(sample_trace.len(), 1);
+    assert_eq!(record_trace.len(), 1);
+    assert_eq!(sample_trace.get(0), Some(initial_sample));
+    assert_eq!(
+        record_trace.get(0),
+        Some(CommonObservabilityRecord {
+            kind: CommonObservabilityRecordKind::Tick,
+            sample: initial_sample,
+        })
+    );
+}
+
+#[test]
+fn apply_snapshot_capture_to_runtime_adapter_and_push_pair_reports_sample_overflow_after_record_push(
+) {
+    let mut board = BoardAdapter::new(
+        FixedLoadSensor::new(MockTime(0), Kpa10::new(700)),
+        NoopCapture,
+        ScheduledActionExecutor::<4>::new(),
+        NoopWatchdog,
+        NoopTransport,
+        NoopStore,
+    );
+    let snapshot = full_sensor_snapshot();
+    let mut source = MockSnapshotSource {
+        capture: Some(snapshot_capture(snapshot)),
+    };
+    let mut sample_trace: FixedCommonObservabilityTrace<1> = FixedCommonObservabilityTrace::new();
+    let mut record_trace: FixedCommonObservabilityRecordTrace<1> =
+        FixedCommonObservabilityRecordTrace::new();
+    let initial_sample = board.observability_sample();
+    sample_trace.push(initial_sample).unwrap();
+
+    let err = apply_snapshot_capture_to_runtime_adapter_and_push_pair(
+        &mut board,
+        &mut source,
+        &mut sample_trace,
+        &mut record_trace,
+    )
+    .unwrap_err();
+
+    let expected_sample = board.observability_sample();
+    assert!(matches!(err, SnapshotCaptureAndPushPairError::Sample(_)));
+    assert_eq!(sample_trace.len(), 1);
+    assert_eq!(record_trace.len(), 1);
+    assert_eq!(sample_trace.get(0), Some(initial_sample));
+    assert_eq!(
+        record_trace.get(0),
+        Some(CommonObservabilityRecord {
+            kind: CommonObservabilityRecordKind::SensorSnapshotCapture,
+            sample: expected_sample,
+        })
+    );
+}
+
+#[test]
+fn apply_snapshot_capture_to_runtime_adapter_and_push_to_trace_pair_records_matching_traces() {
+    let mut board = BoardAdapter::new(
+        FixedLoadSensor::new(MockTime(0), Kpa10::new(700)),
+        NoopCapture,
+        ScheduledActionExecutor::<4>::new(),
+        NoopWatchdog,
+        NoopTransport,
+        NoopStore,
+    );
+    let snapshot = full_sensor_snapshot();
+    let mut source = MockSnapshotSource {
+        capture: Some(snapshot_capture(snapshot)),
+    };
+    let mut traces: FixedCommonObservabilityTracePair<4, 4> =
+        FixedCommonObservabilityTracePair::new();
+
+    let recorded = apply_snapshot_capture_to_runtime_adapter_and_push_to_trace_pair(
+        &mut board,
+        &mut source,
+        &mut traces,
+    )
+    .unwrap();
+
+    let expected_sample = board.observability_sample();
+    assert!(recorded);
+    assert_eq!(traces.sample().len(), 1);
+    assert_eq!(traces.record().len(), 1);
+    assert_eq!(traces.sample().get(0), Some(expected_sample));
+    assert_eq!(
+        traces.record().get(0),
+        Some(CommonObservabilityRecord {
+            kind: CommonObservabilityRecordKind::SensorSnapshotCapture,
+            sample: expected_sample,
+        })
+    );
+}
+
+#[test]
+fn apply_snapshot_capture_to_runtime_adapter_and_push_to_trace_pair_returns_false_when_missing() {
+    let mut board = BoardAdapter::new(
+        FixedLoadSensor::new(MockTime(0), Kpa10::new(700)),
+        NoopCapture,
+        ScheduledActionExecutor::<4>::new(),
+        NoopWatchdog,
+        NoopTransport,
+        NoopStore,
+    );
+    let mut source = MockSnapshotSource { capture: None };
+    let initial_sample = board.observability_sample();
+    let mut traces: FixedCommonObservabilityTracePair<1, 1> =
+        FixedCommonObservabilityTracePair::new();
+    traces.sample_mut().push(initial_sample).unwrap();
+    traces
+        .record_mut()
+        .push(CommonObservabilityRecord {
+            kind: CommonObservabilityRecordKind::Tick,
+            sample: initial_sample,
+        })
+        .unwrap();
+
+    let recorded = apply_snapshot_capture_to_runtime_adapter_and_push_to_trace_pair(
+        &mut board,
+        &mut source,
+        &mut traces,
+    )
+    .unwrap();
+
+    assert!(!recorded);
+    assert_eq!(traces.sample().len(), 1);
+    assert_eq!(traces.record().len(), 1);
+    assert_eq!(traces.sample().get(0), Some(initial_sample));
+    assert_eq!(
+        traces.record().get(0),
+        Some(CommonObservabilityRecord {
+            kind: CommonObservabilityRecordKind::Tick,
+            sample: initial_sample,
+        })
+    );
+}
+
+#[test]
+fn apply_snapshot_capture_to_runtime_adapter_and_push_to_trace_pair_reports_record_overflow_before_sample_push(
+) {
+    let mut board = BoardAdapter::new(
+        FixedLoadSensor::new(MockTime(0), Kpa10::new(700)),
+        NoopCapture,
+        ScheduledActionExecutor::<4>::new(),
+        NoopWatchdog,
+        NoopTransport,
+        NoopStore,
+    );
+    let snapshot = full_sensor_snapshot();
+    let mut source = MockSnapshotSource {
+        capture: Some(snapshot_capture(snapshot)),
+    };
+    let mut traces: FixedCommonObservabilityTracePair<1, 1> =
+        FixedCommonObservabilityTracePair::new();
+    let initial_sample = board.observability_sample();
+    traces.sample_mut().push(initial_sample).unwrap();
+    traces
+        .record_mut()
+        .push(CommonObservabilityRecord {
+            kind: CommonObservabilityRecordKind::Tick,
+            sample: initial_sample,
+        })
+        .unwrap();
+
+    let err = apply_snapshot_capture_to_runtime_adapter_and_push_to_trace_pair(
+        &mut board,
+        &mut source,
+        &mut traces,
+    )
+    .unwrap_err();
+
+    assert!(matches!(err, SnapshotCaptureAndPushPairError::Record(_)));
+    assert_eq!(traces.sample().len(), 1);
+    assert_eq!(traces.record().len(), 1);
+    assert_eq!(traces.sample().get(0), Some(initial_sample));
+    assert_eq!(
+        traces.record().get(0),
+        Some(CommonObservabilityRecord {
+            kind: CommonObservabilityRecordKind::Tick,
+            sample: initial_sample,
+        })
+    );
+}
+
+#[test]
+fn apply_snapshot_capture_to_runtime_adapter_and_push_to_trace_pair_reports_sample_overflow_after_record_push(
+) {
+    let mut board = BoardAdapter::new(
+        FixedLoadSensor::new(MockTime(0), Kpa10::new(700)),
+        NoopCapture,
+        ScheduledActionExecutor::<4>::new(),
+        NoopWatchdog,
+        NoopTransport,
+        NoopStore,
+    );
+    let snapshot = full_sensor_snapshot();
+    let mut source = MockSnapshotSource {
+        capture: Some(snapshot_capture(snapshot)),
+    };
+    let mut traces: FixedCommonObservabilityTracePair<1, 2> =
+        FixedCommonObservabilityTracePair::new();
+    let initial_sample = board.observability_sample();
+    traces.sample_mut().push(initial_sample).unwrap();
+
+    let err = apply_snapshot_capture_to_runtime_adapter_and_push_to_trace_pair(
+        &mut board,
+        &mut source,
+        &mut traces,
+    )
+    .unwrap_err();
+
+    let expected_sample = board.observability_sample();
+    assert!(matches!(err, SnapshotCaptureAndPushPairError::Sample(_)));
+    assert_eq!(traces.sample().len(), 1);
+    assert_eq!(traces.record().len(), 1);
+    assert_eq!(traces.sample().get(0), Some(initial_sample));
+    assert_eq!(
+        traces.record().get(0),
+        Some(CommonObservabilityRecord {
+            kind: CommonObservabilityRecordKind::SensorSnapshotCapture,
+            sample: expected_sample,
+        })
+    );
 }
