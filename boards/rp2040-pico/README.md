@@ -30,7 +30,7 @@ probe-rs run --chip RP2040 target/thumbv6m-none-eabi/release/ts-ecu
 ```
 
 ## Connect to TunerStudio
-- Open `crates/core/tests/assets/IPW-ECU.ini` from the repo in TunerStudio
+- Open `crates/compat/tests/assets/IPW-ECU.ini` from the repo in TunerStudio
 - Select serial port for Pico (USB CDC)
 - You should see live gauges (RPM, MAP, TPS, CLT, IAT, VBATT, etc.) from the board runtime
 

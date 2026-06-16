@@ -266,7 +266,7 @@ None. All v4 gates passed 2026-04-24.
 - **No oracle-copy surfaces**: Scheduler no longer exposes differential DTOs as
   production API. Runtime/root conformance tests use product APIs only for
   observed values.
-- **ECU-spec dependency hygiene**: No production code in `ecu-runtime`, `ecu-scheduler`, `ecu-core`, or board crates depends on `ecu-spec`.
+- **ECU-spec dependency hygiene**: No production code in `ecu-runtime`, `ecu-scheduler`, `ecu-compat`, or board crates depends on `ecu-spec`.
 
 ### Blockers
 None. All v5 gates passed.

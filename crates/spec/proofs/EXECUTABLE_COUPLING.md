@@ -80,9 +80,9 @@ Columns: `frozen contract`, `executable function(s)`, `proof artifact`, `couplin
 
 | Frozen Contract | Executable Function(s) | Proof Artifact | Coupling Method | Symbolic Domain | Status | Command |
 |---|---|---|---|---|---|---|
-| Root IPW fuel | `ecu_core::EcuState::injection_pulse_width(rpm, load)` | `tests/fm0016_core_reducer.rs` | Direct execution test against FM0016 fixtures; IPW vs VE gap via `CoreAdapterContract::IpwVsVeFuelModel` | all fixture cases | adapter-contract | `cargo test --test fm0016_core_reducer` |
-| Root ignition timing | `ecu_core::EcuState::ignition_advance_deg(rpm, load)` | `tests/fm0016_core_reducer.rs` | Direct execution; timing table vs VE via `CoreAdapterContract::TimingTableVsFrozenSpec` | all fixture cases | adapter-contract | `cargo test --test fm0016_core_reducer` |
-| Root RPM/sync/faults | `ecu_core::EcuState::current_rpm()`, `current_synced()`, `current_fault_flags()` | `tests/fm0016_core_reducer.rs` | Direct comparison against fixture inputs | all fixture cases | covered | `cargo test --test fm0016_core_reducer` |
+| Root IPW fuel | `ecu_compat::EcuState::injection_pulse_width(rpm, load)` | `tests/fm0016_core_reducer.rs` | Direct execution test against FM0016 fixtures; IPW vs VE gap via `CoreAdapterContract::IpwVsVeFuelModel` | all fixture cases | adapter-contract | `cargo test --test fm0016_core_reducer` |
+| Root ignition timing | `ecu_compat::EcuState::ignition_advance_deg(rpm, load)` | `tests/fm0016_core_reducer.rs` | Direct execution; timing table vs VE via `CoreAdapterContract::TimingTableVsFrozenSpec` | all fixture cases | adapter-contract | `cargo test --test fm0016_core_reducer` |
+| Root RPM/sync/faults | `ecu_compat::EcuState::current_rpm()`, `current_synced()`, `current_fault_flags()` | `tests/fm0016_core_reducer.rs` | Direct comparison against fixture inputs | all fixture cases | covered | `cargo test --test fm0016_core_reducer` |
 
 ---
 

@@ -45,7 +45,7 @@ full engine thermodynamics or electrical behavior.
 ## Example
 
 ```rust
-use ecu_core::{EcuState, TriggerDecoder};
+use ecu_compat::{EcuState, TriggerDecoder};
 use simulation::{
     EngineConfig, EngineSimulator, OutputCapture, SensorSimulator, SimulatedTime,
     TriggerGenerator, TriggerPattern,

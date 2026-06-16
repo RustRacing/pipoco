@@ -1,6 +1,6 @@
 # Pipoco — a minimal Rust ECU
 
-Pipoco is a small Rust ECU workspace built around no_std-compatible runtime crates. The split crates own trigger decoding, scheduling, board interfaces, TunerStudio protocol/page DTOs, and fuel/runtime strategy; `ecu-core` remains a legacy compatibility facade for `EcuState`, TS page-store glue, trigger primitives, and safety helpers. Board crates wire those reusable pieces to pins, ADC, timers, persistence, and transport.
+Pipoco is a small Rust ECU workspace built around no_std-compatible runtime crates. The split crates own trigger decoding, scheduling, board interfaces, TunerStudio protocol/page DTOs, and fuel/runtime strategy; `ecu-compat` remains a legacy compatibility facade for `EcuState`, TS page-store glue, trigger primitives, and safety helpers. Board crates wire those reusable pieces to pins, ADC, timers, persistence, and transport.
 
 Status: prototype with a verified runtime inventory. The live path currently covers trigger decoding, scheduler execution, safety gating, and base injector pulse-width lookup; several advertised control features remain built but not wired.
 
@@ -45,7 +45,7 @@ See per-board docs for pins and features: `boards/rp2040-pico/TS-HOWTO.md` and t
 
 ## TunerStudio Integration
 
-- INI asset used by tests: `crates/core/tests/assets/IPW-ECU.ini` (signature “IPW‑ECU V0.1”).
+- INI asset used by tests: `crates/compat/tests/assets/IPW-ECU.ini` (signature “IPW‑ECU V0.1”).
 - Pages in use:
   - [Sensors] (3): TPS/MAP calibration, CLT/IAT curves
   - [AE] (4): accel-response calibration and decay/lockout settings
@@ -74,7 +74,7 @@ See per-board docs for pins and features: `boards/rp2040-pico/TS-HOWTO.md` and t
 ```
 pipoco/
 ├── crates/              # Reusable ECU libraries
-│   ├── core/            # Legacy compatibility facade (no_std-compatible)
+│   ├── compat/          # Legacy compatibility facade (no_std-compatible)
 │   ├── domain/          # Units, ids, authority, and shared domain types
 │   ├── runtime/         # Runtime orchestration
 │   └── spec/            # Executable specs and formal/proof artifacts

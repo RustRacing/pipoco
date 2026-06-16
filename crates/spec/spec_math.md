@@ -493,7 +493,7 @@ rg -n "panic!\b|\.unwrap\(\)|\bexpect\(" \
 
 # Production library sources — scan for panic/unwrap/expect
 rg -n "panic!\b|\.unwrap\(\)|\bexpect\(" \
-    ecu-runtime/src/ ecu-scheduler/src/ ecu-core/src/ \
+    ecu-runtime/src/ ecu-scheduler/src/ ecu-compat/src/ \
     2>/dev/null | grep -v "cfg(test)" | grep -v "mod tests" | grep -v "^\s*//"
 ```
 
