@@ -152,6 +152,7 @@ impl Transport for BbqTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::message::{transport_parity_sample_messages, TRANSPORT_PARITY_SAMPLE_COUNT};
 
     #[test]
     fn send_receive_small_message() {
@@ -168,5 +169,19 @@ mod tests {
         assert_eq!(rx.try_receive(), Some(msg));
         assert_eq!(tx.stats().tx_count, 1);
         assert_eq!(rx.stats().rx_count, 1);
+    }
+
+    #[test]
+    fn transport_parity_sample_set_roundtrips_over_bbqueue() {
+        let (mut tx, mut rx) = BbqTransport::create_test_pair();
+
+        for message in transport_parity_sample_messages() {
+            tx.send(&message).expect("send");
+            assert_eq!(rx.try_receive(), Some(message));
+            assert_eq!(rx.last_receive_error(), None);
+        }
+
+        assert_eq!(tx.stats().tx_count, TRANSPORT_PARITY_SAMPLE_COUNT as u32);
+        assert_eq!(rx.stats().rx_count, TRANSPORT_PARITY_SAMPLE_COUNT as u32);
     }
 }

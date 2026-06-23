@@ -1,7 +1,9 @@
 use ecu_calibration::{
-    ActiveCalibration, CalibrationClass, CalibrationDiff, CalibrationSnapshot, CommitRules,
-    CommitVerdict, ExpertTriggerCalibration, ExpertTriggerRecordError,
-    ExpertTriggerValidationError, PersistedCalibrationBlob, StagedCalibration,
+    ActiveCalibration, CalibrationClass, CalibrationDiff, CalibrationHardwareTargetId,
+    CalibrationPackageCompareResult, CalibrationPackageMigrationResult, CalibrationPackageReview,
+    CalibrationRuntimeBuildId, CalibrationSnapshot, CommitRules, CommitVerdict,
+    ExpertTriggerCalibration, ExpertTriggerRecordError, ExpertTriggerValidationError,
+    PersistedCalibrationBlob, PersistedCalibrationPackage, StagedCalibration,
     EXPERT_TRIGGER_RECORD_LEN,
 };
 use ecu_domain::CommitPolicy;
@@ -222,6 +224,37 @@ impl CalibrationEditSurface {
         PersistedCalibrationBlob::new(self.snapshot)
     }
 
+    pub fn expert_trigger_calibration(&self) -> ExpertTriggerCalibration {
+        self.snapshot.staged.calibration().geometry.expert_trigger
+    }
+
+    pub fn sync_expert_trigger_calibration(&mut self, proposed: ExpertTriggerCalibration) {
+        let mut staged_calibration = self.snapshot.staged.calibration();
+        if staged_calibration.geometry.expert_trigger == proposed {
+            self.diff = CalibrationDiff::from_views(
+                self.snapshot.active,
+                self.snapshot.staged,
+                CalibrationClass::NoChange,
+            );
+            return;
+        }
+        staged_calibration.set_expert_trigger(proposed);
+        self.snapshot.staged.replace_calibration(staged_calibration);
+        self.diff = CalibrationDiff::from_views(
+            self.snapshot.active,
+            self.snapshot.staged,
+            CalibrationClass::SafetyCritical,
+        );
+    }
+
+    pub fn persist_with_target_identity(
+        &self,
+        runtime_build_id: CalibrationRuntimeBuildId,
+        hardware_target_id: CalibrationHardwareTargetId,
+    ) -> PersistedCalibrationPackage {
+        PersistedCalibrationPackage::new(self.persist(), runtime_build_id, hardware_target_id)
+    }
+
     pub fn reset_staged(&mut self) -> CalibrationCommandResult {
         self.snapshot.staged = StagedCalibration::new(
             self.snapshot.active.revision(),
@@ -242,6 +275,120 @@ pub enum CalibrationCommandResult {
     Committed(CalibrationDiff),
     Deferred(CalibrationDiff),
     Reset(CalibrationDiff),
+}
+
+/// TS-facing review workflow result for a candidate persisted calibration package.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CalibrationPackageWorkflowReview {
+    pub candidate_review: CalibrationPackageReview,
+    pub candidate_vs_current: CalibrationPackageCompareResult,
+}
+
+/// TS-facing apply workflow result for a candidate persisted calibration package.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CalibrationPackageApplyResult {
+    AppliedUnchanged {
+        workflow: CalibrationPackageWorkflowReview,
+        package: PersistedCalibrationPackage,
+        diff: CalibrationDiff,
+    },
+    AppliedMigrated {
+        workflow: CalibrationPackageWorkflowReview,
+        package: PersistedCalibrationPackage,
+        diff: CalibrationDiff,
+    },
+    Rejected {
+        workflow: CalibrationPackageWorkflowReview,
+    },
+}
+
+impl CalibrationEditSurface {
+    pub fn export_current_package(
+        &self,
+        runtime_build_id: CalibrationRuntimeBuildId,
+        hardware_target_id: CalibrationHardwareTargetId,
+    ) -> PersistedCalibrationPackage {
+        self.persist_with_target_identity(runtime_build_id, hardware_target_id)
+    }
+
+    pub fn review_candidate_package(
+        &self,
+        candidate: PersistedCalibrationPackage,
+        runtime_build_id: CalibrationRuntimeBuildId,
+        hardware_target_id: CalibrationHardwareTargetId,
+    ) -> CalibrationPackageWorkflowReview {
+        let current = self.persist_with_target_identity(runtime_build_id, hardware_target_id);
+
+        CalibrationPackageWorkflowReview {
+            candidate_review: candidate.review_against(runtime_build_id, hardware_target_id),
+            candidate_vs_current: current.compare_against(candidate),
+        }
+    }
+
+    pub fn apply_candidate_package(
+        &mut self,
+        candidate: PersistedCalibrationPackage,
+        runtime_build_id: CalibrationRuntimeBuildId,
+        hardware_target_id: CalibrationHardwareTargetId,
+    ) -> CalibrationPackageApplyResult {
+        let workflow =
+            self.review_candidate_package(candidate, runtime_build_id, hardware_target_id);
+
+        match candidate.migrate_against(runtime_build_id, hardware_target_id) {
+            CalibrationPackageMigrationResult::Rejected { .. } => {
+                CalibrationPackageApplyResult::Rejected { workflow }
+            }
+            CalibrationPackageMigrationResult::Unchanged { package, .. } => {
+                let next_calibration = package.blob.snapshot().staged.calibration();
+                let staged_changed = self.snapshot.staged.calibration() != next_calibration;
+                self.snapshot.staged.replace_calibration(next_calibration);
+                self.diff = CalibrationDiff::from_views(
+                    self.snapshot.active,
+                    self.snapshot.staged,
+                    if staged_changed {
+                        CalibrationClass::SafetyCritical
+                    } else {
+                        CalibrationClass::NoChange
+                    },
+                );
+
+                CalibrationPackageApplyResult::AppliedUnchanged {
+                    workflow,
+                    package,
+                    diff: self.diff,
+                }
+            }
+            CalibrationPackageMigrationResult::Migrated { package, .. } => {
+                let next_calibration = package.blob.snapshot().staged.calibration();
+                let staged_changed = self.snapshot.staged.calibration() != next_calibration;
+                self.snapshot.staged.replace_calibration(next_calibration);
+                self.diff = CalibrationDiff::from_views(
+                    self.snapshot.active,
+                    self.snapshot.staged,
+                    if staged_changed {
+                        CalibrationClass::SafetyCritical
+                    } else {
+                        CalibrationClass::NoChange
+                    },
+                );
+
+                CalibrationPackageApplyResult::AppliedMigrated {
+                    workflow,
+                    package,
+                    diff: self.diff,
+                }
+            }
+        }
+    }
+
+    pub fn import_candidate_package(
+        &mut self,
+        candidate: PersistedCalibrationPackage,
+        runtime_build_id: CalibrationRuntimeBuildId,
+        hardware_target_id: CalibrationHardwareTargetId,
+    ) -> CalibrationPackageApplyResult {
+        self.apply_candidate_package(candidate, runtime_build_id, hardware_target_id)
+    }
 }
 
 #[cfg(test)]

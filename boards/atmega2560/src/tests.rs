@@ -340,7 +340,7 @@ fn speeduino_m5x_prepared_board_step_maps_runtime_outputs_to_avr_pins() {
         .unwrap();
 
     assert_eq!(output.step.outputs.len(), output.mapped_outputs.len());
-    assert_eq!(output.mapped_outputs.len(), 24);
+    assert_eq!(output.mapped_outputs.len(), 12);
     for mapped in output.mapped_outputs.iter() {
         assert_eq!(
             Some(mapped.pin),
@@ -430,7 +430,7 @@ fn speeduino_m5x_named_board_selection_rejects_other_board_metadata() {
 }
 
 #[test]
-fn speeduino_m5x_expert_manual_authority_emits_six_injection_and_six_ignition_windows() {
+fn speeduino_m5x_expert_manual_authority_emits_six_ignition_windows_without_a_fuel_model() {
     let profile = m50b25tu_speeduino_m5x_rev23_board_profile();
     let mut bridge = Atmega2560BoardAdapter::new(profile);
     let output = bridge
@@ -441,7 +441,7 @@ fn speeduino_m5x_expert_manual_authority_emits_six_injection_and_six_ignition_wi
         ))
         .unwrap();
 
-    assert_eq!(output.outputs.len(), 24);
+    assert_eq!(output.outputs.len(), 12);
     assert!(!output.cancel_scheduled_outputs);
     assert_eq!(output.telemetry.profile_id, profile.profile_id);
     assert_eq!(
@@ -522,7 +522,7 @@ fn speeduino_m5x_synced_step_outputs_all_map_to_schematic_pins() {
         }
     }
 
-    assert_eq!(injector_seen, [true; 6]);
+    assert_eq!(injector_seen, [false; 6]);
     assert_eq!(ignition_seen, [true; 6]);
 }
 

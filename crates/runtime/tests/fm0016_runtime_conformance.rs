@@ -32,7 +32,8 @@ use ecu_calibration::{
 };
 use ecu_domain::{
     AbsoluteTimeAuthority, CancelReason, ControlMode, CrankSyncState, EngineTimeAuthority,
-    FaultCode, FaultSeverity, Kpa10, Micros, PhaseSyncState, Rpm, SyncState as DomainSyncState,
+    FaultCode, FaultSeverity, Kpa10, Lambda100, Micros, PhaseSyncState, Rpm,
+    SyncState as DomainSyncState,
 };
 use ecu_domain::{Degrees10, SyncState};
 use ecu_runtime::compat::StepInputs;
@@ -45,22 +46,23 @@ use ecu_runtime::semantic::{
     },
     runtime_semantic_evaluate_fuel, RuntimeSemanticAfrOverride, RuntimeSemanticAxis16,
     RuntimeSemanticCalibration, RuntimeSemanticCurve16U16, RuntimeSemanticCylinderArrayU16,
-    RuntimeSemanticEngineMode, RuntimeSemanticFuelObservations, RuntimeSemanticInjectionAngleMode,
-    RuntimeSemanticInputSnapshot, RuntimeSemanticState, RuntimeSemanticTable2dI16,
-    RuntimeSemanticTable2dU16, RuntimeSemanticTable2dU32,
+    RuntimeSemanticDeadtimeTableU16, RuntimeSemanticEngineMode, RuntimeSemanticFuelObservations,
+    RuntimeSemanticInjectionAngleMode, RuntimeSemanticInputSnapshot, RuntimeSemanticState,
+    RuntimeSemanticTable2dI16, RuntimeSemanticTable2dU16, RuntimeSemanticTable2dU32,
 };
 use ecu_runtime::support::{
-    extract_fuel_observations, DifferentialInputSnapshot, RuntimeAdapterContract,
+    extract_runtime_observed_surface, DifferentialInputSnapshot, RuntimeAdapterContract,
     RuntimeObservedSurface,
 };
 use ecu_runtime::{
     runtime_full_sequential_authorized, runtime_x100_to_spec_x1000, BaseFuelModel, ControlInputs,
     EngineRuntime, EnrichmentInputs, IgnitionInputs, LambdaTrimInputs, RuntimeAfrOverride,
-    RuntimeEngineMode, TorqueInputs,
+    RuntimeEngineMode, RuntimeFaultAction, RuntimeProtectionPersistence, TorqueInputs,
 };
 use ecu_spec::{
-    AfrOverride, CylinderArrayU16, EngineMode, InjectionAngleMode, InputSnapshot,
-    ValidatedCalibration,
+    fault_event_from_state, AfrOverride, CylinderArrayU16, EngineMode, InjectionAngleMode,
+    InputSnapshot, SpecCancelReason, SpecFaultAction, SpecFaultCode, SpecFaultPersistence,
+    SpecFaultSeverity, SpecFaultState, ValidatedCalibration,
 };
 
 #[path = "../../compat/tests/formal/fm0016_fixture_matrix.rs"]
@@ -163,7 +165,7 @@ fn build_semantic_calibration(cal: &ValidatedCalibration) -> RuntimeSemanticCali
     }
 
     // Helper to copy a Table2D16<u16> (deadtime_table_us is u16 in Calibration)
-    fn copy_table_2d_u32_as_u16(src: &ecu_spec::Table2D16<u16>) -> RuntimeSemanticTable2dU16 {
+    fn copy_deadtime_table(src: &ecu_spec::Table2D16<u16>) -> RuntimeSemanticDeadtimeTableU16 {
         let rpm_len = src.rpm_axis.len as usize;
         let load_len = src.load_axis.len as usize;
         let mut rpm_axis = RuntimeSemanticAxis16 {
@@ -195,9 +197,9 @@ fn build_semantic_calibration(cal: &ValidatedCalibration) -> RuntimeSemanticCali
             }
         }
 
-        RuntimeSemanticTable2dU16 {
-            rpm_axis,
-            load_axis,
+        RuntimeSemanticDeadtimeTableU16 {
+            vbat_mv_axis: rpm_axis,
+            pressure_kpa10_axis: load_axis,
             values,
         }
     }
@@ -229,7 +231,7 @@ fn build_semantic_calibration(cal: &ValidatedCalibration) -> RuntimeSemanticCali
     RuntimeSemanticCalibration {
         ve_table: copy_table_2d(&c.ve_table),
         afr_target_table: copy_table_2d(&c.afr_target_table),
-        deadtime_table_us: copy_table_2d_u32_as_u16(&c.deadtime_table_us),
+        deadtime_table_us: copy_deadtime_table(&c.deadtime_table_us),
         clt_corr_curve: copy_curve(&c.clt_corr_curve),
         iat_corr_curve: copy_curve(&c.iat_corr_curve),
         baro_corr_curve: copy_curve(&c.baro_corr_curve),
@@ -454,6 +456,9 @@ fn to_semantic_input(input: &InputSnapshot) -> RuntimeSemanticInputSnapshot {
         iat_c10: input.iat_c10.0,
         baro_kpa10: Kpa10::new(input.baro_kpa10.0),
         vbatt_mv: input.vbatt_mv.0,
+        lambda_valid: true,
+        lambda_measured: Lambda100::new(100),
+        requested_open_loop: false,
         knock_intensity_x100: input.knock_intensity_x100,
         launch_armed: input.launch_armed,
         flat_shift_armed: input.flat_shift_armed,
@@ -517,7 +522,9 @@ fn to_control_inputs_with_driver_request_x100(
             mapdot_kpa_s: 0,
         },
         lambda: LambdaTrimInputs {
+            now_us: ecu_domain::Micros::new(input.t_us.0),
             clt_c: input.clt_c10.0 / 10,
+            just_started: false,
             lambda_valid: true,
             measured_lambda100: ecu_domain::Lambda100::new(100),
             requested_open_loop: false,
@@ -538,6 +545,7 @@ fn to_control_inputs_with_driver_request_x100(
             false,
             ecu_domain::Rpm::new(input.rpm.0),
         ),
+        fuel_sensors: ecu_runtime::FuelSensorInputs::default(),
         knock_intensity_x100: input.knock_intensity_x100,
     }
 }
@@ -798,36 +806,7 @@ fn extract_observable(
     result: &ecu_runtime::StepResult,
     snapshot: &ecu_runtime::RuntimeSnapshot,
 ) -> RuntimeObservedSurface {
-    // Use the library helper for fuel observations
-    let fuel = extract_fuel_observations(result);
-    let torque = result.torque_observations;
-    RuntimeObservedSurface {
-        rpm: result.validated.rpm.get(),
-        sync: result.validated.rpm.get() > 0,
-        fuel_cut: snapshot.fuel_cut,
-        spark_cut: snapshot.spark_cut,
-        legacy_cut_reason_code: snapshot.legacy_cut_reason_code,
-        knock_intensity_x100: snapshot.knock_intensity_x100,
-        knock_retard_deg10: snapshot.knock_retard_deg10,
-        torque_request_x100: result.control.torque.requested_x100,
-        torque_allowed_x100: result.control.torque.allowed_x100,
-        // Torque actuated is not exposed by runtime - use 0 as placeholder,
-        // conformance is established via RuntimeAdapterContract::TorqueActuated
-        torque_actuated_x100: 0,
-        // Raw runtime-observed x1000 torque values emitted by `EngineRuntime::step`.
-        torque_request_x1000: torque.request_x1000,
-        torque_allowed_x1000: torque.allowed_x1000,
-        torque_actuated_x1000: torque.actuated_x1000,
-        runtime_base_fuel_pw_us: fuel.base_fuel_pw_us,
-        runtime_enriched_fuel_pw_us: fuel.enriched_fuel_pw_us,
-        runtime_lambda_target_x100: fuel.lambda_target_x100,
-        ignition_advance_deg10: result.control.ignition.advance_deg10.get(),
-        dwell_us: result.control.ignition.dwell_us.get(),
-        control_mode: result.operating_mode,
-        validated_rpm: result.validated.rpm.get(),
-        validated_load_kpa10: result.validated.load_kpa10.get(),
-        validated_clamped: result.validated.clamped,
-    }
+    extract_runtime_observed_surface(result, snapshot)
 }
 
 // ---------------------------------------------------------------------------
@@ -1514,6 +1493,125 @@ fn runtime_product_torque_request_surface_preserves_high_resolution_request_stag
     assert_eq!(result.requested_x1000, 537);
 }
 
+fn spec_fault_state_from_runtime(
+    code: FaultCode,
+    severity: FaultSeverity,
+    cancel_reason: CancelReason,
+) -> SpecFaultState {
+    SpecFaultState {
+        code: match code {
+            FaultCode::None => SpecFaultCode::None,
+            FaultCode::SensorOutOfRange => SpecFaultCode::SensorOutOfRange,
+            FaultCode::SafetyCut => SpecFaultCode::SafetyCut,
+            _ => SpecFaultCode::Other,
+        },
+        severity: match severity {
+            FaultSeverity::Info => SpecFaultSeverity::Info,
+            FaultSeverity::Warning => SpecFaultSeverity::Warning,
+            FaultSeverity::Critical => SpecFaultSeverity::Critical,
+        },
+        cancel_reason: match cancel_reason {
+            CancelReason::Manual => SpecCancelReason::Manual,
+            CancelReason::SafetyShutdown => SpecCancelReason::SafetyShutdown,
+            _ => SpecCancelReason::Other,
+        },
+    }
+}
+
+fn runtime_fault_action_to_spec(action: RuntimeFaultAction) -> SpecFaultAction {
+    match action {
+        RuntimeFaultAction::None => SpecFaultAction::None,
+        RuntimeFaultAction::ObserveOnly => SpecFaultAction::ObserveOnly,
+        RuntimeFaultAction::LimpHome => SpecFaultAction::LimpHome,
+        RuntimeFaultAction::Shutdown => SpecFaultAction::Shutdown,
+    }
+}
+
+fn runtime_fault_persistence_to_spec(
+    persistence: RuntimeProtectionPersistence,
+) -> SpecFaultPersistence {
+    match persistence {
+        RuntimeProtectionPersistence::Inactive => SpecFaultPersistence::Inactive,
+        RuntimeProtectionPersistence::Reversible
+        | RuntimeProtectionPersistence::LatchedUntilClear => {
+            SpecFaultPersistence::LatchedUntilClear
+        }
+    }
+}
+
+#[test]
+fn runtime_fault_event_policy_matches_spec_projection_for_limp_and_shutdown() {
+    for (code, severity, cancel_reason) in [
+        (
+            FaultCode::SensorOutOfRange,
+            FaultSeverity::Warning,
+            CancelReason::Manual,
+        ),
+        (
+            FaultCode::SafetyCut,
+            FaultSeverity::Critical,
+            CancelReason::SafetyShutdown,
+        ),
+        (
+            FaultCode::SafetyCut,
+            FaultSeverity::Info,
+            CancelReason::Manual,
+        ),
+    ] {
+        let mut runtime = EngineRuntime::new();
+        runtime.set_fault_state(code, severity, cancel_reason);
+
+        let result = runtime.step(
+            StepInputs {
+                now_us: Micros::new(1_000),
+                rpm: 2_000,
+                load_kpa10: 500,
+                angle_x10: 100,
+                trigger_synced: true,
+                cam_seen: true,
+                launch_armed: false,
+                flat_shift_armed: false,
+                safety_latch_request: false,
+            },
+            ControlInputs {
+                enrichment: EnrichmentInputs {
+                    now_us: Micros::new(1_000),
+                    clt_c: 20,
+                    cranking: false,
+                    just_started: false,
+                    tpsdot_pct_s: 0,
+                    mapdot_kpa_s: 0,
+                },
+                lambda: LambdaTrimInputs {
+                    now_us: Micros::new(1_000),
+                    clt_c: 20,
+                    just_started: false,
+                    lambda_valid: true,
+                    measured_lambda100: Lambda100::new(100),
+                    requested_open_loop: false,
+                },
+                torque: TorqueInputs::new(100, 100, 100, 100, 100),
+                ignition: IgnitionInputs::new(Degrees10::new(100), 0, 0, 0, false, Rpm::new(2_000)),
+                fuel_sensors: Default::default(),
+                knock_intensity_x100: 0,
+            },
+        );
+        let observed = extract_runtime_observed_surface(&result, &runtime.snapshot());
+        let spec_event =
+            fault_event_from_state(spec_fault_state_from_runtime(code, severity, cancel_reason));
+
+        assert_eq!(observed.runtime_fault.active, spec_event.active);
+        assert_eq!(
+            runtime_fault_action_to_spec(observed.runtime_fault.action),
+            spec_event.action
+        );
+        assert_eq!(
+            runtime_fault_persistence_to_spec(observed.runtime_fault.persistence),
+            spec_event.persistence
+        );
+    }
+}
+
 #[test]
 fn runtime_torque_x1000_shutdown_path_zeros_allowed_and_actuated() {
     let mut runtime = EngineRuntime::new();
@@ -1546,7 +1644,9 @@ fn runtime_torque_x1000_shutdown_path_zeros_allowed_and_actuated() {
                 mapdot_kpa_s: 0,
             },
             lambda: LambdaTrimInputs {
+                now_us: Micros::new(1_000),
                 clt_c: 80,
+                just_started: false,
                 lambda_valid: true,
                 measured_lambda100: ecu_domain::Lambda100::new(100),
                 requested_open_loop: false,
@@ -1560,6 +1660,7 @@ fn runtime_torque_x1000_shutdown_path_zeros_allowed_and_actuated() {
                 false,
                 ecu_domain::Rpm::new(2_000),
             ),
+            fuel_sensors: ecu_runtime::FuelSensorInputs::default(),
             knock_intensity_x100: 0,
         },
     );
@@ -1596,7 +1697,9 @@ fn runtime_torque_x1000_off_phase_zeros_allowed_and_actuated() {
                 mapdot_kpa_s: 0,
             },
             lambda: LambdaTrimInputs {
+                now_us: Micros::new(1_000),
                 clt_c: 80,
+                just_started: false,
                 lambda_valid: true,
                 measured_lambda100: ecu_domain::Lambda100::new(100),
                 requested_open_loop: false,
@@ -1610,6 +1713,7 @@ fn runtime_torque_x1000_off_phase_zeros_allowed_and_actuated() {
                 false,
                 ecu_domain::Rpm::new(0),
             ),
+            fuel_sensors: ecu_runtime::FuelSensorInputs::default(),
             knock_intensity_x100: 0,
         },
     );

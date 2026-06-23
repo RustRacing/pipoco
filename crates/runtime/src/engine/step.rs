@@ -148,6 +148,7 @@ impl EngineRuntime {
         self.step(step_inputs, control_inputs)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn step_with_validated(
         &mut self,
         now_us: Micros,

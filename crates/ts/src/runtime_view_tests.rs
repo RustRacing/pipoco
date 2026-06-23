@@ -1,8 +1,11 @@
 use super::*;
 use ecu_calibration::{
-    ActiveCalibration, Calibration, CalibrationRevision, ExpertIgnitionMode, ExpertInjectionLayout,
-    ExpertTriggerCalibration, ExpertUnlock, PrimaryTriggerSpeed, SecondaryTriggerMode,
-    StagedCalibration, TriggerAuthority, TriggerEdge, TriggerFilter, TriggerPattern,
+    ActiveCalibration, Calibration, CalibrationClass, CalibrationHardwareTargetId,
+    CalibrationPackageCompatibility, CalibrationPackageMigrationStatus, CalibrationRevision,
+    CalibrationRuntimeBuildId, CalibrationSchemaVersion, ExpertIgnitionMode, ExpertInjectionLayout,
+    ExpertTriggerCalibration, ExpertUnlock, PersistedCalibrationBlob, PersistedCalibrationPackage,
+    PrimaryTriggerSpeed, SecondaryTriggerMode, StagedCalibration, TriggerAuthority, TriggerEdge,
+    TriggerFilter, TriggerPattern,
 };
 use ecu_domain::{Degrees10, Lambda100, Micros, Rpm};
 use ecu_runtime::compat::StepInputs;
@@ -78,13 +81,17 @@ fn maps_runtime_snapshot_without_reading_internal_state() {
                 mapdot_kpa_s: 0,
             },
             lambda: LambdaTrimInputs {
+                now_us: Micros::new(1_000),
                 clt_c: 80,
+                just_started: false,
                 lambda_valid: true,
                 measured_lambda100: Lambda100::new(100),
                 requested_open_loop: false,
             },
             torque: TorqueInputs::new(90, 90, 90, 90, 90),
             ignition: IgnitionInputs::new(Degrees10::new(100), 0, 0, 0, false, Rpm::new(3000)),
+            fuel_sensors: ecu_runtime::FuelSensorInputs::default(),
+            knock_intensity_x100: 0,
         },
     );
 
@@ -115,10 +122,12 @@ fn maps_runtime_snapshot_without_reading_internal_state() {
     assert_eq!(view.fault_code, snapshot.faults.fault);
     assert_eq!(view.fault_severity, snapshot.faults.severity);
     assert_eq!(view.cancel_reason, snapshot.faults.cancel_reason);
-    assert!(matches!(
-        step.actions.iter().next(),
-        Some(Action::ArmScheduler { .. })
-    ));
+    assert!(step.actions.iter().any(|action| {
+        matches!(
+            action,
+            Action::ArmScheduler { .. } | Action::ArmInjection(_) | Action::ArmIgnition(_)
+        )
+    }));
 }
 
 #[test]
@@ -191,13 +200,17 @@ fn runtime_snapshot_adapter_fills_outpc_projection() {
                 mapdot_kpa_s: 0,
             },
             lambda: LambdaTrimInputs {
+                now_us: Micros::new(1_000),
                 clt_c: 75,
+                just_started: false,
                 lambda_valid: true,
                 measured_lambda100: Lambda100::new(100),
                 requested_open_loop: false,
             },
             torque: TorqueInputs::new(90, 90, 90, 90, 90),
             ignition: IgnitionInputs::new(Degrees10::new(120), 0, 0, 0, false, Rpm::new(2750)),
+            fuel_sensors: ecu_runtime::FuelSensorInputs::default(),
+            knock_intensity_x100: 0,
         },
     );
     let snapshot = runtime.snapshot();
@@ -218,10 +231,12 @@ fn runtime_snapshot_adapter_fills_outpc_projection() {
     assert_eq!(dwell_us, snapshot.control.dwell.get());
     assert_eq!(advance_x10, snapshot.control.ignition_advance.get());
     assert_eq!(out.synced, 1);
-    assert!(matches!(
-        step.actions.iter().next(),
-        Some(Action::ArmScheduler { .. })
-    ));
+    assert!(step.actions.iter().any(|action| {
+        matches!(
+            action,
+            Action::ArmScheduler { .. } | Action::ArmInjection(_) | Action::ArmIgnition(_)
+        )
+    }));
 }
 
 #[test]
@@ -305,6 +320,33 @@ fn persist_captures_current_snapshot_metadata() {
 }
 
 #[test]
+fn persist_with_target_identity_carries_schema_revision_and_target_metadata() {
+    let active = ActiveCalibration::new(CalibrationRevision::new(8), Calibration::default());
+    let staged = StagedCalibration::new(CalibrationRevision::new(8), Calibration::default());
+    let surface = CalibrationEditSurface::new(CalibrationSnapshot { active, staged });
+
+    let package = surface.persist_with_target_identity(
+        CalibrationRuntimeBuildId::new(0x2040_0001),
+        CalibrationHardwareTargetId::new(0x2040),
+    );
+
+    assert_eq!(
+        package.blob.schema_version(),
+        ecu_calibration::CalibrationSchemaVersion::CURRENT
+    );
+    assert_eq!(package.blob.revision().get(), 8);
+    assert_eq!(package.blob.snapshot(), surface.snapshot());
+    assert_eq!(
+        package.identity.package.schema_version,
+        ecu_calibration::CalibrationSchemaVersion::CURRENT
+    );
+    assert_eq!(package.identity.package.active_revision.get(), 8);
+    assert_eq!(package.identity.package.staged_revision.get(), 8);
+    assert_eq!(package.identity.runtime_build_id.get(), 0x2040_0001);
+    assert_eq!(package.identity.hardware_target_id.get(), 0x2040);
+}
+
+#[test]
 fn reset_staged_rebases_edit_surface_to_active_snapshot() {
     let active = ActiveCalibration::new(CalibrationRevision::new(6), Calibration::default());
     let mut staged = StagedCalibration::new(CalibrationRevision::new(6), Calibration::default());
@@ -365,6 +407,412 @@ fn commit_and_persist_follow_snapshot_ownership_model() {
 
     assert_eq!(committed_blob.revision().get(), 22);
     assert_eq!(committed_blob.snapshot(), surface.snapshot());
+}
+
+#[test]
+fn committed_persist_with_target_identity_carries_committed_revision_and_target_metadata() {
+    let active = ActiveCalibration::new(CalibrationRevision::new(21), Calibration::default());
+    let mut staged = StagedCalibration::new(CalibrationRevision::new(21), Calibration::default());
+    staged.mark_dirty();
+    let mut surface = CalibrationEditSurface::new(CalibrationSnapshot { active, staged });
+
+    let result = surface.commit(CommitPolicy::Immediate, true);
+
+    assert!(matches!(result, CalibrationCommandResult::Committed(_)));
+    let package = surface.persist_with_target_identity(
+        CalibrationRuntimeBuildId::new(0x0000_0007),
+        CalibrationHardwareTargetId::new(0x00A7),
+    );
+
+    assert_eq!(package.blob.revision().get(), 22);
+    assert_eq!(package.blob.snapshot(), surface.snapshot());
+    assert_eq!(package.identity.package.active_revision.get(), 22);
+    assert_eq!(package.identity.package.staged_revision.get(), 22);
+    assert!(!package.identity.package.staged_dirty);
+    assert_eq!(package.identity.runtime_build_id.get(), 0x0000_0007);
+    assert_eq!(package.identity.hardware_target_id.get(), 0x00A7);
+}
+
+#[test]
+fn deferred_persist_with_target_identity_carries_deferred_revision_and_target_metadata() {
+    let active = ActiveCalibration::new(CalibrationRevision::new(4), Calibration::default());
+    let mut staged = StagedCalibration::new(CalibrationRevision::new(4), Calibration::default());
+    staged.mark_dirty();
+    let mut surface = CalibrationEditSurface::new(CalibrationSnapshot { active, staged });
+
+    let result = surface.commit(CommitPolicy::SafeOnly, false);
+
+    assert!(matches!(result, CalibrationCommandResult::Deferred(_)));
+    let package = surface.persist_with_target_identity(
+        CalibrationRuntimeBuildId::new(0x0000_0008),
+        CalibrationHardwareTargetId::new(0x00B8),
+    );
+
+    assert_eq!(package.blob.revision().get(), 4);
+    assert_eq!(package.blob.snapshot(), surface.snapshot());
+    assert_eq!(package.identity.package.active_revision.get(), 4);
+    assert_eq!(package.identity.package.staged_revision.get(), 5);
+    assert!(package.identity.package.staged_dirty);
+    assert_eq!(package.identity.runtime_build_id.get(), 0x0000_0008);
+    assert_eq!(package.identity.hardware_target_id.get(), 0x00B8);
+}
+
+#[test]
+fn review_candidate_package_reports_no_change_for_identical_package() {
+    let active = ActiveCalibration::new(CalibrationRevision::new(8), Calibration::default());
+    let staged = StagedCalibration::new(CalibrationRevision::new(8), Calibration::default());
+    let surface = CalibrationEditSurface::new(CalibrationSnapshot { active, staged });
+    let candidate = surface.persist_with_target_identity(
+        CalibrationRuntimeBuildId::new(0x2040_0001),
+        CalibrationHardwareTargetId::new(0x2040),
+    );
+
+    let review = surface.review_candidate_package(
+        candidate,
+        CalibrationRuntimeBuildId::new(0x2040_0001),
+        CalibrationHardwareTargetId::new(0x2040),
+    );
+
+    assert_eq!(
+        review.candidate_review.compatibility,
+        CalibrationPackageCompatibility::Compatible
+    );
+    assert_eq!(
+        review.candidate_review.migration,
+        CalibrationPackageMigrationStatus::NoMigrationRequired
+    );
+    assert!(!review.candidate_vs_current.any_change());
+    assert!(!review.candidate_vs_current.runtime_build_changed);
+    assert!(!review.candidate_vs_current.hardware_target_changed);
+    assert!(!review.candidate_vs_current.schema_changed);
+}
+
+#[test]
+fn review_candidate_package_reports_target_mismatch() {
+    let active = ActiveCalibration::new(CalibrationRevision::new(8), Calibration::default());
+    let staged = StagedCalibration::new(CalibrationRevision::new(8), Calibration::default());
+    let surface = CalibrationEditSurface::new(CalibrationSnapshot { active, staged });
+    let candidate = surface.persist_with_target_identity(
+        CalibrationRuntimeBuildId::new(0x2040_0001),
+        CalibrationHardwareTargetId::new(0x2040),
+    );
+
+    let review = surface.review_candidate_package(
+        candidate,
+        CalibrationRuntimeBuildId::new(0x2040_0002),
+        CalibrationHardwareTargetId::new(0x2040),
+    );
+
+    assert_eq!(
+        review.candidate_review.compatibility,
+        CalibrationPackageCompatibility::RuntimeBuildMismatch {
+            expected: CalibrationRuntimeBuildId::new(0x2040_0002),
+            actual: CalibrationRuntimeBuildId::new(0x2040_0001),
+        }
+    );
+    assert_eq!(
+        review.candidate_review.migration,
+        CalibrationPackageMigrationStatus::NoMigrationRequired
+    );
+    assert!(review.candidate_vs_current.any_change());
+    assert!(review.candidate_vs_current.runtime_build_changed);
+    assert!(!review.candidate_vs_current.hardware_target_changed);
+    assert!(!review.candidate_vs_current.schema_changed);
+}
+
+#[test]
+fn review_candidate_package_reports_migration_required_for_older_schema_candidate() {
+    let active = ActiveCalibration::new(CalibrationRevision::new(8), Calibration::default());
+    let staged = StagedCalibration::new(CalibrationRevision::new(8), Calibration::default());
+    let surface = CalibrationEditSurface::new(CalibrationSnapshot { active, staged });
+    let blob = PersistedCalibrationBlob::default();
+    let candidate = PersistedCalibrationPackage {
+        blob,
+        identity: ecu_calibration::CalibrationPackageTargetIdentity {
+            package: ecu_calibration::CalibrationPackageIdentity {
+                schema_version: CalibrationSchemaVersion::new(0),
+                ..ecu_calibration::CalibrationPackageIdentity::from_blob(blob)
+            },
+            runtime_build_id: CalibrationRuntimeBuildId::new(0x2040_0001),
+            hardware_target_id: CalibrationHardwareTargetId::new(0x2040),
+        },
+    };
+
+    let review = surface.review_candidate_package(
+        candidate,
+        CalibrationRuntimeBuildId::new(0x2040_0001),
+        CalibrationHardwareTargetId::new(0x2040),
+    );
+
+    assert_eq!(
+        review.candidate_review.compatibility,
+        CalibrationPackageCompatibility::SchemaVersionMismatch {
+            expected: CalibrationSchemaVersion::CURRENT,
+            actual: CalibrationSchemaVersion::new(0),
+        }
+    );
+    assert_eq!(
+        review.candidate_review.migration,
+        CalibrationPackageMigrationStatus::MigrationRequired {
+            from: CalibrationSchemaVersion::new(0),
+            to: CalibrationSchemaVersion::CURRENT,
+        }
+    );
+    assert!(review.candidate_vs_current.any_change());
+    assert!(review.candidate_vs_current.schema_changed);
+}
+
+#[test]
+fn apply_candidate_package_accepts_identical_current_package_without_drift() {
+    let active = ActiveCalibration::new(CalibrationRevision::new(8), Calibration::default());
+    let staged = StagedCalibration::new(CalibrationRevision::new(8), Calibration::default());
+    let mut surface = CalibrationEditSurface::new(CalibrationSnapshot { active, staged });
+    let candidate = surface.persist_with_target_identity(
+        CalibrationRuntimeBuildId::new(0x2040_0001),
+        CalibrationHardwareTargetId::new(0x2040),
+    );
+    let before = surface.snapshot();
+
+    let applied = surface.apply_candidate_package(
+        candidate,
+        CalibrationRuntimeBuildId::new(0x2040_0001),
+        CalibrationHardwareTargetId::new(0x2040),
+    );
+
+    let CalibrationPackageApplyResult::AppliedUnchanged {
+        workflow,
+        package,
+        diff,
+    } = applied
+    else {
+        panic!("expected unchanged package apply result");
+    };
+
+    assert_eq!(package, candidate);
+    assert_eq!(
+        workflow.candidate_review.compatibility,
+        CalibrationPackageCompatibility::Compatible
+    );
+    assert!(!workflow.candidate_vs_current.any_change());
+    assert_eq!(diff.class, CalibrationClass::NoChange);
+    assert_eq!(surface.snapshot(), before);
+}
+
+#[test]
+fn apply_candidate_package_migrates_legacy_candidate_and_stages_calibration() {
+    let active = ActiveCalibration::new(CalibrationRevision::new(8), Calibration::default());
+    let staged = StagedCalibration::new(CalibrationRevision::new(8), Calibration::default());
+    let mut surface = CalibrationEditSurface::new(CalibrationSnapshot { active, staged });
+
+    let mut candidate_calibration = Calibration::default();
+    candidate_calibration.set_expert_trigger(sample_expert_trigger());
+    let candidate_snapshot = CalibrationSnapshot {
+        active: ActiveCalibration::new(CalibrationRevision::new(21), candidate_calibration),
+        staged: StagedCalibration::new(CalibrationRevision::new(21), candidate_calibration),
+    };
+    let blob = PersistedCalibrationBlob::new(candidate_snapshot);
+    let current_package = PersistedCalibrationPackage::new(
+        blob,
+        CalibrationRuntimeBuildId::new(0x2040_0001),
+        CalibrationHardwareTargetId::new(0x2040),
+    );
+    let legacy_candidate = PersistedCalibrationPackage {
+        blob: current_package.blob,
+        identity: ecu_calibration::CalibrationPackageTargetIdentity {
+            package: ecu_calibration::CalibrationPackageIdentity {
+                schema_version: CalibrationSchemaVersion::new(0),
+                ..current_package.identity.package
+            },
+            runtime_build_id: current_package.identity.runtime_build_id,
+            hardware_target_id: current_package.identity.hardware_target_id,
+        },
+    };
+
+    let applied = surface.apply_candidate_package(
+        legacy_candidate,
+        CalibrationRuntimeBuildId::new(0x2040_0001),
+        CalibrationHardwareTargetId::new(0x2040),
+    );
+
+    let CalibrationPackageApplyResult::AppliedMigrated {
+        workflow,
+        package,
+        diff,
+    } = applied
+    else {
+        panic!("expected migrated package apply result");
+    };
+
+    assert_eq!(
+        workflow.candidate_review.compatibility,
+        CalibrationPackageCompatibility::SchemaVersionMismatch {
+            expected: CalibrationSchemaVersion::CURRENT,
+            actual: CalibrationSchemaVersion::new(0),
+        }
+    );
+    assert_eq!(
+        workflow.candidate_review.migration,
+        CalibrationPackageMigrationStatus::MigrationRequired {
+            from: CalibrationSchemaVersion::new(0),
+            to: CalibrationSchemaVersion::CURRENT,
+        }
+    );
+    assert_eq!(
+        package.identity.package.schema_version,
+        CalibrationSchemaVersion::CURRENT
+    );
+    assert_eq!(package.identity.runtime_build_id.get(), 0x2040_0001);
+    assert_eq!(package.identity.hardware_target_id.get(), 0x2040);
+    assert_eq!(
+        surface.snapshot().active.revision().get(),
+        8,
+        "apply keeps local active ownership"
+    );
+    assert_eq!(
+        surface
+            .snapshot()
+            .staged
+            .calibration()
+            .geometry
+            .expert_trigger,
+        sample_expert_trigger()
+    );
+    assert!(surface.snapshot().staged.is_dirty());
+    assert_eq!(diff.class, CalibrationClass::SafetyCritical);
+}
+
+#[test]
+fn apply_candidate_package_rejects_runtime_build_mismatch_without_staging() {
+    let active = ActiveCalibration::new(CalibrationRevision::new(8), Calibration::default());
+    let staged = StagedCalibration::new(CalibrationRevision::new(8), Calibration::default());
+    let mut surface = CalibrationEditSurface::new(CalibrationSnapshot { active, staged });
+    let candidate = surface.persist_with_target_identity(
+        CalibrationRuntimeBuildId::new(0x2040_0001),
+        CalibrationHardwareTargetId::new(0x2040),
+    );
+    let before = surface.snapshot();
+    let before_diff = surface.diff();
+
+    let applied = surface.apply_candidate_package(
+        candidate,
+        CalibrationRuntimeBuildId::new(0x2040_0002),
+        CalibrationHardwareTargetId::new(0x2040),
+    );
+
+    let CalibrationPackageApplyResult::Rejected { workflow } = applied else {
+        panic!("expected rejected package apply result");
+    };
+
+    assert_eq!(
+        workflow.candidate_review.compatibility,
+        CalibrationPackageCompatibility::RuntimeBuildMismatch {
+            expected: CalibrationRuntimeBuildId::new(0x2040_0002),
+            actual: CalibrationRuntimeBuildId::new(0x2040_0001),
+        }
+    );
+    assert_eq!(surface.snapshot(), before);
+    assert_eq!(surface.diff(), before_diff);
+}
+
+#[test]
+fn export_current_package_matches_target_bound_persist_surface() {
+    let active = ActiveCalibration::new(CalibrationRevision::new(12), Calibration::default());
+    let staged = StagedCalibration::new(CalibrationRevision::new(12), Calibration::default());
+    let surface = CalibrationEditSurface::new(CalibrationSnapshot { active, staged });
+
+    let exported = surface.export_current_package(
+        CalibrationRuntimeBuildId::new(0x2040_0007),
+        CalibrationHardwareTargetId::new(0x2040),
+    );
+    let direct = surface.persist_with_target_identity(
+        CalibrationRuntimeBuildId::new(0x2040_0007),
+        CalibrationHardwareTargetId::new(0x2040),
+    );
+
+    assert_eq!(exported, direct);
+}
+
+#[test]
+fn import_candidate_package_routes_compatible_package_through_apply_workflow() {
+    let active = ActiveCalibration::new(CalibrationRevision::new(8), Calibration::default());
+    let staged = StagedCalibration::new(CalibrationRevision::new(8), Calibration::default());
+    let mut surface = CalibrationEditSurface::new(CalibrationSnapshot { active, staged });
+
+    let mut candidate_calibration = Calibration::default();
+    candidate_calibration.set_expert_trigger(sample_expert_trigger());
+    let candidate_snapshot = CalibrationSnapshot {
+        active: ActiveCalibration::new(CalibrationRevision::new(21), candidate_calibration),
+        staged: StagedCalibration::new(CalibrationRevision::new(21), candidate_calibration),
+    };
+    let candidate = PersistedCalibrationPackage::new(
+        PersistedCalibrationBlob::new(candidate_snapshot),
+        CalibrationRuntimeBuildId::new(0x2040_0001),
+        CalibrationHardwareTargetId::new(0x2040),
+    );
+
+    let imported = surface.import_candidate_package(
+        candidate,
+        CalibrationRuntimeBuildId::new(0x2040_0001),
+        CalibrationHardwareTargetId::new(0x2040),
+    );
+
+    let CalibrationPackageApplyResult::AppliedUnchanged {
+        workflow,
+        package,
+        diff,
+    } = imported
+    else {
+        panic!("expected imported package to be applied");
+    };
+
+    assert_eq!(package, candidate);
+    assert_eq!(
+        workflow.candidate_review.compatibility,
+        CalibrationPackageCompatibility::Compatible
+    );
+    assert_eq!(diff.class, CalibrationClass::SafetyCritical);
+    assert_eq!(
+        surface
+            .snapshot()
+            .staged
+            .calibration()
+            .geometry
+            .expert_trigger,
+        sample_expert_trigger()
+    );
+}
+
+#[test]
+fn import_candidate_package_rejects_runtime_build_mismatch_without_staging() {
+    let active = ActiveCalibration::new(CalibrationRevision::new(8), Calibration::default());
+    let staged = StagedCalibration::new(CalibrationRevision::new(8), Calibration::default());
+    let mut surface = CalibrationEditSurface::new(CalibrationSnapshot { active, staged });
+    let candidate = surface.export_current_package(
+        CalibrationRuntimeBuildId::new(0x2040_0001),
+        CalibrationHardwareTargetId::new(0x2040),
+    );
+    let before = surface.snapshot();
+    let before_diff = surface.diff();
+
+    let imported = surface.import_candidate_package(
+        candidate,
+        CalibrationRuntimeBuildId::new(0x2040_0002),
+        CalibrationHardwareTargetId::new(0x2040),
+    );
+
+    let CalibrationPackageApplyResult::Rejected { workflow } = imported else {
+        panic!("expected incompatible imported package to be rejected");
+    };
+
+    assert_eq!(
+        workflow.candidate_review.compatibility,
+        CalibrationPackageCompatibility::RuntimeBuildMismatch {
+            expected: CalibrationRuntimeBuildId::new(0x2040_0002),
+            actual: CalibrationRuntimeBuildId::new(0x2040_0001),
+        }
+    );
+    assert_eq!(surface.snapshot(), before);
+    assert_eq!(surface.diff(), before_diff);
 }
 
 fn sample_expert_trigger() -> ExpertTriggerCalibration {

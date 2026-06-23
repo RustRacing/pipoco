@@ -251,6 +251,9 @@ impl MissingToothDecoder {
                 self.cam_seen = true;
                 self.diagnostics.observation.cam_seen = true;
                 if self.primary_locked {
+                    if self.current_tooth != 1 {
+                        return self.record_secondary_fault(SyncLossReason::PhaseMismatch);
+                    }
                     self.secondary_seen_since_gap = true;
                     self.phase_validated = true;
                     self.set_locked_authority();

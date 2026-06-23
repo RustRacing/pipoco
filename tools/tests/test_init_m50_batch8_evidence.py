@@ -11,7 +11,7 @@ import unittest
 from datetime import datetime
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 INIT = REPO_ROOT / "tools" / "init_m50_batch8_evidence.py"
 
 

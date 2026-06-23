@@ -323,13 +323,23 @@ fn conservative_control_inputs(input: Atmega2560StepInput) -> ControlInputs {
             mapdot_kpa_s: 0,
         },
         lambda: LambdaTrimInputs {
+            now_us: input.now_us,
             clt_c: input.coolant_temp_c10 / 10,
+            just_started: false,
             lambda_valid: input.lambda.get() > 0,
             measured_lambda100: input.lambda,
             requested_open_loop: false,
         },
         torque: TorqueInputs::new(100, 0, 100, 100, 100),
         ignition: IgnitionInputs::new(Degrees10::new(100), 0, 0, 0, false, input.rpm),
+        fuel_sensors: ecu_runtime::FuelSensorInputs {
+            maf_valid: false,
+            maf_x100: 0,
+            iat_c10: input.intake_temp_c10,
+            vbatt_mv: input.battery_mv,
+            baro_valid: false,
+            baro_kpa10: ecu_domain::Kpa10::new(1010),
+        },
         knock_intensity_x100: 0,
     }
 }

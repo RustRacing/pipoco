@@ -44,6 +44,21 @@ use usbd_serial::USB_CLASS_CDC;
 const OUTPUT_TEST_MAX_MS: u32 = 1000;
 const OUTPUT_TEST_MAX_REPS: u8 = 5;
 const OUTPUT_TEST_CHUNK_MS: u32 = 50;
+// Current live RP2040 bring-up exposes exactly two injector and two ignition
+// channels through `ScheduledOutputs4`. Worst-case pending work before the next
+// drain is therefore two combined injection+ignition windows, or eight queued
+// transitions total.
+const BOARD_SPLIT_SCHEDULER_QUEUE_CAP: usize = 8;
+
+#[cfg(not(test))]
+#[inline]
+fn perform_system_reboot() -> ! {
+    cortex_m::peripheral::SCB::sys_reset();
+}
+
+#[cfg(test)]
+#[inline]
+fn perform_system_reboot() {}
 
 #[inline]
 fn empty_observability_record() -> CommonObservabilityRecord {
@@ -82,8 +97,11 @@ fn drain_observability_pair<const S: usize, const R: usize, const SO: usize, con
 #[cfg(feature = "capture-cam")]
 use core::sync::atomic::{AtomicBool, Ordering};
 use ecu_calibration::DfcoConfig;
+use ecu_calibration::{CalibrationHardwareTargetId, CalibrationRuntimeBuildId};
+use ecu_compat::ts::CompatCalibrationSession;
 use ecu_control::{AccelerationConfig, AfterStartConfig, WarmupConfig};
 use ecu_domain::Micros;
+use ecu_rp2040_pico::{PIN_MAP_RP2040_PICO_TS_ECU_BRINGUP, RUNTIME_BUILD_ID_RP2040_PICO_TS_ECU};
 use ecu_scheduler::TransitionDrainBuffer;
 #[cfg(feature = "capture-cam")]
 use ecu_target_common::adapter::BoardEvent;
@@ -108,8 +126,9 @@ use ecu_target_common::{
     },
 };
 use ecu_ts::outpc::Outpc;
-use ecu_ts::persistence::{written_pages_require_runtime_fuel_retune, PersistedTsPageStore};
-use ecu_ts::proto::{self, Cmd};
+use ecu_ts::persistence::{
+    written_pages_require_runtime_fuel_retune, PersistedTsPageStore, TsPackageCommandStore,
+};
 use ecu_ts::serial::{FrameAssembler, SerialPort};
 use ecu_ts::server::OutpcProvider;
 use ecu_ts::RuntimeSnapshotAdapter;
@@ -140,7 +159,11 @@ use ts_runtime::{
     with_main_state, AdcPins, BoardEcuState, IdlePwmRuntime, Rp2040ControlSignals, Rp2040MapLoad,
     RpTime,
 };
-use ts_usb::{encode_tooth_stats_reply, handle_output_test_cmd};
+use ts_usb::{
+    encode_tooth_composite_log_from_records, encode_tooth_stats_reply,
+    handle_compatibility_info_cmd, handle_output_test_cmd, handle_reboot_cmd,
+    handle_version_info_cmd, TsBenchCommandOwner,
+};
 
 #[cfg(all(feature = "flash-kv", target_arch = "arm"))]
 fn ecu_state_engine_running(_context: *const ()) -> bool {
@@ -150,17 +173,22 @@ fn ecu_state_engine_running(_context: *const ()) -> bool {
     false
 }
 
-#[cfg(all(feature = "flash-kv", target_arch = "arm"))]
-fn latch_persist_crc_fault(state: &mut BoardEcuState) {
+#[cfg(feature = "flash-kv")]
+fn persist_crc_fault_event() -> ecu_domain::diag::DiagEvent {
     use ecu_domain::diag::{DiagCode, DiagEvent, DiagSource};
-    state.diag_log.push(DiagEvent {
+    DiagEvent {
         code: DiagCode::PersistCrcFault,
         timestamp: ecu_domain::Micros::new(0),
         source: DiagSource::User,
         context: None,
         start_us: 0,
         end_us: 0,
-    });
+    }
+}
+
+#[cfg(all(feature = "flash-kv", target_arch = "arm"))]
+fn latch_persist_crc_fault(state: &mut BoardEcuState) {
+    state.diag_log.push(persist_crc_fault_event());
 }
 
 // Arduino-style outputs — edit these to remap pins quickly
@@ -458,7 +486,7 @@ fn main() -> ! {
     let ign1 = IGN1_GPIO!(pins);
     let ign2 = IGN2_GPIO!(pins);
     let mut outputs = ScheduledOutputs4::new(inj1, inj2, ign1, ign2);
-    let mut drain = TransitionDrainBuffer::<8>::new();
+    let mut drain = TransitionDrainBuffer::<BOARD_SPLIT_SCHEDULER_QUEUE_CAP>::new();
     let mut observability_traces: FixedCommonObservabilityTracePair<16, 16> =
         FixedCommonObservabilityTracePair::new();
     let mut observability_sample_scratch = [CommonObservabilitySample::default(); 16];
@@ -472,7 +500,7 @@ fn main() -> ! {
     let mut adapter = BoardAdapter::new(
         BoardSensorSnapshotSampleSource::new(LiveLoadSensor::new(RpTime, Rp2040MapLoad)),
         AbsentCapture,
-        ScheduledActionExecutor::<8>::new(),
+        ScheduledActionExecutor::<BOARD_SPLIT_SCHEDULER_QUEUE_CAP>::new(),
         watchdog,
         AbsentTransport,
         AbsentStore,
@@ -502,7 +530,43 @@ fn main() -> ! {
         runtime: StateRef::new(adapter.runtime()),
         runtime_adapter: RuntimeSnapshotAdapter::new(),
     };
-    #[cfg(all(feature = "flash-kv", target_arch = "arm"))]
+    #[cfg(all(feature = "flash-kv", feature = "transport-can", target_arch = "arm"))]
+    let (mut store, mut obd2_retained_history_persistence) = {
+        let kv = FlashKv::new_with_engine_guard(
+            state as *const BoardEcuState as *const (),
+            ecu_state_engine_running,
+        );
+        // ADR-0003: a slot carrying our format but failing CRC means corruption
+        // (power loss mid-write), not a blank first boot. Boot on built-in
+        // defaults and latch a diagnostic fault visible on the TS Diag page.
+        // `ValidWithCorruptSibling` boots the valid (older committed) slot, but
+        // a torn write rolled the tuner's last change back, so latch the same
+        // informational diagnostic while still loading the good tune.
+        let boot_integrity = kv.boot_integrity();
+        match boot_integrity {
+            ecu_target_common::kv::ab::StoreIntegrityStatus::Corrupt
+            | ecu_target_common::kv::ab::StoreIntegrityStatus::ValidWithCorruptSibling => {
+                latch_persist_crc_fault(state);
+                adapter.record_store_integrity_status(boot_integrity);
+            }
+            ecu_target_common::kv::ab::StoreIntegrityStatus::Blank
+            | ecu_target_common::kv::ab::StoreIntegrityStatus::Valid => {}
+        }
+        let obd2_retained_history_persistence =
+            ecu_target_common::transport_service::Obd2RetainedHistoryPersistenceState::restore_from_store(
+                &mut adapter,
+                &kv,
+            );
+        (
+            PersistedTsPageStore::new(EcuStatePageStoreProvider::new(state, adapter.runtime()), kv),
+            obd2_retained_history_persistence,
+        )
+    };
+    #[cfg(all(
+        feature = "flash-kv",
+        not(feature = "transport-can"),
+        target_arch = "arm"
+    ))]
     let mut store = {
         let kv = FlashKv::new_with_engine_guard(
             state as *const BoardEcuState as *const (),
@@ -514,19 +578,28 @@ fn main() -> ! {
         // `ValidWithCorruptSibling` boots the valid (older committed) slot, but
         // a torn write rolled the tuner's last change back, so latch the same
         // informational diagnostic while still loading the good tune.
-        match kv.boot_integrity() {
-            flash_kv::BootIntegrity::Corrupt | flash_kv::BootIntegrity::ValidWithCorruptSibling => {
+        let boot_integrity = kv.boot_integrity();
+        match boot_integrity {
+            ecu_target_common::kv::ab::StoreIntegrityStatus::Corrupt
+            | ecu_target_common::kv::ab::StoreIntegrityStatus::ValidWithCorruptSibling => {
                 latch_persist_crc_fault(state);
+                adapter.record_store_integrity_status(boot_integrity);
             }
-            flash_kv::BootIntegrity::Blank | flash_kv::BootIntegrity::Valid => {}
+            ecu_target_common::kv::ab::StoreIntegrityStatus::Blank
+            | ecu_target_common::kv::ab::StoreIntegrityStatus::Valid => {}
         }
-        PersistedTsPageStore::new(EcuStatePageStoreProvider::new(state), kv)
+        PersistedTsPageStore::new(EcuStatePageStoreProvider::new(state, adapter.runtime()), kv)
     };
     #[cfg(all(feature = "flash-kv", not(target_arch = "arm")))]
-    let mut store = PersistedTsPageStore::new(EcuStatePageStoreProvider::new(state), SeqKv::new());
+    let mut store = PersistedTsPageStore::new(
+        EcuStatePageStoreProvider::new(state, adapter.runtime()),
+        SeqKv::new(),
+    );
     #[cfg(not(feature = "flash-kv"))]
-    let mut store =
-        PersistedTsPageStore::new(EcuStatePageStoreProvider::new(state), RamKv512::new());
+    let mut store = PersistedTsPageStore::new(
+        EcuStatePageStoreProvider::new(state, adapter.runtime()),
+        RamKv512::new(),
+    );
     store.try_load();
     let _ = adapter.configure_runtime_fuel_strategy_and_push_to_trace_pair(
         ecu_runtime::runtime_fuel_strategy_from_fuel_tune(&store.runtime_fuel_tune()),
@@ -539,12 +612,20 @@ fn main() -> ! {
         &mut last_drain_report,
     );
     refresh_ts_outpc_config_from_state(state);
+    let runtime_build_id =
+        CalibrationRuntimeBuildId::new(RUNTIME_BUILD_ID_RP2040_PICO_TS_ECU.get());
+    let hardware_target_id =
+        CalibrationHardwareTargetId::new(PIN_MAP_RP2040_PICO_TS_ECU_BRINGUP.get());
+    let mut session = CompatCalibrationSession::from_persisted_store(&store);
+    let _ = store.try_load_and_import_package(&mut session, runtime_build_id, hardware_target_id);
+    let store = TsPackageCommandStore::new(store, session, runtime_build_id, hardware_target_id);
     let mut ts = TsService::new(ecu_ts::TS_SIGNATURE, provider, store);
 
     // Framing buffers (for custom commands only)
     let mut asm = FrameAssembler::new();
     let mut inbuf = [0u8; 512];
     let mut out = [0u8; 512];
+    let mut reboot_requested = false;
 
     // ADC setup and channel pins
     let mut adc = Adc::new(pac.ADC, &mut pac.RESETS);
@@ -576,80 +657,119 @@ fn main() -> ! {
             asm.feed(&tmp[..n]);
         }
         if let Some(len) = asm.try_pop(&mut inbuf) {
-            if let Some((cmd, payload)) = proto::decode_request(&inbuf[..len]) {
-                match cmd {
-                    Cmd::OutputTest => {
-                        if let Some(mr) = handle_output_test_cmd(
-                            payload,
-                            |chan, on_ms, off_ms, reps| {
-                                // Refuse to drive outputs while the engine turns:
-                                // a synced runtime with non-zero rpm means a
-                                // running engine, and busy-blocking the loop then
-                                // would stall scheduling/safety on a live engine.
-                                let snapshot = adapter.runtime().snapshot();
-                                let engine_running = matches!(
-                                    snapshot.engine.sync,
-                                    ecu_domain::SyncState::Locked { .. }
-                                ) && snapshot.engine.rpm.get() > 0;
-                                if engine_running {
-                                    return;
-                                }
-                                let on_ms = on_ms.min(OUTPUT_TEST_MAX_MS);
-                                let off_ms = off_ms.min(OUTPUT_TEST_MAX_MS);
-                                let reps = reps.min(OUTPUT_TEST_MAX_REPS);
-                                for _ in 0..reps {
-                                    {
-                                        let (injectors, ignition) = outputs.as_scheduled_pins();
-                                        match chan {
-                                            0 => injectors[0].set_scheduled_high(),
-                                            1 => injectors[1].set_scheduled_high(),
-                                            2 => ignition[0].set_scheduled_high(),
-                                            3 => ignition[1].set_scheduled_high(),
-                                            _ => {}
-                                        }
+            let compatibility_report = ts.server.store().compatibility_report();
+            // The shared TS server owns the command dispatch, but this live board
+            // path still supplies per-frame bench-tooling hooks over local
+            // adapter/output state.
+            let adapter_ptr: *mut _ = &mut adapter;
+            let outputs_ptr: *mut _ = &mut outputs;
+            let observability_record_scratch_ptr: *const [CommonObservabilityRecord; 16] =
+                &observability_record_scratch;
+            let last_drain_report_ptr: *const CommonObservabilityDrainCycleReport =
+                &last_drain_report;
+            let mut bench_tooling = TsBenchCommandOwner::new(
+                |payload: &[u8], out: &mut [u8]| {
+                    handle_output_test_cmd(
+                        payload,
+                        |chan, on_ms, off_ms, reps| {
+                            let adapter = unsafe { &mut *adapter_ptr };
+                            let outputs = unsafe { &mut *outputs_ptr };
+                            // Refuse to drive outputs while the engine turns:
+                            // a synced runtime with non-zero rpm means a
+                            // running engine, and busy-blocking the loop then
+                            // would stall scheduling/safety on a live engine.
+                            let snapshot = adapter.runtime().snapshot();
+                            let engine_running = matches!(
+                                snapshot.engine.sync,
+                                ecu_domain::SyncState::Locked { .. }
+                            ) && snapshot.engine.rpm.get() > 0;
+                            if engine_running {
+                                return;
+                            }
+                            let on_ms = on_ms.min(OUTPUT_TEST_MAX_MS);
+                            let off_ms = off_ms.min(OUTPUT_TEST_MAX_MS);
+                            let reps = reps.min(OUTPUT_TEST_MAX_REPS);
+                            for _ in 0..reps {
+                                {
+                                    let (injectors, ignition) = outputs.as_scheduled_pins();
+                                    match chan {
+                                        0 => injectors[0].set_scheduled_high(),
+                                        1 => injectors[1].set_scheduled_high(),
+                                        2 => ignition[0].set_scheduled_high(),
+                                        3 => ignition[1].set_scheduled_high(),
+                                        _ => {}
                                     }
-                                    fed_delay_ms(on_ms, OUTPUT_TEST_CHUNK_MS, || {
-                                        let _ = adapter.watchdog().feed();
-                                    });
-                                    {
-                                        let (injectors, ignition) = outputs.as_scheduled_pins();
-                                        match chan {
-                                            0 => injectors[0].set_scheduled_low(),
-                                            1 => injectors[1].set_scheduled_low(),
-                                            2 => ignition[0].set_scheduled_low(),
-                                            3 => ignition[1].set_scheduled_low(),
-                                            _ => {}
-                                        }
-                                    }
-                                    fed_delay_ms(off_ms, OUTPUT_TEST_CHUNK_MS, || {
-                                        let _ = adapter.watchdog().feed();
-                                    });
                                 }
-                            },
-                            &mut out,
-                        ) {
-                            let _ = cdc.write(&out[..mr]);
-                        }
+                                fed_delay_ms(on_ms, OUTPUT_TEST_CHUNK_MS, || {
+                                    let _ = adapter.watchdog().feed();
+                                });
+                                {
+                                    let (injectors, ignition) = outputs.as_scheduled_pins();
+                                    match chan {
+                                        0 => injectors[0].set_scheduled_low(),
+                                        1 => injectors[1].set_scheduled_low(),
+                                        2 => ignition[0].set_scheduled_low(),
+                                        3 => ignition[1].set_scheduled_low(),
+                                        _ => {}
+                                    }
+                                }
+                                fed_delay_ms(off_ms, OUTPUT_TEST_CHUNK_MS, || {
+                                    let _ = adapter.watchdog().feed();
+                                });
+                            }
+                        },
+                        out,
+                    )
+                },
+                |payload: &[u8], out: &mut [u8]| {
+                    if !payload.is_empty() {
+                        return None;
                     }
-                    Cmd::ToothStats => {
-                        if let Some(mr) = encode_tooth_stats_reply(state, &mut out) {
-                            let _ = cdc.write(&out[..mr]);
-                        }
+                    let adapter = unsafe { &*adapter_ptr };
+                    let snapshot = adapter.runtime().snapshot();
+                    let synced =
+                        matches!(snapshot.engine.sync, ecu_domain::SyncState::Locked { .. });
+                    encode_tooth_stats_reply(snapshot.engine.rpm.get(), synced, out)
+                },
+                |payload: &[u8], out: &mut [u8]| {
+                    if !payload.is_empty() {
+                        return None;
                     }
-                    _ => {
-                        let reply_len = ts.handle_frame(&inbuf[..len], &mut out);
-                        refresh_ts_outpc_config_from_state(state);
-                        if let Some(mr) = reply_len {
-                            let _ = cdc.write(&out[..mr]);
-                        }
-                    }
-                }
-            } else {
-                let reply_len = ts.handle_frame(&inbuf[..len], &mut out);
-                refresh_ts_outpc_config_from_state(state);
-                if let Some(mr) = reply_len {
-                    let _ = cdc.write(&out[..mr]);
-                }
+                    let records = unsafe { &*observability_record_scratch_ptr };
+                    let drain_report = unsafe { &*last_drain_report_ptr };
+                    let overflow_count =
+                        drain_report.record.overflow_count.min(u32::from(u16::MAX)) as u16;
+                    encode_tooth_composite_log_from_records(
+                        records,
+                        drain_report.record.drained,
+                        overflow_count,
+                        out,
+                    )
+                },
+                |payload: &[u8], out: &mut [u8]| {
+                    handle_version_info_cmd(
+                        payload,
+                        ecu_ts::TS_SIGNATURE,
+                        RUNTIME_BUILD_ID_RP2040_PICO_TS_ECU.get(),
+                        PIN_MAP_RP2040_PICO_TS_ECU_BRINGUP.get(),
+                        out,
+                    )
+                },
+                |payload: &[u8], out: &mut [u8]| {
+                    handle_compatibility_info_cmd(payload, compatibility_report, out)
+                },
+                |payload: &[u8], out: &mut [u8]| {
+                    handle_reboot_cmd(payload, || reboot_requested = true, out)
+                },
+            );
+            let reply_len =
+                ts.handle_frame_with_bench_tooling(&inbuf[..len], &mut out, &mut bench_tooling);
+            refresh_ts_outpc_config_from_state(state);
+            if let Some(mr) = reply_len {
+                let _ = cdc.write(&out[..mr]);
+            }
+            if reboot_requested {
+                perform_system_reboot();
             }
             if let Some(pages) = ts.server.store_mut().take_written_pages() {
                 if written_pages_require_runtime_fuel_retune(pages) {
@@ -806,6 +926,27 @@ fn main() -> ! {
                 );
             }
         }
+
+        #[cfg(all(feature = "flash-kv", feature = "transport-can", target_arch = "arm"))]
+        {
+            let _ = obd2_retained_history_persistence
+                .persist_if_changed(&adapter, ts.server.store_mut().store_mut().kv_mut());
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(feature = "flash-kv")]
+    #[test]
+    fn persist_crc_fault_event_has_shared_obd2_meaning_shape() {
+        let event = super::persist_crc_fault_event();
+        assert_eq!(event.code, ecu_domain::diag::DiagCode::PersistCrcFault);
+        assert_eq!(event.timestamp, ecu_domain::Micros::new(0));
+        assert_eq!(event.source, ecu_domain::diag::DiagSource::User);
+        assert_eq!(event.context, None);
+        assert_eq!(event.start_us, 0);
+        assert_eq!(event.end_us, 0);
     }
 }
 

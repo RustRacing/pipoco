@@ -52,12 +52,38 @@ use ecu_ts::persistence::written_pages_require_runtime_fuel_retune;
 use panic_halt as _;
 use stm32f4xx_hal::{pac, pac::interrupt, prelude::*};
 
+#[cfg(feature = "transport-can")]
+mod can_support;
 mod capture;
 mod hal_impl;
+#[cfg(all(feature = "transport-can", feature = "flash-kv"))]
+mod identity_provisioning;
+#[cfg(feature = "transport-can")]
+mod obd2_support;
+#[cfg(feature = "flash-kv")]
+mod store_support;
 #[cfg(feature = "ts-usb")]
 mod ts_support;
 use hal_impl::Stm32Time;
 use hal_impl::Stm32Watchdog;
+#[cfg(feature = "obd2-identity-can-provisioning")]
+use identity_provisioning::Obd2IdentityProvisioningOperatorArm;
+
+// Current STM32F4 bring-up exposes exactly two injector and two ignition
+// channels through `ScheduledOutputs4`. Worst-case pending work before the next
+// drain is therefore two combined injection+ignition windows, or eight queued
+// transitions total.
+const BOARD_SPLIT_SCHEDULER_QUEUE_CAP: usize = 8;
+
+#[cfg(feature = "transport-can")]
+fn stm32f4_obd2_identity_record(
+) -> ecu_target_common::transport_service::Obd2ProvisionedIdentityRecord {
+    ecu_target_common::transport_service::Obd2ProvisionedIdentityRecord::from_ascii(
+        Some(b"pipstm32f40000001"),
+        Some(b"pipcalstm32f40001"),
+        Some(b"stm4a1"),
+    )
+}
 
 // Arduino-style global pin declarations for easy remapping
 // Adjust these macros to change physical pin assignments
@@ -164,6 +190,21 @@ fn main() -> ! {
 
     // Setup output pins for injectors/coils
     let gpiob = dp.GPIOB.split();
+    #[cfg(feature = "transport-can")]
+    let mut obd2_service = {
+        use bxcan::filter::Mask32;
+        use bxcan::Fifo;
+        use stm32f4xx_hal::can::CanExt as _;
+
+        let can = dp.CAN1.can((gpiob.pb9, gpiob.pb8));
+        let mut can = bxcan::Can::builder(can)
+            .set_bit_timing(0x001c_0000)
+            .enable();
+        let mut filters = can.modify_filters();
+        filters.enable_bank(0, Fifo::Fifo0, Mask32::accept_all());
+        drop(filters);
+        obd2_support::new_service(can_support::new_transport(can))
+    };
     // Use macros above to obtain output pins; edit macros to remap
     let mut inj1 = INJ1_PIN!(gpiob);
     let mut inj2 = INJ2_PIN!(gpiob);
@@ -176,7 +217,7 @@ fn main() -> ! {
     ign1.set_low();
     ign2.set_low();
     let mut outputs = ScheduledOutputs4::new(inj1, inj2, ign1, ign2);
-    let mut drain = TransitionDrainBuffer::<8>::new();
+    let mut drain = TransitionDrainBuffer::<BOARD_SPLIT_SCHEDULER_QUEUE_CAP>::new();
     let mut observability_traces: FixedCommonObservabilityTracePair<16, 16> =
         FixedCommonObservabilityTracePair::new();
     let mut observability_sample_scratch = [CommonObservabilitySample::default(); 16];
@@ -185,11 +226,42 @@ fn main() -> ! {
     let mut adapter = BoardAdapter::new(
         BoardSensorSnapshotSampleSource::new(FixedLoadSensor::new(Stm32Time, Kpa10::new(700))),
         NoopCapture,
-        ScheduledActionExecutor::<8>::new(),
+        ScheduledActionExecutor::<BOARD_SPLIT_SCHEDULER_QUEUE_CAP>::new(),
         iwdg,
         NoopTransport,
         NoopStore,
     );
+    #[cfg(all(feature = "transport-can", not(feature = "flash-kv")))]
+    adapter.install_provisioned_obd2_identity_record(stm32f4_obd2_identity_record());
+    #[cfg(all(feature = "transport-can", feature = "flash-kv"))]
+    let mut retained_history_store = store_support::FlashKv::new();
+    #[cfg(all(feature = "transport-can", feature = "flash-kv"))]
+    adapter.install_provisioned_obd2_identity_record(
+        retained_history_store
+            .load_obd2_identity_record()
+            .unwrap_or_else(stm32f4_obd2_identity_record),
+    );
+    #[cfg(all(feature = "transport-can", feature = "flash-kv"))]
+    adapter.set_obd2_identity_key_lifecycle_status(Some(
+        identity_provisioning::obd2_identity_key_lifecycle_status_from_optional_audit(
+            retained_history_store.load_obd2_identity_key_audit(),
+        ),
+    ));
+    #[cfg(feature = "obd2-identity-can-provisioning")]
+    let mut obd2_identity_operator_arm =
+        Obd2IdentityProvisioningOperatorArm::from_persisted_key_or_compile_time_env(
+            retained_history_store
+                .load_obd2_identity_provisioning_key_record()
+                .map(|record| (record.active_key(), record.last_arm_nonce)),
+        );
+    #[cfg(all(feature = "transport-can", feature = "flash-kv"))]
+    adapter.record_store_integrity_status(store_support::boot_store_integrity());
+    #[cfg(all(feature = "transport-can", feature = "flash-kv"))]
+    let mut obd2_retained_history_persistence =
+        ecu_target_common::transport_service::Obd2RetainedHistoryPersistenceState::restore_from_store(
+            &mut adapter,
+            &retained_history_store,
+        );
     if adapter
         .configure_fuel_model_and_push_to_trace_pair(
             bringup_fuel_model(),
@@ -215,17 +287,19 @@ fn main() -> ! {
         use usb_device::class_prelude::UsbBusAllocator;
         use usb_device::prelude::*;
         use usbd_serial::USB_CLASS_CDC;
-        static mut EP_MEMORY: [u32; 1024] = [0; 1024];
-        static mut USB_ALLOC: Option<UsbBusAllocator<UsbBusType>> = None;
         // Configure USB pins PA11/PA12 to AF10
         let usb = USB::new(
             (dp.OTG_FS_GLOBAL, dp.OTG_FS_DEVICE, dp.OTG_FS_PWRCLK),
             (gpioa.pa11, gpioa.pa12),
             &clocks,
         );
-        let cdc_opt = unsafe {
-            USB_ALLOC = Some(UsbBusType::new(usb, &mut EP_MEMORY));
-            let bus = USB_ALLOC.as_ref().unwrap();
+        static mut EP_MEMORY: [u32; 1024] = [0; 1024];
+        let bus = cortex_m::singleton!(
+            : UsbBusAllocator<UsbBusType> =
+                UsbBusType::new(usb, unsafe { &mut *core::ptr::addr_of_mut!(EP_MEMORY) })
+        )
+        .expect("STM32 USB allocator singleton already taken");
+        let cdc_opt = {
             let serial = usbd_serial::SerialPort::new(bus);
             let dev = UsbDeviceBuilder::new(bus, UsbVidPid(0x1d50, 0x6130))
                 .device_class(USB_CLASS_CDC)
@@ -302,9 +376,61 @@ fn main() -> ! {
             &mut last_drain_report,
         );
     }
-
     // Main loop - feed capture into the split runtime and apply due scheduled outputs.
     loop {
+        #[cfg(feature = "transport-can")]
+        {
+            #[cfg(feature = "flash-kv")]
+            adapter.set_obd2_flash_write_fault_status(Some(
+                store_support::last_flash_write_fault_status(),
+            ));
+            #[cfg(not(feature = "flash-kv"))]
+            let _ = obd2_service.pump_once(&mut adapter);
+            #[cfg(all(feature = "flash-kv", not(feature = "obd2-identity-can-provisioning")))]
+            let _ = obd2_service.pump_once(&mut adapter);
+            #[cfg(feature = "obd2-identity-can-provisioning")]
+            let pump_result = obd2_service.pump_once(&mut adapter);
+            #[cfg(feature = "obd2-identity-can-provisioning")]
+            if let Ok(Some(
+                ecu_target_common::transport_service::Obd2MultiServiceTransportServiceOutcome::Ignored(
+                    message,
+                ),
+            )) = pump_result
+            {
+                if let Ok(Some(response)) =
+                    identity_provisioning::obd2_identity_operator_arm_message_with_persisted_nonce(
+                        &mut obd2_identity_operator_arm,
+                        &mut retained_history_store,
+                        &message,
+                    )
+                {
+                    let _ = ecu_transport::Transport::send(obd2_service.transport_mut(), &response);
+                } else if let Ok(Some(response)) =
+                    identity_provisioning::provision_flash_kv_obd2_identity_key_operator_message_with_audit(
+                        &mut obd2_identity_operator_arm,
+                        &mut retained_history_store,
+                        &message,
+                    )
+                {
+                    adapter.set_obd2_identity_key_lifecycle_status(Some(
+                        identity_provisioning::obd2_identity_key_lifecycle_status_after_operator_response(
+                            identity_provisioning::obd2_identity_key_audit_from_message(&response),
+                            retained_history_store.load_obd2_identity_key_audit(),
+                        ),
+                    ));
+                    let _ = ecu_transport::Transport::send(obd2_service.transport_mut(), &response);
+                } else if let Ok(Some(response)) =
+                    identity_provisioning::provision_flash_kv_obd2_identity_operator_message_with_persisted_audit(
+                        &mut obd2_identity_operator_arm,
+                        &mut retained_history_store,
+                        &message,
+                    )
+                {
+                    let _ = ecu_transport::Transport::send(obd2_service.transport_mut(), &response);
+                }
+            }
+        }
+
         // Refresh the TS sensor overlay until real sensors land.
         #[cfg(feature = "ts-usb")]
         {
@@ -414,6 +540,11 @@ fn main() -> ! {
                     }
                 }
             }
+        }
+        #[cfg(all(feature = "transport-can", feature = "flash-kv"))]
+        {
+            let _ = obd2_retained_history_persistence
+                .persist_if_changed(&adapter, &mut retained_history_store);
         }
     }
 }

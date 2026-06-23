@@ -62,7 +62,7 @@ Columns: `frozen contract`, `executable function(s)`, `proof artifact`, `couplin
 | OUTPC decode | `ecu_spec::ts_spec::decode_outpc(&[u8]) -> Result<OutpcFrame, OutpcCodecError>` | `verus.rs lemma_ts_outpc_roundtrip` | Verus lemma + property test | any 44-byte slice | covered | `cargo test -p ecu-spec -- outpc_roundtrip` |
 | TS dispatch | `ecu_spec::ts_spec::ts_dispatch_step(&[u8]) -> TsDispatchResult<'_>` | `verus.rs lemma_ts_dispatch_totality`, `kani.rs kani_exec_ts_proto_matches_contract` | Verus lemma + executable Kani bridge | any frame ≤ 255 bytes | covered | `cargo kani -p ecu-spec --harness kani_exec_ts_proto_matches_contract` |
 | Burn/save sequencing | `ecu_spec::ts_spec::burn_page`, `save_all` | `ecu-spec/tests/ts_proto_properties.rs prop_ts_burn_save_commit_atomicity`, `ecu-spec/tests/persist_roundtrip.rs prop_ts_burn_interleaved_commits_are_atomic` | property test bridge | `engine_running ∈ {true, false}`, valid page | covered | `cargo test -p ecu-spec -- burn` |
-| Diagnostic ring | `ecu_spec::ts_spec::ts_diag_log_push`, `ts_diag_log_pop_oldest`, `encode_ts_diag_log_oldest_first` | `ecu-spec/tests/ts_proto_properties.rs prop_ts_diag_log_wrap_oldest_first`, `ecu-spec/src/ts_spec.rs diag_log_* tests` | property test bridge | `ring.len ∈ [0, 64]` | covered | `cargo test -p ecu-spec -- diag_log` |
+| Diagnostic ring | `ecu_spec::ts_spec::ts_diag_log_push`, `ts_diag_log_pop_oldest`, `encode_ts_diag_log_oldest_first` | `ecu-spec/tests/ts_proto_properties.rs prop_ts_diag_log_wrap_oldest_first`, `ecu-spec/src/ts_spec.rs diag_log_* tests` | property test bridge; row encoding aligned to live TS `diag_log` surface | `ring.len ∈ [0, 64]` | covered | `cargo test -p ecu-spec -- diag_log` |
 
 ---
 

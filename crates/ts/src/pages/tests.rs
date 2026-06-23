@@ -173,3 +173,62 @@ fn descriptor_registry_page_ids_are_unique() {
         .collect();
     assert_eq!(unique.len(), TS_PAGE_DESCRIPTORS.len());
 }
+
+#[test]
+fn descriptor_registry_schema_versions_cover_all_known_pages() {
+    for descriptor in TS_PAGE_DESCRIPTORS {
+        assert_eq!(ts_page_schema_version(descriptor.page), Some(1));
+    }
+    assert!(ts_page_schema_version(99).is_none());
+}
+
+#[test]
+fn diag_log_page_roundtrips_meaning_fields() {
+    let page = DiagLogPage::new([
+        DiagLogEntryPage::new(
+            8,
+            TS_FAULT_SEVERITY_WARNING,
+            TS_FAULT_ACTION_LIMP_HOME,
+            TS_DIAG_SOURCE_SAFETY,
+            true,
+            0x0102_0304,
+            10,
+            20,
+        ),
+        DiagLogEntryPage::new(
+            9,
+            TS_FAULT_SEVERITY_CRITICAL,
+            TS_FAULT_ACTION_SHUTDOWN,
+            TS_DIAG_SOURCE_USER,
+            false,
+            0,
+            30,
+            40,
+        ),
+        DiagLogEntryPage::empty(),
+        DiagLogEntryPage::empty(),
+        DiagLogEntryPage::empty(),
+        DiagLogEntryPage::empty(),
+        DiagLogEntryPage::empty(),
+        DiagLogEntryPage::empty(),
+        DiagLogEntryPage::empty(),
+        DiagLogEntryPage::empty(),
+        DiagLogEntryPage::empty(),
+        DiagLogEntryPage::empty(),
+        DiagLogEntryPage::empty(),
+        DiagLogEntryPage::empty(),
+        DiagLogEntryPage::empty(),
+        DiagLogEntryPage::empty(),
+    ]);
+    let mut out = [0u8; DIAG_LOG_PAGE_BYTES];
+    assert_eq!(page.encode(&mut out), Ok(DIAG_LOG_PAGE_BYTES));
+    assert_eq!(out[0], 8);
+    assert_eq!(out[1], TS_FAULT_SEVERITY_WARNING);
+    assert_eq!(out[2], TS_FAULT_ACTION_LIMP_HOME);
+    assert_eq!(
+        out[3],
+        TS_DIAG_SOURCE_SAFETY | TS_DIAG_SOURCE_CONTEXT_PRESENT
+    );
+    assert_eq!(&out[12..16], &0x0102_0304u32.to_le_bytes());
+    assert_eq!(DiagLogPage::decode(&out).expect("decode diag log"), page);
+}

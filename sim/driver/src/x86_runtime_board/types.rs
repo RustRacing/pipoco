@@ -62,13 +62,16 @@ pub(super) fn baseline_control_inputs(now_us: Micros, rpm: Rpm) -> ControlInputs
             mapdot_kpa_s: 0,
         },
         lambda: LambdaTrimInputs {
+            now_us,
             clt_c: 80,
+            just_started: false,
             lambda_valid: true,
             measured_lambda100: Lambda100::new(100),
             requested_open_loop: false,
         },
         torque: TorqueInputs::new(500, 0, 1_000, 1_000, 1_000),
         ignition: IgnitionInputs::new(Degrees10::new(120), 0, 0, 0, false, rpm),
+        fuel_sensors: ecu_runtime::FuelSensorInputs::default(),
         knock_intensity_x100: 0,
     }
 }

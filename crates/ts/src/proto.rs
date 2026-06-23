@@ -12,8 +12,15 @@ pub enum Cmd {
     ReadPage = 0x20,
     WritePage = 0x21,
     Burn = 0x22,
+    PackageExport = 0x23,
+    PackageImport = 0x24,
     OutputTest = 0x30,
     ToothStats = 0x31,
+    ToothCompositeLog = 0x32,
+    VersionInfo = 0x33,
+    CompatibilityInfo = 0x34,
+    Reboot = 0x35,
+    PageCrcInfo = 0x36,
 }
 
 pub fn crc16_ccitt(data: &[u8]) -> u16 {
@@ -85,8 +92,15 @@ pub fn decode_request(buf: &[u8]) -> Option<(Cmd, &[u8])> {
         0x20 => Cmd::ReadPage,
         0x21 => Cmd::WritePage,
         0x22 => Cmd::Burn,
+        0x23 => Cmd::PackageExport,
+        0x24 => Cmd::PackageImport,
         0x30 => Cmd::OutputTest,
         0x31 => Cmd::ToothStats,
+        0x32 => Cmd::ToothCompositeLog,
+        0x33 => Cmd::VersionInfo,
+        0x34 => Cmd::CompatibilityInfo,
+        0x35 => Cmd::Reboot,
+        0x36 => Cmd::PageCrcInfo,
         _ => return None,
     };
     Some((cmd, payload))

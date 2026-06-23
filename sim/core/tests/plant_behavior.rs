@@ -224,6 +224,7 @@ fn friction_slows_rpm_without_combustion() {
 fn trigger_edges_and_faults_are_deterministic() {
     let mut a = TestPlant::new(config());
     let mut b = TestPlant::new(config());
+    let mut nominal = TestPlant::new(config());
     let initial = InitialPlantState {
         timestamp_us: Micros(0),
         rpm: Rpm(1000),
@@ -232,17 +233,30 @@ fn trigger_edges_and_faults_are_deterministic() {
     };
     a.reset(initial);
     b.reset(initial);
+    nominal.reset(initial);
     let mut input = TestInput::idle(Micros(100_000));
     input.faults.duplicate_next_crank_edges = 1;
     input.faults.delay_next_edge_us = Micros(5);
+    let mut nominal_input = input;
+    nominal_input.faults.delay_next_edge_us = Micros(0);
     let mut out_a = TestOutput::empty();
     let mut out_b = TestOutput::empty();
+    let mut out_nominal = TestOutput::empty();
 
     a.step(&input, &mut out_a).unwrap();
     b.step(&input, &mut out_b).unwrap();
+    nominal.step(&nominal_input, &mut out_nominal).unwrap();
 
     assert_eq!(out_a.trigger_edges, out_b.trigger_edges);
     assert!(out_a.trigger_edges.len() > 1);
+    assert!(!out_nominal.trigger_edges.is_empty());
+    assert_eq!(
+        out_a.trigger_edges.as_slice()[0].timestamp_us.0,
+        out_nominal.trigger_edges.as_slice()[0]
+            .timestamp_us
+            .0
+            .saturating_add(5)
+    );
     assert_eq!(
         out_a.trigger_edges.as_slice()[0].channel,
         out_a.trigger_edges.as_slice()[1].channel

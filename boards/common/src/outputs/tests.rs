@@ -344,6 +344,158 @@ fn scheduled_action_executor_exposes_queue_timing_metrics() {
     );
 }
 
+#[test]
+fn scheduled_action_executor_drains_supported_full_ecu_batch_in_one_cadence() {
+    let mut executor = ScheduledActionExecutor::<24>::new();
+    for channel in 0..6 {
+        let injector_start = 100 + channel * 10;
+        let ignition_start = 200 + channel * 10;
+        executor
+            .execute(Action::ArmInjection(timed_injection_on(
+                channel as u8,
+                injector_start,
+                injector_start + 5,
+            )))
+            .expect("injector action queues");
+        executor
+            .execute(Action::ArmIgnition(timed_ignition_on(
+                channel as u8,
+                ignition_start,
+                ignition_start + 5,
+            )))
+            .expect("ignition action queues");
+    }
+
+    assert_eq!(executor.queue().active_count(), 24);
+    assert_eq!(
+        executor.timing_metrics(),
+        ScheduledTimingMetrics {
+            late_event_count: 0,
+            max_lateness_us: None,
+            queue_high_water_mark: 24,
+            last_drain_count: 0,
+        }
+    );
+
+    let mut drained = TransitionDrainBuffer::<24>::new();
+    assert_eq!(executor.drain_due(Micros::new(99), &mut drained), 0);
+    assert_eq!(
+        executor.timing_metrics(),
+        ScheduledTimingMetrics {
+            late_event_count: 0,
+            max_lateness_us: None,
+            queue_high_water_mark: 24,
+            last_drain_count: 0,
+        }
+    );
+
+    let mut inj0 = RecordingPin::default();
+    let mut inj1 = RecordingPin::default();
+    let mut inj2 = RecordingPin::default();
+    let mut inj3 = RecordingPin::default();
+    let mut inj4 = RecordingPin::default();
+    let mut inj5 = RecordingPin::default();
+    let mut ign0 = RecordingPin::default();
+    let mut ign1 = RecordingPin::default();
+    let mut ign2 = RecordingPin::default();
+    let mut ign3 = RecordingPin::default();
+    let mut ign4 = RecordingPin::default();
+    let mut ign5 = RecordingPin::default();
+    let applied = {
+        let mut injectors: [&mut dyn RawScheduledOutputPin; 6] = [
+            &mut inj0, &mut inj1, &mut inj2, &mut inj3, &mut inj4, &mut inj5,
+        ];
+        let mut ignition: [&mut dyn RawScheduledOutputPin; 6] = [
+            &mut ign0, &mut ign1, &mut ign2, &mut ign3, &mut ign4, &mut ign5,
+        ];
+
+        executor
+            .drain_and_apply_due(
+                Micros::new(300),
+                &mut drained,
+                &mut injectors,
+                &mut ignition,
+            )
+            .expect("supported full-ecu batch applies")
+    };
+
+    assert_eq!(applied, 24);
+    assert_eq!(executor.queue().active_count(), 0);
+    assert_eq!(
+        executor.timing_metrics(),
+        ScheduledTimingMetrics {
+            late_event_count: 24,
+            max_lateness_us: Some(Micros::new(200)),
+            queue_high_water_mark: 24,
+            last_drain_count: 24,
+        }
+    );
+    for pin in [
+        inj0, inj1, inj2, inj3, inj4, inj5, ign0, ign1, ign2, ign3, ign4, ign5,
+    ] {
+        assert_eq!(pin.high_count, 1);
+        assert_eq!(pin.low_count, 1);
+    }
+}
+
+#[test]
+fn scheduled_action_executor_allows_same_channel_reuse_for_non_overlapping_windows() {
+    let mut executor = ScheduledActionExecutor::<4>::new();
+
+    executor
+        .execute(Action::ArmInjection(timed_injection_on(0, 100, 130)))
+        .expect("first injector pulse queues");
+    executor
+        .execute(Action::ArmInjection(timed_injection_on(0, 180, 220)))
+        .expect("non-overlapping same-channel pulse queues");
+    assert!(executor.commit_frontier_horizon(
+        31,
+        Micros::new(90),
+        Micros::new(240),
+        Micros::new(260),
+        TimingIslandPermitMask::ALL,
+    ));
+
+    assert_eq!(executor.queue().active_count(), 4);
+    assert_eq!(executor.frontier().injection_count(), 1);
+    assert_eq!(executor.frontier().reserved_channels()[0], 1);
+
+    let mut drained = TransitionDrainBuffer::<4>::new();
+    assert_eq!(
+        executor.drain_due_with_frontier(Micros::new(140), &mut drained),
+        2
+    );
+    assert_eq!(executor.queue().active_count(), 2);
+    assert_eq!(executor.frontier().injection_count(), 1);
+    assert_eq!(executor.frontier().reserved_channels()[0], 1);
+
+    assert_eq!(
+        executor.drain_due_with_frontier(Micros::new(230), &mut drained),
+        2
+    );
+    assert_eq!(executor.queue().active_count(), 0);
+    assert_eq!(executor.frontier().injection_count(), 0);
+    assert_eq!(executor.frontier().reserved_channels()[0], 0);
+}
+
+#[test]
+fn scheduled_action_executor_rejects_overlapping_same_channel_reuse_without_partial_writes() {
+    let mut executor = ScheduledActionExecutor::<4>::new();
+    executor
+        .execute(Action::ArmInjection(timed_injection_on(0, 100, 200)))
+        .expect("first injector pulse queues");
+    let before_queue = executor.queue().snapshot();
+    let before_frontier = *executor.frontier();
+
+    assert_eq!(
+        executor.execute(Action::ArmInjection(timed_injection_on(0, 150, 250))),
+        Err(ScheduleError::ConflictingChannel)
+    );
+
+    assert_eq!(executor.queue().snapshot(), before_queue);
+    assert_eq!(*executor.frontier(), before_frontier);
+}
+
 fn timed_injection(start_at: u32, end_at: u32) -> TimedInjectionPlan {
     timed_injection_on(0, start_at, end_at)
 }
@@ -528,6 +680,126 @@ fn scheduler_queue_adapter_rejects_output_batch_overflow_without_partial_queue_w
 }
 
 #[test]
+fn scheduler_queue_adapter_allows_non_overlapping_same_channel_reuse() {
+    let mut scheduler = ScheduledQueueAdapter::<4>::new();
+    let mut outputs = OutputTransitionBatch::<4>::new();
+    outputs
+        .push(board_transition(
+            EcuOutput::Injector(ChannelId::new(0)),
+            OutputLevel::High,
+            100,
+        ))
+        .expect("first injector open fits");
+    outputs
+        .push(board_transition(
+            EcuOutput::Injector(ChannelId::new(0)),
+            OutputLevel::Low,
+            120,
+        ))
+        .expect("first injector close fits");
+    outputs
+        .push(board_transition(
+            EcuOutput::Injector(ChannelId::new(0)),
+            OutputLevel::High,
+            200,
+        ))
+        .expect("second injector open fits");
+    outputs
+        .push(board_transition(
+            EcuOutput::Injector(ChannelId::new(0)),
+            OutputLevel::Low,
+            220,
+        ))
+        .expect("second injector close fits");
+
+    scheduler
+        .schedule_output_batch(&outputs)
+        .expect("non-overlapping same-channel windows should schedule");
+
+    assert_eq!(scheduler.frontier().injection_count(), 1);
+    assert_eq!(scheduler.queue().active_count(), 4);
+
+    let mut drained = TransitionDrainBuffer::<4>::new();
+    assert_eq!(scheduler.drain_due(Micros::new(300), &mut drained), 4);
+    assert_drained_transition(
+        &drained,
+        0,
+        ScheduledTransitionKind::Injector,
+        0,
+        ScheduledLevel::High,
+        100,
+    );
+    assert_drained_transition(
+        &drained,
+        1,
+        ScheduledTransitionKind::Injector,
+        0,
+        ScheduledLevel::Low,
+        120,
+    );
+    assert_drained_transition(
+        &drained,
+        2,
+        ScheduledTransitionKind::Injector,
+        0,
+        ScheduledLevel::High,
+        200,
+    );
+    assert_drained_transition(
+        &drained,
+        3,
+        ScheduledTransitionKind::Injector,
+        0,
+        ScheduledLevel::Low,
+        220,
+    );
+    assert_eq!(scheduler.frontier().injection_count(), 0);
+}
+
+#[test]
+fn scheduler_queue_adapter_rejects_true_same_channel_overlap_atomically() {
+    let mut scheduler = ScheduledQueueAdapter::<4>::new();
+    let before = scheduler.queue().snapshot();
+
+    let mut outputs = OutputTransitionBatch::<4>::new();
+    outputs
+        .push(board_transition(
+            EcuOutput::Injector(ChannelId::new(0)),
+            OutputLevel::High,
+            100,
+        ))
+        .expect("first injector open fits");
+    outputs
+        .push(board_transition(
+            EcuOutput::Injector(ChannelId::new(0)),
+            OutputLevel::High,
+            150,
+        ))
+        .expect("second injector open fits");
+    outputs
+        .push(board_transition(
+            EcuOutput::Injector(ChannelId::new(0)),
+            OutputLevel::Low,
+            180,
+        ))
+        .expect("first injector close fits");
+    outputs
+        .push(board_transition(
+            EcuOutput::Injector(ChannelId::new(0)),
+            OutputLevel::Low,
+            220,
+        ))
+        .expect("second injector close fits");
+
+    assert_eq!(
+        scheduler.schedule_output_batch(&outputs),
+        Err(ScheduleError::ConflictingChannel)
+    );
+    assert_eq!(scheduler.queue().snapshot(), before);
+    assert_eq!(scheduler.frontier().injection_count(), 0);
+}
+
+#[test]
 fn scheduled_action_executor_enqueues_ignition_only_action() {
     let mut executor = ScheduledActionExecutor::<2>::new();
     executor
@@ -648,6 +920,131 @@ fn scheduled_action_executor_batch_overflow_preserves_live_queue() {
         before,
         "batch overflow must not commit earlier actions"
     );
+}
+
+#[test]
+fn scheduled_action_executor_batch_allows_non_overlapping_same_channel_reuse() {
+    let mut executor = ScheduledActionExecutor::<4>::new();
+
+    let mut batch = ActionBatch::<2>::new();
+    assert!(batch.push(Action::ArmInjection(timed_injection_on(0, 100, 120))));
+    assert!(batch.push(Action::ArmInjection(timed_injection_on(0, 200, 220))));
+
+    executor
+        .execute_batch(batch)
+        .expect("non-overlapping same-channel arm batch should queue");
+
+    assert_eq!(executor.frontier().injection_count(), 1);
+    assert_eq!(executor.queue().active_count(), 4);
+
+    let mut drained = TransitionDrainBuffer::<4>::new();
+    assert_eq!(executor.drain_due(Micros::new(300), &mut drained), 4);
+    assert_drained_transition(
+        &drained,
+        0,
+        ScheduledTransitionKind::Injector,
+        0,
+        ScheduledLevel::High,
+        100,
+    );
+    assert_drained_transition(
+        &drained,
+        1,
+        ScheduledTransitionKind::Injector,
+        0,
+        ScheduledLevel::Low,
+        120,
+    );
+    assert_drained_transition(
+        &drained,
+        2,
+        ScheduledTransitionKind::Injector,
+        0,
+        ScheduledLevel::High,
+        200,
+    );
+    assert_drained_transition(
+        &drained,
+        3,
+        ScheduledTransitionKind::Injector,
+        0,
+        ScheduledLevel::Low,
+        220,
+    );
+    assert_eq!(executor.frontier().injection_count(), 0);
+}
+
+#[test]
+fn scheduled_action_executor_capacity8_supports_current_split_scheduler_topology() {
+    let mut executor = ScheduledActionExecutor::<8>::new();
+
+    executor
+        .execute(Action::ArmScheduler {
+            injection: timed_injection_on(0, 100, 120),
+            ignition: timed_ignition_on(0, 200, 230),
+        })
+        .expect("first split scheduler window queues");
+    executor
+        .execute(Action::ArmScheduler {
+            injection: timed_injection_on(1, 300, 320),
+            ignition: timed_ignition_on(1, 400, 430),
+        })
+        .expect("second split scheduler window queues");
+
+    assert_eq!(executor.queue().active_count(), 8);
+
+    let mut inj0 = RecordingPin::default();
+    let mut inj1 = RecordingPin::default();
+    let mut ign0 = RecordingPin::default();
+    let mut ign1 = RecordingPin::default();
+    let mut injectors: [&mut dyn RawScheduledOutputPin; 2] = [&mut inj0, &mut inj1];
+    let mut ignition: [&mut dyn RawScheduledOutputPin; 2] = [&mut ign0, &mut ign1];
+    let mut drained = TransitionDrainBuffer::<8>::new();
+
+    assert_eq!(
+        executor.drain_and_apply_due(
+            Micros::new(1_000),
+            &mut drained,
+            &mut injectors,
+            &mut ignition
+        ),
+        Ok(8)
+    );
+    assert_eq!(inj0.high_count, 1);
+    assert_eq!(inj0.low_count, 1);
+    assert_eq!(inj1.high_count, 1);
+    assert_eq!(inj1.low_count, 1);
+    assert_eq!(ign0.high_count, 1);
+    assert_eq!(ign0.low_count, 1);
+    assert_eq!(ign1.high_count, 1);
+    assert_eq!(ign1.low_count, 1);
+}
+
+#[test]
+fn scheduled_action_executor_capacity8_rejects_third_split_scheduler_window() {
+    let mut executor = ScheduledActionExecutor::<8>::new();
+
+    executor
+        .execute(Action::ArmScheduler {
+            injection: timed_injection_on(0, 100, 120),
+            ignition: timed_ignition_on(0, 200, 230),
+        })
+        .expect("first split scheduler window queues");
+    executor
+        .execute(Action::ArmScheduler {
+            injection: timed_injection_on(1, 300, 320),
+            ignition: timed_ignition_on(1, 400, 430),
+        })
+        .expect("second split scheduler window queues");
+
+    assert_eq!(
+        executor.execute(Action::ArmScheduler {
+            injection: timed_injection_on(0, 500, 520),
+            ignition: timed_ignition_on(0, 600, 630),
+        }),
+        Err(ScheduleError::QueueFull)
+    );
+    assert_eq!(executor.queue().active_count(), 8);
 }
 
 #[test]
@@ -992,6 +1389,99 @@ fn scheduled_action_executor_runtime_cancel_preserves_frontier_stop_reason() {
         executor.frontier().active_stop_reason(),
         TimingIslandStopReason::TimingFault
     );
+}
+
+#[test]
+fn scheduled_action_executor_frontier_admission_rejection_latches_stop_reason_and_clears_queue() {
+    let mut executor = ScheduledActionExecutor::<4>::new();
+    executor
+        .execute(Action::ArmScheduler {
+            injection: timed_injection(100, 120),
+            ignition: timed_ignition(200, 230),
+        })
+        .expect("initial scheduler action queues");
+    assert!(executor.commit_frontier_horizon(
+        32,
+        Micros::new(100),
+        Micros::new(260),
+        Micros::new(300),
+        TimingIslandPermitMask::ALL,
+    ));
+
+    assert_eq!(
+        executor.execute(Action::ArmScheduler {
+            injection: timed_injection_on(1, 300, 320),
+            ignition: timed_ignition_on(1, 400, 430),
+        }),
+        Err(ScheduleError::QueueFull)
+    );
+    assert_eq!(executor.queue().active_count(), 0);
+    assert_eq!(executor.frontier().mode(), SchedulerMode::Idle);
+    assert_eq!(executor.frontier().active_horizon_id(), None);
+    assert_eq!(executor.frontier().last_accepted_horizon_id(), Some(32));
+    assert_eq!(
+        executor.frontier().active_permit_mask(),
+        TimingIslandPermitMask::NONE
+    );
+    assert_eq!(
+        executor.frontier().active_stop_reason(),
+        TimingIslandStopReason::AdmittedEventRejected
+    );
+    assert_eq!(executor.frontier().injection_count(), 0);
+    assert_eq!(executor.frontier().ignition_count(), 0);
+}
+
+#[test]
+fn scheduled_action_executor_board_output_fault_latches_stop_reason_and_clears_frontier() {
+    let mut executor = ScheduledActionExecutor::<4>::new();
+    executor
+        .execute(Action::ArmScheduler {
+            injection: timed_injection(100, 120),
+            ignition: timed_ignition(200, 230),
+        })
+        .expect("scheduler action queues");
+    assert!(executor.commit_frontier_horizon(
+        33,
+        Micros::new(100),
+        Micros::new(260),
+        Micros::new(300),
+        TimingIslandPermitMask::ALL,
+    ));
+
+    let mut inj0 = FailingPin::default();
+    let mut ign0 = RecordingPin::default();
+    let mut injectors: [&mut dyn RawScheduledOutputPin; 1] = [&mut inj0];
+    let mut ignition: [&mut dyn RawScheduledOutputPin; 1] = [&mut ign0];
+    let mut drained = TransitionDrainBuffer::<4>::new();
+
+    assert_eq!(
+        executor.drain_and_apply_due(
+            Micros::new(240),
+            &mut drained,
+            &mut injectors,
+            &mut ignition,
+        ),
+        Err(TransitionApplyError::PinWrite {
+            kind: ScheduledTransitionKind::Injector,
+            channel: ChannelId::new(0),
+            level: ScheduledLevel::High,
+            error: ScheduledOutputPinError::SetHigh,
+        })
+    );
+    assert_eq!(executor.queue().active_count(), 0);
+    assert_eq!(executor.frontier().mode(), SchedulerMode::Idle);
+    assert_eq!(executor.frontier().active_horizon_id(), None);
+    assert_eq!(executor.frontier().last_accepted_horizon_id(), Some(33));
+    assert_eq!(
+        executor.frontier().active_permit_mask(),
+        TimingIslandPermitMask::NONE
+    );
+    assert_eq!(
+        executor.frontier().active_stop_reason(),
+        TimingIslandStopReason::BoardOutputFault
+    );
+    assert_eq!(executor.frontier().injection_count(), 0);
+    assert_eq!(executor.frontier().ignition_count(), 0);
 }
 
 #[test]

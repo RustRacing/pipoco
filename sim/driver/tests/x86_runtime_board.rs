@@ -19,8 +19,8 @@ use ecu_domain::{
 };
 use ecu_runtime::{
     Action, BaseFuelModel, RuntimeFuelStrategy, RuntimeSemanticAxis16, RuntimeSemanticCalibration,
-    RuntimeSemanticCurve16U16, RuntimeSemanticState, RuntimeSemanticTable2dU16,
-    RUNTIME_SEMANTIC_TABLE_LEN,
+    RuntimeSemanticCurve16U16, RuntimeSemanticDeadtimeTableU16, RuntimeSemanticState,
+    RuntimeSemanticTable2dU16, RUNTIME_SEMANTIC_TABLE_LEN,
 };
 use ecu_sim_core as core_plant;
 use ecu_sim_core::config::{
@@ -118,12 +118,20 @@ fn semantic_table_u16(value: u16) -> RuntimeSemanticTable2dU16 {
     }
 }
 
+fn semantic_deadtime_table_u16(value: u16) -> RuntimeSemanticDeadtimeTableU16 {
+    RuntimeSemanticDeadtimeTableU16 {
+        vbat_mv_axis: semantic_axis2(),
+        pressure_kpa10_axis: semantic_axis2(),
+        values: [[value; RUNTIME_SEMANTIC_TABLE_LEN]; RUNTIME_SEMANTIC_TABLE_LEN],
+    }
+}
+
 fn semantic_shift_strategy(launch_rpm_limit: u16, flat_shift_rpm_min: u16) -> RuntimeFuelStrategy {
     RuntimeFuelStrategy::SpeedDensityVe {
         calibration: RuntimeSemanticCalibration {
             ve_table: semantic_table_u16(7_000),
             afr_target_table: semantic_table_u16(1_470),
-            deadtime_table_us: semantic_table_u16(0),
+            deadtime_table_us: semantic_deadtime_table_u16(0),
             clt_corr_curve: semantic_curve_u16(1_000),
             iat_corr_curve: semantic_curve_u16(1_000),
             baro_corr_curve: semantic_curve_u16(1_000),
@@ -151,6 +159,10 @@ fn semantic_shift_strategy(launch_rpm_limit: u16, flat_shift_rpm_min: u16) -> Ru
             hard_rev_rpm: 10_000,
             rev_hysteresis_rpm: 100,
             soft_retard_max_deg10: 0,
+            idle_target_rpm: 0,
+            idle_base_duty_x1000: 0,
+            idle_kp_x1000: 0,
+            idle_ki_x1000: 0,
             launch_rpm_limit,
             launch_cut_cycles: 0,
             flat_shift_rpm_min,
@@ -567,7 +579,7 @@ fn wasted_spark_profile_identity_uses_normalized_event_count() {
 
     assert_eq!(
         ignition_channels,
-        [0, 2, 3, 4, 5, 6, 7].into_iter().collect()
+        [0, 1, 2, 3, 4, 5, 6, 7].into_iter().collect()
     );
     let telemetry = board.telemetry_frame().expect("telemetry frame");
     assert_eq!(telemetry.ignition_profile_id, IgnitionProfileId::new(8));
@@ -585,13 +597,13 @@ fn synced_m50_runtime_outputs_bridge_into_clean_core_plant_commands() {
     let bridge = bridge_output_transitions_to_core_frame::<6, 12>(&result.scheduled_outputs);
     assert!(bridge.diagnostics.is_clean(), "{:?}", bridge.diagnostics);
     assert_eq!(bridge.ecu_outputs.injection_events.len(), 6);
-    assert_eq!(bridge.ecu_outputs.spark_events.len(), 3);
+    assert_eq!(bridge.ecu_outputs.spark_events.len(), 6);
     assert!(!bridge.ecu_outputs.injection_events.is_empty());
     assert!(!bridge.ecu_outputs.spark_events.is_empty());
 
     let output = step_bridge_outputs_into_core_plant(bridge.ecu_outputs);
     assert_eq!(output.consumed_events.injection_count, 6);
-    assert_eq!(output.consumed_events.spark_count, 6);
+    assert_eq!(output.consumed_events.spark_count, 12);
     assert_eq!(output.consumed_events.ignored_injection_count, 0);
     assert_eq!(output.consumed_events.ignored_spark_count, 0);
     assert!(
@@ -855,7 +867,7 @@ fn removing_injection_events_suppresses_combustion() {
 
     let output = step_bridge_outputs_into_core_plant(ecu_outputs);
     assert_eq!(output.consumed_events.injection_count, 0);
-    assert_eq!(output.consumed_events.spark_count, 6);
+    assert_eq!(output.consumed_events.spark_count, 12);
     assert_eq!(output.consumed_events.ignored_injection_count, 0);
     assert_eq!(output.consumed_events.ignored_spark_count, 0);
     assert_eq!(output.combustion.total_torque_nm_x100.0, 0);
@@ -1030,7 +1042,7 @@ fn authority_telemetry_gates_outputs_and_sync_loss_cancels() {
     let validated = run_x86_runtime_tick(&mut board).unwrap();
     let bridge = bridge_output_transitions_to_core_frame::<6, 12>(&validated.scheduled_outputs);
     assert!(board.diagnostics().engine_time.full_sequential_authorized);
-    assert_eq!(bridge.ecu_outputs.injection_events.len(), 6);
+    assert_eq!(bridge.ecu_outputs.injection_events.len(), 0);
     assert_eq!(bridge.ecu_outputs.spark_events.len(), 6);
 
     board.set_clock(Micros::new(3_000));

@@ -19,6 +19,7 @@ const NORMAL_TOOTH_TICKS: u32 = 1_000;
 const MISSING_TOOTH_GAP_TICKS: u32 =
     NORMAL_TOOTH_TICKS * (SIXTY_MINUS_TWO_MISSING_TEETH as u32 + 1);
 const MINIMUM_EDGE_INTERVAL_TICKS: u32 = 50;
+const REPLAY_BASELINE_RPM: u32 = 3_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReplayTriggerChannel {
@@ -203,6 +204,40 @@ impl TriggerReplayFixture {
         Self {
             name: "sync-loss-after-primary-lock",
             ..Self::wrong_tooth_count_after_lock()
+        }
+    }
+
+    pub fn rapid_accel_decel_with_cam() -> Self {
+        let cycle_rpms = [2_200u16, 3_200, 2_400, 3_400];
+        let mut edges = Vec::new();
+        let mut timestamp = push_initial_missing_tooth_lock_from(
+            &mut edges,
+            0,
+            EdgeKind::Rising,
+            tooth_ticks_for_rpm(cycle_rpms[0]),
+        );
+
+        for rpm in cycle_rpms {
+            timestamp = push_locked_sixty_minus_two_cycle_with_tooth_ticks(
+                &mut edges,
+                timestamp,
+                EdgeKind::Rising,
+                Some(ReplayCamLevel::High),
+                tooth_ticks_for_rpm(rpm),
+            );
+        }
+        let _ = push_locked_sixty_minus_two_cycle_with_tooth_ticks(
+            &mut edges,
+            timestamp,
+            EdgeKind::Rising,
+            Some(ReplayCamLevel::High),
+            tooth_ticks_for_rpm(cycle_rpms[cycle_rpms.len() - 1]),
+        );
+
+        Self {
+            name: "rapid-accel-decel-with-cam",
+            decoder_config: expert_sixty_minus_two_config(),
+            edges,
         }
     }
 
@@ -415,23 +450,56 @@ fn push_initial_missing_tooth_lock(
     edges: &mut Vec<SyntheticTriggerEdge>,
     crank_edge_kind: EdgeKind,
 ) -> u32 {
-    edges.push(SyntheticTriggerEdge::crank_with_kind(0, crank_edge_kind));
-    edges.push(SyntheticTriggerEdge::crank_with_kind(
-        NORMAL_TOOTH_TICKS,
-        crank_edge_kind,
-    ));
-    edges.push(SyntheticTriggerEdge::crank_with_kind(
-        NORMAL_TOOTH_TICKS + MISSING_TOOTH_GAP_TICKS,
-        crank_edge_kind,
-    ));
-    NORMAL_TOOTH_TICKS + MISSING_TOOTH_GAP_TICKS
+    push_initial_missing_tooth_lock_from(edges, 0, crank_edge_kind, NORMAL_TOOTH_TICKS)
 }
 
 fn push_locked_sixty_minus_two_cycle(
     edges: &mut Vec<SyntheticTriggerEdge>,
+    timestamp: u32,
+    crank_edge_kind: EdgeKind,
+    cam_level: Option<ReplayCamLevel>,
+) -> u32 {
+    push_locked_sixty_minus_two_cycle_with_tooth_ticks(
+        edges,
+        timestamp,
+        crank_edge_kind,
+        cam_level,
+        NORMAL_TOOTH_TICKS,
+    )
+}
+
+fn push_initial_missing_tooth_lock_from(
+    edges: &mut Vec<SyntheticTriggerEdge>,
+    start_timestamp: u32,
+    crank_edge_kind: EdgeKind,
+    tooth_ticks: u32,
+) -> u32 {
+    let gap_ticks = missing_tooth_gap_ticks(tooth_ticks);
+    edges.push(SyntheticTriggerEdge::crank_with_kind(
+        start_timestamp,
+        crank_edge_kind,
+    ));
+    edges.push(SyntheticTriggerEdge::crank_with_kind(
+        start_timestamp.saturating_add(tooth_ticks),
+        crank_edge_kind,
+    ));
+    edges.push(SyntheticTriggerEdge::crank_with_kind(
+        start_timestamp
+            .saturating_add(tooth_ticks)
+            .saturating_add(gap_ticks),
+        crank_edge_kind,
+    ));
+    start_timestamp
+        .saturating_add(tooth_ticks)
+        .saturating_add(gap_ticks)
+}
+
+fn push_locked_sixty_minus_two_cycle_with_tooth_ticks(
+    edges: &mut Vec<SyntheticTriggerEdge>,
     mut timestamp: u32,
     crank_edge_kind: EdgeKind,
     cam_level: Option<ReplayCamLevel>,
+    tooth_ticks: u32,
 ) -> u32 {
     if let Some(cam_level) = cam_level {
         edges.push(SyntheticTriggerEdge::cam(
@@ -442,14 +510,14 @@ fn push_locked_sixty_minus_two_cycle(
     }
 
     for _ in 2..=SIXTY_MINUS_TWO_OBSERVED_TEETH {
-        timestamp = timestamp.saturating_add(NORMAL_TOOTH_TICKS);
+        timestamp = timestamp.saturating_add(tooth_ticks);
         edges.push(SyntheticTriggerEdge::crank_with_kind(
             timestamp,
             crank_edge_kind,
         ));
     }
 
-    timestamp = timestamp.saturating_add(MISSING_TOOTH_GAP_TICKS);
+    timestamp = timestamp.saturating_add(missing_tooth_gap_ticks(tooth_ticks));
     edges.push(SyntheticTriggerEdge::crank_with_kind(
         timestamp,
         crank_edge_kind,
@@ -474,4 +542,17 @@ fn trigger_level(level: ReplayCamLevel) -> TriggerLevel {
 
 pub fn replay_frame_time_us(frame: &TriggerReplayFrame) -> Micros {
     Micros::new(frame.edge.at.get())
+}
+
+fn tooth_ticks_for_rpm(rpm: u16) -> u32 {
+    let rpm = u32::from(rpm.max(1));
+    NORMAL_TOOTH_TICKS
+        .saturating_mul(REPLAY_BASELINE_RPM)
+        .checked_div(rpm)
+        .unwrap_or(NORMAL_TOOTH_TICKS)
+        .max(MINIMUM_EDGE_INTERVAL_TICKS + 1)
+}
+
+fn missing_tooth_gap_ticks(tooth_ticks: u32) -> u32 {
+    tooth_ticks.saturating_mul(SIXTY_MINUS_TWO_MISSING_TEETH as u32 + 1)
 }

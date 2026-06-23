@@ -1,4 +1,4 @@
-use ecu_domain::Lambda100;
+use ecu_domain::{Kpa10, Lambda100, Micros};
 
 /// Lambda control operating mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -8,6 +8,20 @@ pub enum LambdaMode {
     ClosedLoop,
 }
 
+/// Closed-loop lambda disable/freeze cause owned by the lambda planner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LambdaDisableReason {
+    #[default]
+    None,
+    RequestedOpenLoop,
+    SensorInvalid,
+    WarmupGate,
+    LowLoadGate,
+    StartupDelay,
+    AccelerationEnrichment,
+    PowerReductionCut,
+}
+
 /// Configuration for the first-pass lambda trim planner.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LambdaTrimConfig {
@@ -15,6 +29,9 @@ pub struct LambdaTrimConfig {
     pub closed_loop_target: Lambda100,
     pub enable_clt_c: i16,
     pub disable_clt_c: i16,
+    pub enable_load_kpa10: Kpa10,
+    pub disable_load_kpa10: Kpa10,
+    pub startup_delay_us: Micros,
     pub min_trim_x100: i16,
     pub max_trim_x100: i16,
     pub gain_x10: u8,
@@ -26,6 +43,9 @@ impl LambdaTrimConfig {
         closed_loop_target: Lambda100::new(100),
         enable_clt_c: 40,
         disable_clt_c: 30,
+        enable_load_kpa10: Kpa10::new(300),
+        disable_load_kpa10: Kpa10::new(250),
+        startup_delay_us: Micros::new(0),
         min_trim_x100: 85,
         max_trim_x100: 115,
         gain_x10: 4,
@@ -41,7 +61,9 @@ impl Default for LambdaTrimConfig {
 /// Inputs required to compute lambda trim.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LambdaTrimInputs {
+    pub now_us: Micros,
     pub clt_c: i16,
+    pub just_started: bool,
     pub lambda_valid: bool,
     pub measured_lambda100: Lambda100,
     pub requested_open_loop: bool,
@@ -55,6 +77,7 @@ pub struct LambdaTrimResult {
     pub target_lambda100: Lambda100,
     pub measured_lambda100: Lambda100,
     pub trim_x100: i16,
+    pub disable_reason: LambdaDisableReason,
 }
 
 impl LambdaTrimResult {
@@ -64,6 +87,7 @@ impl LambdaTrimResult {
         target_lambda100: Lambda100,
         measured_lambda100: Lambda100,
         trim_x100: i16,
+        disable_reason: LambdaDisableReason,
     ) -> Self {
         Self {
             mode,
@@ -71,6 +95,7 @@ impl LambdaTrimResult {
             target_lambda100,
             measured_lambda100,
             trim_x100,
+            disable_reason,
         }
     }
 
@@ -81,6 +106,7 @@ impl LambdaTrimResult {
             target_lambda100,
             measured_lambda100,
             100,
+            LambdaDisableReason::None,
         )
     }
 }
@@ -90,6 +116,7 @@ impl LambdaTrimResult {
 pub struct LambdaTrimPlanner {
     last_mode: LambdaMode,
     last_trim_x100: i16,
+    startup_delay_until_us: Option<Micros>,
 }
 
 impl LambdaTrimPlanner {
@@ -97,16 +124,55 @@ impl LambdaTrimPlanner {
         Self {
             last_mode: LambdaMode::OpenLoop,
             last_trim_x100: 100,
+            startup_delay_until_us: None,
         }
     }
 
-    pub fn update(&mut self, inputs: LambdaTrimInputs, cfg: &LambdaTrimConfig) -> LambdaTrimResult {
-        let closed_loop_enabled = inputs.lambda_valid
-            && !inputs.requested_open_loop
-            && inputs.clt_c >= cfg.enable_clt_c
-            && (self.last_mode == LambdaMode::ClosedLoop || inputs.clt_c >= cfg.disable_clt_c);
+    pub fn update(
+        &mut self,
+        inputs: LambdaTrimInputs,
+        cfg: &LambdaTrimConfig,
+        load_kpa10: Kpa10,
+        acceleration_enrichment_freeze: bool,
+        power_reduction_cut: bool,
+    ) -> LambdaTrimResult {
+        if inputs.just_started {
+            self.startup_delay_until_us = Some(Micros::new(
+                inputs
+                    .now_us
+                    .get()
+                    .saturating_add(cfg.startup_delay_us.get()),
+            ));
+        }
 
-        if !closed_loop_enabled {
+        let startup_delay_active = self
+            .startup_delay_until_us
+            .is_some_and(|until_us| inputs.now_us.get() < until_us.get());
+        let warmup_gate_active = if self.last_mode == LambdaMode::ClosedLoop {
+            inputs.clt_c < cfg.disable_clt_c
+        } else {
+            inputs.clt_c < cfg.enable_clt_c
+        };
+        let low_load_gate_active = if self.last_mode == LambdaMode::ClosedLoop {
+            load_kpa10.get() < cfg.disable_load_kpa10.get()
+        } else {
+            load_kpa10.get() < cfg.enable_load_kpa10.get()
+        };
+        let disable_reason = if inputs.requested_open_loop {
+            LambdaDisableReason::RequestedOpenLoop
+        } else if !inputs.lambda_valid {
+            LambdaDisableReason::SensorInvalid
+        } else if startup_delay_active {
+            LambdaDisableReason::StartupDelay
+        } else if warmup_gate_active {
+            LambdaDisableReason::WarmupGate
+        } else if low_load_gate_active {
+            LambdaDisableReason::LowLoadGate
+        } else {
+            LambdaDisableReason::None
+        };
+
+        if disable_reason != LambdaDisableReason::None {
             self.last_mode = LambdaMode::OpenLoop;
             self.last_trim_x100 = 100;
             return LambdaTrimResult::new(
@@ -115,6 +181,7 @@ impl LambdaTrimPlanner {
                 cfg.open_loop_target,
                 inputs.measured_lambda100,
                 100,
+                disable_reason,
             );
         }
 
@@ -124,6 +191,30 @@ impl LambdaTrimPlanner {
         let mut trim = 100 + (error * cfg.gain_x10 as i16) / 10;
         trim = trim.clamp(cfg.min_trim_x100, cfg.max_trim_x100);
 
+        if power_reduction_cut {
+            self.last_mode = LambdaMode::ClosedLoop;
+            return LambdaTrimResult::new(
+                LambdaMode::ClosedLoop,
+                false,
+                cfg.closed_loop_target,
+                inputs.measured_lambda100,
+                self.last_trim_x100,
+                LambdaDisableReason::PowerReductionCut,
+            );
+        }
+
+        if acceleration_enrichment_freeze {
+            self.last_mode = LambdaMode::ClosedLoop;
+            return LambdaTrimResult::new(
+                LambdaMode::ClosedLoop,
+                false,
+                cfg.closed_loop_target,
+                inputs.measured_lambda100,
+                self.last_trim_x100,
+                LambdaDisableReason::AccelerationEnrichment,
+            );
+        }
+
         self.last_mode = LambdaMode::ClosedLoop;
         self.last_trim_x100 = trim;
         LambdaTrimResult::new(
@@ -132,6 +223,7 @@ impl LambdaTrimPlanner {
             cfg.closed_loop_target,
             inputs.measured_lambda100,
             trim,
+            LambdaDisableReason::None,
         )
     }
 }

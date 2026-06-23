@@ -287,7 +287,9 @@ impl<T: ReplayTarget> TraceReplay<T> {
 /// produce deterministic outputs.
 fn default_control_inputs(now_us: Micros) -> ControlInputs {
     use ecu_domain::Lambda100;
-    use ecu_runtime::{EnrichmentInputs, IgnitionInputs, LambdaTrimInputs, TorqueInputs};
+    use ecu_runtime::{
+        EnrichmentInputs, FuelSensorInputs, IgnitionInputs, LambdaTrimInputs, TorqueInputs,
+    };
 
     ControlInputs {
         enrichment: EnrichmentInputs {
@@ -299,13 +301,16 @@ fn default_control_inputs(now_us: Micros) -> ControlInputs {
             mapdot_kpa_s: 0,
         },
         lambda: LambdaTrimInputs {
+            now_us,
             clt_c: 80,
+            just_started: false,
             lambda_valid: false,
             measured_lambda100: Lambda100::new(100),
             requested_open_loop: false,
         },
         torque: TorqueInputs::new(90, 90, 90, 90, 90),
         ignition: IgnitionInputs::new(Degrees10::new(100), 0, 0, 0, false, Rpm::new(1000)),
+        fuel_sensors: FuelSensorInputs::default(),
         knock_intensity_x100: 0,
     }
 }

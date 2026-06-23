@@ -7,8 +7,9 @@ use crate::persist_spec::{
 pub const TS_OUTPC_PAGE_BYTES: usize = 64;
 pub const TS_PROTO_MAGIC: u16 = 0x55AA;
 pub const TS_DIAG_LOG_CAPACITY: usize = 64;
-pub const TS_DIAG_LOG_ENTRY_BYTES: usize = 9;
+pub const TS_DIAG_LOG_ENTRY_BYTES: usize = 16;
 pub const TS_DIAG_LOG_MAX_ENCODED_BYTES: usize = TS_DIAG_LOG_CAPACITY * TS_DIAG_LOG_ENTRY_BYTES;
+pub const TS_DIAG_SOURCE_CONTEXT_PRESENT: u8 = 1 << 7;
 
 const CMD_GET_SIGNATURE: u8 = 0x10;
 const CMD_GET_OUTPC: u8 = 0x11;
@@ -197,10 +198,14 @@ pub struct TsDispatchResult<'a> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct TsDiagLogEntry {
-    pub timestamp_us: u32,
-    pub code: u16,
+    pub code: u8,
+    pub severity: u8,
+    pub action: u8,
     pub source: u8,
-    pub context: u16,
+    pub context_present: bool,
+    pub start_us: u32,
+    pub end_us: u32,
+    pub context: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -508,21 +513,33 @@ pub fn encode_ts_diag_log_oldest_first(ring: &TsDiagLogRing) -> TsDiagLogEncoded
         let offset = i * TS_DIAG_LOG_ENTRY_BYTES;
         let entry = ring.entries[ring_idx];
 
-        let ts = entry.timestamp_us.to_le_bytes();
-        out.bytes[offset] = ts[0];
-        out.bytes[offset + 1] = ts[1];
-        out.bytes[offset + 2] = ts[2];
-        out.bytes[offset + 3] = ts[3];
+        out.bytes[offset] = entry.code;
+        out.bytes[offset + 1] = entry.severity;
+        out.bytes[offset + 2] = entry.action;
+        out.bytes[offset + 3] = entry.source
+            | if entry.context_present {
+                TS_DIAG_SOURCE_CONTEXT_PRESENT
+            } else {
+                0
+            };
 
-        let code = entry.code.to_le_bytes();
-        out.bytes[offset + 4] = code[0];
-        out.bytes[offset + 5] = code[1];
+        let start = entry.start_us.to_le_bytes();
+        out.bytes[offset + 4] = start[0];
+        out.bytes[offset + 5] = start[1];
+        out.bytes[offset + 6] = start[2];
+        out.bytes[offset + 7] = start[3];
 
-        out.bytes[offset + 6] = entry.source;
+        let end = entry.end_us.to_le_bytes();
+        out.bytes[offset + 8] = end[0];
+        out.bytes[offset + 9] = end[1];
+        out.bytes[offset + 10] = end[2];
+        out.bytes[offset + 11] = end[3];
 
         let context = entry.context.to_le_bytes();
-        out.bytes[offset + 7] = context[0];
-        out.bytes[offset + 8] = context[1];
+        out.bytes[offset + 12] = context[0];
+        out.bytes[offset + 13] = context[1];
+        out.bytes[offset + 14] = context[2];
+        out.bytes[offset + 15] = context[3];
         i += 1;
     }
 

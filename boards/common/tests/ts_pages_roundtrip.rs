@@ -94,7 +94,8 @@ use ecu_runtime::{
     runtime_full_sequential_authorized, Action, AuxSafetyProfile, ControlInputs, EngineRuntime,
     EnrichmentInputs, FullEcuOutputProfile, IgnitionInputs, LambdaTrimInputs,
     OutputAuthorityRequirement, RuntimeSemanticAxis16, RuntimeSemanticCalibration,
-    RuntimeSemanticCurve16U16, RuntimeSemanticState, RuntimeSemanticTable2dU16, TorqueInputs,
+    RuntimeSemanticCurve16U16, RuntimeSemanticDeadtimeTableU16, RuntimeSemanticState,
+    RuntimeSemanticTable2dU16, TorqueInputs,
 };
 
 const fn inline_full_ecu_profile() -> FullEcuOutputProfile {
@@ -645,7 +646,9 @@ fn runtime_control_inputs() -> ControlInputs {
             mapdot_kpa_s: 0,
         },
         lambda: LambdaTrimInputs {
+            now_us: Micros::new(6_000),
             clt_c: 80,
+            just_started: false,
             lambda_valid: true,
             measured_lambda100: ecu_domain::Lambda100::new(100),
             requested_open_loop: false,
@@ -659,6 +662,7 @@ fn runtime_control_inputs() -> ControlInputs {
             false,
             Rpm::new(3_000),
         ),
+        fuel_sensors: ecu_runtime::FuelSensorInputs::default(),
         knock_intensity_x100: 0,
     }
 }
@@ -702,9 +706,9 @@ fn semantic_calibration_from_state(state: &EcuState) -> RuntimeSemanticCalibrati
             load_axis,
             values: state.config.afr_table,
         },
-        deadtime_table_us: RuntimeSemanticTable2dU16 {
-            rpm_axis,
-            load_axis,
+        deadtime_table_us: RuntimeSemanticDeadtimeTableU16 {
+            vbat_mv_axis: rpm_axis,
+            pressure_kpa10_axis: load_axis,
             values: [[800; 16]; 16],
         },
         clt_corr_curve: flat100,
@@ -750,6 +754,10 @@ fn semantic_calibration_from_state(state: &EcuState) -> RuntimeSemanticCalibrati
         hard_rev_rpm: 20_500,
         rev_hysteresis_rpm: 100,
         soft_retard_max_deg10: 0,
+        idle_target_rpm: 0,
+        idle_base_duty_x1000: 0,
+        idle_kp_x1000: 0,
+        idle_ki_x1000: 0,
         launch_rpm_limit: 0,
         launch_cut_cycles: 0,
         flat_shift_rpm_min: 0,
@@ -897,7 +905,13 @@ fn diag_page_exposes_placeholder_contract_and_live_trigger_evidence() {
         u32::from_le_bytes([out[20], out[21], out[22], out[23]]),
         expert.profile_hash
     );
-    assert_eq!(&out[24..], &[0; 8]);
+    assert_eq!(out[24], 0);
+    assert_eq!(out[25], 0);
+    assert_eq!(out[26], 0);
+    assert_eq!(out[27], 0);
+    assert_eq!(out[28], 0);
+    assert_eq!(out[29], 0);
+    assert_eq!(&out[30..], &[0; 2]);
 }
 
 #[test]

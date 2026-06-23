@@ -392,47 +392,65 @@ fn diag_log_encode_orders_oldest_to_newest_without_wrap() {
     ts_diag_log_push(
         &mut ring,
         TsDiagLogEntry {
-            timestamp_us: 10,
             code: 100,
+            severity: 2,
+            action: 1,
             source: 1,
+            context_present: true,
+            start_us: 10,
+            end_us: 15,
             context: 1000,
         },
     );
     ts_diag_log_push(
         &mut ring,
         TsDiagLogEntry {
-            timestamp_us: 20,
             code: 200,
+            severity: 3,
+            action: 2,
             source: 2,
+            context_present: false,
+            start_us: 20,
+            end_us: 25,
             context: 2000,
         },
     );
 
     let encoded = encode_ts_diag_log_oldest_first(&ring);
     assert_eq!(encoded.len as usize, 2 * TS_DIAG_LOG_ENTRY_BYTES);
-    assert_eq!(&encoded.bytes[0..4], &10u32.to_le_bytes());
-    assert_eq!(&encoded.bytes[4..6], &100u16.to_le_bytes());
-    assert_eq!(encoded.bytes[6], 1);
-    assert_eq!(&encoded.bytes[7..9], &1000u16.to_le_bytes());
+    assert_eq!(encoded.bytes[0], 100);
+    assert_eq!(encoded.bytes[1], 2);
+    assert_eq!(encoded.bytes[2], 1);
+    assert_eq!(encoded.bytes[3], 0x81);
+    assert_eq!(&encoded.bytes[4..8], &10u32.to_le_bytes());
+    assert_eq!(&encoded.bytes[8..12], &15u32.to_le_bytes());
+    assert_eq!(&encoded.bytes[12..16], &1000u32.to_le_bytes());
 
-    assert_eq!(&encoded.bytes[9..13], &20u32.to_le_bytes());
-    assert_eq!(&encoded.bytes[13..15], &200u16.to_le_bytes());
-    assert_eq!(encoded.bytes[15], 2);
-    assert_eq!(&encoded.bytes[16..18], &2000u16.to_le_bytes());
+    assert_eq!(encoded.bytes[16], 200);
+    assert_eq!(encoded.bytes[17], 3);
+    assert_eq!(encoded.bytes[18], 2);
+    assert_eq!(encoded.bytes[19], 2);
+    assert_eq!(&encoded.bytes[20..24], &20u32.to_le_bytes());
+    assert_eq!(&encoded.bytes[24..28], &25u32.to_le_bytes());
+    assert_eq!(&encoded.bytes[28..32], &2000u32.to_le_bytes());
 }
 
 #[test]
 fn diag_log_wrap_overwrites_oldest_and_encoder_starts_with_oldest_retained() {
     let mut ring = TsDiagLogRing::default();
-    let mut i = 0u16;
+    let mut i = 0u8;
     while i < 70 {
         ts_diag_log_push(
             &mut ring,
             TsDiagLogEntry {
-                timestamp_us: i as u32,
                 code: i,
-                source: (i & 0xFF) as u8,
-                context: i + 1,
+                severity: i.wrapping_add(1),
+                action: i.wrapping_add(2),
+                source: i,
+                context_present: i.is_multiple_of(2),
+                start_us: i as u32,
+                end_us: i as u32 + 10,
+                context: i as u32 + 1,
             },
         );
         i += 1;
@@ -442,27 +460,43 @@ fn diag_log_wrap_overwrites_oldest_and_encoder_starts_with_oldest_retained() {
     let encoded = encode_ts_diag_log_oldest_first(&ring);
     assert_eq!(encoded.len as usize, TS_DIAG_LOG_MAX_ENCODED_BYTES);
 
-    let mut idx = 0u16;
-    while idx < TS_DIAG_LOG_CAPACITY as u16 {
-        let expected = idx + 6;
-        let offset = idx as usize * TS_DIAG_LOG_ENTRY_BYTES;
+    let mut idx = 0usize;
+    while idx < TS_DIAG_LOG_CAPACITY {
+        let expected = idx as u8 + 6;
+        let offset = idx * TS_DIAG_LOG_ENTRY_BYTES;
+        assert_eq!(encoded.bytes[offset], expected);
+        assert_eq!(encoded.bytes[offset + 1], expected.wrapping_add(1));
+        assert_eq!(encoded.bytes[offset + 2], expected.wrapping_add(2));
+        assert_eq!(
+            encoded.bytes[offset + 3],
+            (expected & 0x7F) | if expected.is_multiple_of(2) { 0x80 } else { 0 }
+        );
         assert_eq!(
             u32::from_le_bytes([
-                encoded.bytes[offset],
-                encoded.bytes[offset + 1],
-                encoded.bytes[offset + 2],
-                encoded.bytes[offset + 3]
+                encoded.bytes[offset + 4],
+                encoded.bytes[offset + 5],
+                encoded.bytes[offset + 6],
+                encoded.bytes[offset + 7]
             ]),
             expected as u32
         );
         assert_eq!(
-            u16::from_le_bytes([encoded.bytes[offset + 4], encoded.bytes[offset + 5]]),
-            expected
+            u32::from_le_bytes([
+                encoded.bytes[offset + 8],
+                encoded.bytes[offset + 9],
+                encoded.bytes[offset + 10],
+                encoded.bytes[offset + 11]
+            ]),
+            expected as u32 + 10
         );
-        assert_eq!(encoded.bytes[offset + 6], (expected & 0xFF) as u8);
         assert_eq!(
-            u16::from_le_bytes([encoded.bytes[offset + 7], encoded.bytes[offset + 8]]),
-            expected + 1
+            u32::from_le_bytes([
+                encoded.bytes[offset + 12],
+                encoded.bytes[offset + 13],
+                encoded.bytes[offset + 14],
+                encoded.bytes[offset + 15]
+            ]),
+            expected as u32 + 1
         );
         idx += 1;
     }

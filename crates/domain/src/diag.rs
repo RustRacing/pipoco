@@ -13,6 +13,9 @@ pub enum DiagCode {
     TpsMapPlausibility,
     KnockDetected,
     PersistCrcFault,
+    OilPressureLow,
+    FuelPressureLow,
+    LambdaInvalid,
 }
 
 impl DiagCode {
@@ -27,6 +30,9 @@ impl DiagCode {
             DiagCode::TpsMapPlausibility => 7,
             DiagCode::KnockDetected => 8,
             DiagCode::PersistCrcFault => 9,
+            DiagCode::OilPressureLow => 10,
+            DiagCode::FuelPressureLow => 11,
+            DiagCode::LambdaInvalid => 12,
         }
     }
 }
@@ -91,7 +97,7 @@ impl Default for DiagState {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct DiagEvent {
     pub code: DiagCode,
     pub timestamp: Micros,
@@ -101,7 +107,14 @@ pub struct DiagEvent {
     pub end_us: u32,
 }
 
-#[derive(Debug)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub struct DiagClearSummary {
+    pub cleared_active_count: u8,
+    pub cleared_log_entries: u8,
+    pub emergency_cleared: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiagLog<const N: usize> {
     pub events: [Option<DiagEvent>; N],
     pub head: u8,

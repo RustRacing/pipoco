@@ -18,6 +18,7 @@ mod baro;
 mod cranking;
 mod deadtime;
 mod dfco;
+mod fault;
 mod flatshift;
 mod fuel;
 mod idle;
@@ -63,6 +64,10 @@ pub use baro::{
 pub use cranking::{apply_cranking_pw, cranking_corr_x1000, spark_selected_for_mode};
 pub use deadtime::deadtime_lookup;
 pub use dfco::{dfco_step, DfcoResult};
+pub use fault::{
+    fault_event_for_clear, fault_event_from_state, SpecCancelReason, SpecFaultAction,
+    SpecFaultCode, SpecFaultEvent, SpecFaultPersistence, SpecFaultSeverity, SpecFaultState,
+};
 pub use flatshift::{flat_shift_step, FlatShiftResult};
 pub use fuel::{
     compute_afr_corr_x1000, compute_pw_air_us, compute_pw_base_us, compute_pw_corr_us,
@@ -127,7 +132,7 @@ pub use ts_spec::{
     TsDecodeError, TsDiagLogEncoded, TsDiagLogEntry, TsDiagLogRing, TsDispatchError,
     TsDispatchResult, TsDispatchState, TsEffect, TsPageId, TsPageMeta, TsPageMetaError,
     TS_DIAG_LOG_CAPACITY, TS_DIAG_LOG_ENTRY_BYTES, TS_DIAG_LOG_MAX_ENCODED_BYTES,
-    TS_OUTPC_PAGE_BYTES, TS_PROTO_MAGIC,
+    TS_DIAG_SOURCE_CONTEXT_PRESENT, TS_OUTPC_PAGE_BYTES, TS_PROTO_MAGIC,
 };
 pub use types::{
     AeState, AfrOverride, AfrX100, Axis16, Calibration, Curve16, CylinderArrayI16,

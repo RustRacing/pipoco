@@ -65,6 +65,8 @@ pub mod noop;
 pub mod outputs;
 pub mod sensor_sample;
 pub mod split_tick;
+#[cfg(feature = "transport-can")]
+pub mod transport_service;
 pub mod sensors {
     pub mod adc_pipeline;
     pub mod map;

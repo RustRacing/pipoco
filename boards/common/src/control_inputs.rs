@@ -1,6 +1,7 @@
 use ecu_domain::{Degrees10, Lambda100, Micros, Rpm};
 use ecu_runtime::{
-    ControlInputs, EnrichmentInputs, IgnitionInputs, LambdaTrimInputs, TorqueInputs,
+    ControlInputs, EnrichmentInputs, FuelSensorInputs, IgnitionInputs, LambdaTrimInputs,
+    TorqueInputs,
 };
 
 /// Board-side sensor/control values needed to construct runtime control inputs.
@@ -14,6 +15,12 @@ pub struct SplitControlSignals {
     pub requested_open_loop: bool,
     pub tpsdot_pct_s: i16,
     pub mapdot_kpa_s: i16,
+    pub maf_valid: bool,
+    pub maf_x100: u16,
+    pub iat_c10: i16,
+    pub vbatt_mv: u16,
+    pub baro_valid: bool,
+    pub baro_kpa10: ecu_domain::Kpa10,
     pub spark_advance_x10: Degrees10,
     pub ignition_rpm: Rpm,
 }
@@ -29,6 +36,12 @@ impl SplitControlSignals {
             requested_open_loop: false,
             tpsdot_pct_s: 0,
             mapdot_kpa_s: 0,
+            maf_valid: false,
+            maf_x100: 0,
+            iat_c10: 250,
+            vbatt_mv: 12_000,
+            baro_valid: false,
+            baro_kpa10: ecu_domain::Kpa10::new(1010),
             spark_advance_x10: Degrees10::new(100),
             ignition_rpm,
         }
@@ -53,7 +66,9 @@ pub fn split_control_inputs(now_us: Micros, signals: SplitControlSignals) -> Con
             mapdot_kpa_s: signals.mapdot_kpa_s,
         },
         lambda: LambdaTrimInputs {
+            now_us,
             clt_c: signals.clt_c,
+            just_started: false,
             lambda_valid: signals.lambda_valid,
             measured_lambda100: signals.measured_lambda100,
             requested_open_loop: signals.requested_open_loop,
@@ -67,6 +82,14 @@ pub fn split_control_inputs(now_us: Micros, signals: SplitControlSignals) -> Con
             false,
             signals.ignition_rpm,
         ),
+        fuel_sensors: FuelSensorInputs {
+            maf_valid: signals.maf_valid,
+            maf_x100: signals.maf_x100,
+            iat_c10: signals.iat_c10,
+            vbatt_mv: signals.vbatt_mv,
+            baro_valid: signals.baro_valid,
+            baro_kpa10: signals.baro_kpa10,
+        },
         knock_intensity_x100: 0,
     }
 }
@@ -135,6 +158,12 @@ mod tests {
             requested_open_loop: true,
             tpsdot_pct_s: 12,
             mapdot_kpa_s: -7,
+            maf_valid: true,
+            maf_x100: 456,
+            iat_c10: 310,
+            vbatt_mv: 13_100,
+            baro_valid: true,
+            baro_kpa10: ecu_domain::Kpa10::new(995),
             spark_advance_x10: Degrees10::new(150),
             ignition_rpm: Rpm::new(2_200),
         };
@@ -148,6 +177,12 @@ mod tests {
         assert!(inputs.lambda.requested_open_loop);
         assert_eq!(inputs.ignition.base_advance_deg10, Degrees10::new(150));
         assert_eq!(inputs.ignition.rpm, Rpm::new(2_200));
+        assert!(inputs.fuel_sensors.maf_valid);
+        assert_eq!(inputs.fuel_sensors.maf_x100, 456);
+        assert_eq!(inputs.fuel_sensors.iat_c10, 310);
+        assert_eq!(inputs.fuel_sensors.vbatt_mv, 13_100);
+        assert!(inputs.fuel_sensors.baro_valid);
+        assert_eq!(inputs.fuel_sensors.baro_kpa10, ecu_domain::Kpa10::new(995));
     }
 
     #[test]
@@ -161,6 +196,12 @@ mod tests {
             requested_open_loop: true,
             tpsdot_pct_s: 12,
             mapdot_kpa_s: -7,
+            maf_valid: false,
+            maf_x100: 0,
+            iat_c10: 250,
+            vbatt_mv: 12_000,
+            baro_valid: false,
+            baro_kpa10: ecu_domain::Kpa10::new(1010),
             spark_advance_x10: Degrees10::new(150),
             ignition_rpm: Rpm::new(2_200),
         };
@@ -186,8 +227,8 @@ mod tests {
             split_control_frame_from(&mut source, Micros::new(20), Rpm::new(3_300)).unwrap();
 
         assert_eq!(source.calls, 1);
-        assert_eq!(frame.launch_armed, true);
-        assert_eq!(frame.flat_shift_armed, true);
+        assert!(frame.launch_armed);
+        assert!(frame.flat_shift_armed);
         assert_eq!(frame.control.enrichment.clt_c, 42);
         assert_eq!(frame.control.ignition.rpm, Rpm::new(3_300));
     }

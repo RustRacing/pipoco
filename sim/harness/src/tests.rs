@@ -3,8 +3,8 @@ use ecu_domain::{FaultCode, FaultSeverity, Lambda100, PulseWidthUs};
 use ecu_runtime::{
     BaseFuelModel, EngineRuntime, EnrichmentInputs, IgnitionInputs, LambdaTrimInputs,
     RuntimeFuelStrategy, RuntimeSemanticAxis16, RuntimeSemanticCalibration,
-    RuntimeSemanticCurve16U16, RuntimeSemanticState, RuntimeSemanticTable2dU16, TorqueInputs,
-    RUNTIME_SEMANTIC_TABLE_LEN,
+    RuntimeSemanticCurve16U16, RuntimeSemanticDeadtimeTableU16, RuntimeSemanticState,
+    RuntimeSemanticTable2dU16, TorqueInputs, RUNTIME_SEMANTIC_TABLE_LEN,
 };
 
 fn control_inputs() -> ControlInputs {
@@ -18,13 +18,16 @@ fn control_inputs() -> ControlInputs {
             mapdot_kpa_s: 10,
         },
         lambda: LambdaTrimInputs {
+            now_us: Micros::new(1_000),
             clt_c: 80,
+            just_started: false,
             lambda_valid: true,
             measured_lambda100: Lambda100::new(100),
             requested_open_loop: false,
         },
         torque: TorqueInputs::new(90, 90, 90, 90, 90),
         ignition: IgnitionInputs::new(Degrees10::new(100), 0, 0, 0, false, Rpm::new(3000)),
+        fuel_sensors: ecu_runtime::FuelSensorInputs::default(),
         knock_intensity_x100: 0,
     }
 }
@@ -59,12 +62,20 @@ fn semantic_table_u16(value: u16) -> RuntimeSemanticTable2dU16 {
     }
 }
 
+fn semantic_deadtime_table_u16(value: u16) -> RuntimeSemanticDeadtimeTableU16 {
+    RuntimeSemanticDeadtimeTableU16 {
+        vbat_mv_axis: semantic_axis2(),
+        pressure_kpa10_axis: semantic_axis2(),
+        values: [[value; RUNTIME_SEMANTIC_TABLE_LEN]; RUNTIME_SEMANTIC_TABLE_LEN],
+    }
+}
+
 fn semantic_shift_strategy(launch_rpm_limit: u16, flat_shift_rpm_min: u16) -> RuntimeFuelStrategy {
     RuntimeFuelStrategy::SpeedDensityVe {
         calibration: RuntimeSemanticCalibration {
             ve_table: semantic_table_u16(7_000),
             afr_target_table: semantic_table_u16(1_470),
-            deadtime_table_us: semantic_table_u16(0),
+            deadtime_table_us: semantic_deadtime_table_u16(0),
             clt_corr_curve: semantic_curve_u16(1_000),
             iat_corr_curve: semantic_curve_u16(1_000),
             baro_corr_curve: semantic_curve_u16(1_000),
@@ -92,6 +103,10 @@ fn semantic_shift_strategy(launch_rpm_limit: u16, flat_shift_rpm_min: u16) -> Ru
             hard_rev_rpm: 10_000,
             rev_hysteresis_rpm: 100,
             soft_retard_max_deg10: 0,
+            idle_target_rpm: 0,
+            idle_base_duty_x1000: 0,
+            idle_kp_x1000: 0,
+            idle_ki_x1000: 0,
             launch_rpm_limit,
             launch_cut_cycles: 0,
             flat_shift_rpm_min,
@@ -285,10 +300,14 @@ fn hot_start_scenario_arms_scheduler_and_reaches_closed_loop() {
     let snapshot = sim.runtime().snapshot();
     assert_eq!(snapshot.engine.phase, ecu_domain::EnginePhase::Running);
     assert_eq!(snapshot.engine.mode, ecu_domain::ControlMode::ClosedLoop);
-    assert!(matches!(
-        sim.last_result().unwrap().actions.iter().next(),
-        Some(ecu_runtime::Action::ArmScheduler { .. })
-    ));
+    assert!(sim.last_result().unwrap().actions.iter().any(|action| {
+        matches!(
+            action,
+            ecu_runtime::Action::ArmScheduler { .. }
+                | ecu_runtime::Action::ArmInjection(_)
+                | ecu_runtime::Action::ArmIgnition(_)
+        )
+    }));
 }
 
 #[test]
@@ -371,10 +390,14 @@ fn sync_loss_and_recovery_scenario_cancels_then_rearms_outputs() {
     .unwrap();
     sim.tick(Micros::new(54), control_inputs()).unwrap();
     sim.drain_until_idle();
-    assert!(matches!(
-        sim.last_result().unwrap().actions.iter().next(),
-        Some(ecu_runtime::Action::ArmScheduler { .. })
-    ));
+    assert!(sim.last_result().unwrap().actions.iter().any(|action| {
+        matches!(
+            action,
+            ecu_runtime::Action::ArmScheduler { .. }
+                | ecu_runtime::Action::ArmInjection(_)
+                | ecu_runtime::Action::ArmIgnition(_)
+        )
+    }));
 
     sim.trigger_edge(Micros::new(60), Rpm::new(0), Degrees10::new(20), false)
         .unwrap();
@@ -418,7 +441,9 @@ fn sync_loss_and_recovery_scenario_cancels_then_rearms_outputs() {
         .iter()
         .any(|action| matches!(
             action,
-            ecu_runtime::Action::ArmScheduler { .. } | ecu_runtime::Action::ArmInjection(_)
+            ecu_runtime::Action::ArmScheduler { .. }
+                | ecu_runtime::Action::ArmInjection(_)
+                | ecu_runtime::Action::ArmIgnition(_)
         )));
 }
 

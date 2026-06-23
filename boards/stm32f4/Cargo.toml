@@ -5,16 +5,20 @@ edition = "2021"
 build = "build.rs"
 
 [dependencies]
+bxcan = { version = "0.7", optional = true }
 ecu-transport = { path = "../../crates/transport", default-features = false }
-ecu-ts = { path = "../../crates/ts", default-features = false, features = ["runtime"] }
+ecu-ts = { path = "../../crates/ts", default-features = false, features = ["runtime", "persistence"] }
 ecu-board-api = { path = "../../crates/board-api" }
 ecu-board-profiles = { path = "../../crates/board-profiles" }
 ecu-calibration = { path = "../../crates/calibration" }
+ecu-compat = { path = "../../crates/compat", default-features = false }
 ecu-domain = { path = "../../crates/domain" }
 ecu-io = { path = "../../crates/io" }
 ecu-runtime = { path = "../../crates/runtime" }
 ecu-scheduler = { path = "../../crates/scheduler" }
 ecu-target-common = { path = "../common", features = ["test-support"] }
+hmac = { version = "0.12", default-features = false, optional = true }
+sha2 = { version = "0.10", default-features = false, optional = true }
 cortex-m = { version = "0.7", optional = true }
 cortex-m-rt = { version = "0.7", optional = true }
 panic-halt = { version = "0.2", optional = true }
@@ -29,9 +33,6 @@ name = "stm32f4-ecu"
 path = "src/main.rs"
 test = false
 
-[dev-dependencies]
-ecu-compat = { path = "../../crates/compat" }
-
 [features]
 default = ["hardware", "capture-tim"]
 hardware = [
@@ -45,10 +46,25 @@ hardware = [
 capture-tim = []
 # Alternative trigger capture path using EXTI GPIO.
 capture-gpio = []
-transport-can = ["ecu-transport/transport-can"]
-transport-can-fd = ["transport-can", "ecu-transport/transport-can-fd"]
+transport-can = [
+    "dep:bxcan",
+    "hardware",
+    "stm32f4xx-hal/can",
+    "stm32f4xx-hal/can1",
+    "ecu-compat/transport-can",
+    "ecu-target-common/transport-can",
+    "ecu-transport/transport-can",
+]
+transport-can-fd = [
+    "transport-can",
+    "ecu-compat/transport-can-fd",
+    "ecu-target-common/transport-can-fd",
+    "ecu-transport/transport-can-fd",
+]
 # TunerStudio serial support through target-common.
 ts-usb = ["usb-device", "usbd-serial", "ecu-target-common/ts-usb"]
-# Flash-backed KV bring-up backend.
-flash-kv = []
+# Flash-backed KV bring-up backend. Current sidecars are CAN/OBD-II owned.
+flash-kv = ["transport-can"]
+# Explicit factory/operator CAN provisioning workflow for OBD-II identity fields.
+obd2-identity-can-provisioning = ["transport-can", "flash-kv", "dep:hmac", "dep:sha2"]
 ts-usb-hw = ["ts-usb"]

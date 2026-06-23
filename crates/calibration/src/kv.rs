@@ -25,6 +25,8 @@ pub const PERSIST_KEY_FUEL: &[u8] = b"fuel";
 pub const PERSIST_KEY_IGN: &[u8] = b"ign";
 pub const PERSIST_KEY_ANGLES: &[u8] = b"angles";
 pub const PERSIST_KEY_EXPERT_TRIGGER: &[u8] = b"expert_trigger";
+/// Canonical persisted calibration package wire-format key.
+pub const PERSIST_KEY_CAL_PACKAGE: &[u8] = b"cal_package";
 
 /// Known legacy raw setup-page persistence keys in page-store order.
 pub const PERSIST_KNOWN_KEYS: [&[u8]; 4] = [
@@ -59,6 +61,7 @@ pub struct RamKv<const N: usize> {
     ign: Option<[u8; N]>,
     angles: Option<[u8; N]>,
     expert_trigger: Option<[u8; N]>,
+    package: Option<[u8; N]>,
 }
 
 impl<const N: usize> RamKv<N> {
@@ -68,6 +71,7 @@ impl<const N: usize> RamKv<N> {
             ign: None,
             angles: None,
             expert_trigger: None,
+            package: None,
         }
     }
 }
@@ -80,6 +84,16 @@ impl<const N: usize> Default for RamKv<N> {
 
 impl<const N: usize> KvStore for RamKv<N> {
     fn read(&mut self, key: &[u8], out: &mut [u8]) -> Result<usize, KvError> {
+        if key == PERSIST_KEY_CAL_PACKAGE {
+            if let Some(data) = self.package.as_ref().map(|b| &b[..]) {
+                if out.len() < data.len() {
+                    return Err(KvError::Io);
+                }
+                out[..data.len()].copy_from_slice(data);
+                return Ok(data.len());
+            }
+            return Err(KvError::NotFound);
+        }
         let src = match key_slot(key) {
             Some(0) => self.fuel.as_ref().map(|b| &b[..]),
             Some(1) => self.ign.as_ref().map(|b| &b[..]),
@@ -104,6 +118,10 @@ impl<const N: usize> KvStore for RamKv<N> {
         }
         let mut arr = [0u8; N];
         arr.copy_from_slice(data);
+        if key == PERSIST_KEY_CAL_PACKAGE {
+            self.package = Some(arr);
+            return Ok(());
+        }
         match key_slot(key) {
             Some(0) => {
                 self.fuel = Some(arr);

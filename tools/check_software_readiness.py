@@ -52,8 +52,11 @@ def readiness_commands() -> tuple[ReadinessCommand, ...]:
                 "python3",
                 "-m",
                 "unittest",
-                "tests/test_check_m50_batch8_evidence.py",
-                "tests/test_init_m50_batch8_evidence.py",
+                "discover",
+                "-s",
+                "tools/tests",
+                "-p",
+                "test_*m50_batch8_evidence.py",
             ),
         ),
     )

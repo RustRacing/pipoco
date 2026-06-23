@@ -30,46 +30,69 @@ impl EngineRuntime {
             self.scheduler.on_sync_recovered();
             match self.output_profile {
                 RuntimeOutputProfile::LegacySingleChannel => {
-                    let injection_end = Micros::new(
-                        now_us
-                            .get()
-                            .saturating_add(control.enriched_fuel.get() as u32)
-                            .max(now_us.get().saturating_add(2)),
-                    );
-                    let ignition_end = Micros::new(
-                        now_us
-                            .get()
-                            .saturating_add(control.ignition.dwell_us.get() as u32)
-                            .max(now_us.get().saturating_add(2)),
-                    );
-                    if let (Ok(injection), Ok(ignition)) = (
-                        self.scheduler.schedule_injection(
-                            now_us,
-                            Micros::new(now_us.get().saturating_add(1)),
-                            injection_end,
-                            InjectionPlan {
-                                output: ExclusiveChannel::new(
-                                    OutputGroup::Injector,
-                                    ChannelId::new(1),
-                                ),
-                                pulse_width: control.enriched_fuel,
-                            },
-                        ),
-                        self.scheduler.schedule_ignition(
-                            now_us,
-                            Micros::new(now_us.get().saturating_add(1)),
-                            ignition_end,
-                            self.make_ignition_plan(control, now_us),
-                        ),
-                    ) {
-                        let _ = actions.push(Action::ArmScheduler {
-                            injection,
-                            ignition,
-                        });
+                    let allow_injection = !control.fuel_cut && control.enriched_fuel.get() > 0;
+                    let allow_ignition = !control.spark_cut && control.ignition.dwell_us.get() > 0;
+                    let injection = if allow_injection {
+                        let injection_end = Micros::new(
+                            now_us
+                                .get()
+                                .saturating_add(control.enriched_fuel.get() as u32)
+                                .max(now_us.get().saturating_add(2)),
+                        );
+                        self.scheduler
+                            .schedule_injection(
+                                now_us,
+                                Micros::new(now_us.get().saturating_add(1)),
+                                injection_end,
+                                InjectionPlan {
+                                    output: ExclusiveChannel::new(
+                                        OutputGroup::Injector,
+                                        ChannelId::new(1),
+                                    ),
+                                    pulse_width: control.enriched_fuel,
+                                },
+                            )
+                            .ok()
                     } else {
                         self.scheduler.cancel_group(OutputGroup::Injector);
+                        None
+                    };
+                    let ignition = if allow_ignition {
+                        let ignition_end = Micros::new(
+                            now_us
+                                .get()
+                                .saturating_add(control.ignition.dwell_us.get() as u32)
+                                .max(now_us.get().saturating_add(2)),
+                        );
+                        self.scheduler
+                            .schedule_ignition(
+                                now_us,
+                                Micros::new(now_us.get().saturating_add(1)),
+                                ignition_end,
+                                self.make_ignition_plan(control, now_us),
+                            )
+                            .ok()
+                    } else {
                         self.scheduler.cancel_group(OutputGroup::Ignition);
-                        let _ = actions.push(Action::Idle);
+                        None
+                    };
+
+                    match (injection, ignition) {
+                        (Some(injection), Some(ignition)) => {
+                            let _ = actions.push(Action::ArmScheduler {
+                                injection,
+                                ignition,
+                            });
+                        }
+                        (Some(injection), None) => {
+                            let _ = actions.push(Action::ArmInjection(injection));
+                        }
+                        (None, Some(ignition)) => {
+                            let _ = actions.push(Action::ArmIgnition(ignition));
+                        }
+                        (None, None) => {
+                            let _ = actions.push(Action::Idle);
+                        }
                     }
                 }
                 RuntimeOutputProfile::IgnitionOnly(profile) => {
@@ -125,58 +148,35 @@ impl EngineRuntime {
                 }
                 RuntimeOutputProfile::FullEcu(profile) => {
                     let event_count = profile.event_count();
-                    if event_count == 0 {
+                    let allow_injection = !control.fuel_cut && control.enriched_fuel.get() > 0;
+                    let allow_ignition = !control.spark_cut && control.ignition.dwell_us.get() > 0;
+                    if event_count == 0 || self.engine.rpm.get() == 0 {
                         let _ = actions.push(Action::Idle);
                     } else {
-                        let cycle_slot_us = profile.cycle_slot_us(self.engine.rpm);
                         for slot in 0..event_count {
-                            let slot_offset = cycle_slot_us.saturating_mul(slot as u32);
-                            let injection_start = Micros::new(
-                                now_us.get().saturating_add(slot_offset).saturating_add(1),
-                            );
-                            let injection_end = Micros::new(
-                                injection_start
-                                    .get()
-                                    .saturating_add(control.enriched_fuel.get() as u32)
-                                    .max(injection_start.get().saturating_add(1)),
-                            );
-                            let ignition_start = Micros::new(
-                                now_us.get().saturating_add(slot_offset).saturating_add(1),
-                            );
-                            let ignition_end = Micros::new(
-                                ignition_start
-                                    .get()
-                                    .saturating_add(control.ignition.dwell_us.get() as u32)
-                                    .max(ignition_start.get().saturating_add(1)),
-                            );
-                            if let Ok(injection) = self.scheduler.schedule_injection(
-                                now_us,
-                                injection_start,
-                                injection_end,
-                                InjectionPlan {
-                                    output: ExclusiveChannel::new(
-                                        OutputGroup::Injector,
-                                        profile.injector_channel(slot),
-                                    ),
-                                    pulse_width: control.enriched_fuel,
-                                },
-                            ) {
-                                let _ = actions.push(Action::ArmInjection(injection));
+                            let injection =
+                                self.make_full_ecu_injection_plan(profile, slot, control, now_us);
+                            let ignition =
+                                self.make_full_ecu_ignition_plan(profile, slot, control, now_us);
+                            if allow_injection {
+                                if let Ok(injection) = self.scheduler.schedule_injection(
+                                    now_us,
+                                    injection.start_at,
+                                    injection.end_at,
+                                    injection.plan,
+                                ) {
+                                    let _ = actions.push(Action::ArmInjection(injection));
+                                }
                             }
-                            if let Ok(ignition) = self.scheduler.schedule_ignition(
-                                now_us,
-                                ignition_start,
-                                ignition_end,
-                                ecu_scheduler::IgnitionPlan {
-                                    output: ExclusiveChannel::new(
-                                        OutputGroup::Ignition,
-                                        profile.ignition_channel(slot),
-                                    ),
-                                    dwell: control.ignition.dwell_us,
-                                    advance: control.ignition.advance_deg10,
-                                },
-                            ) {
-                                let _ = actions.push(Action::ArmIgnition(ignition));
+                            if allow_ignition {
+                                if let Ok(ignition) = self.scheduler.schedule_ignition(
+                                    now_us,
+                                    ignition.start_at,
+                                    ignition.end_at,
+                                    ignition.plan,
+                                ) {
+                                    let _ = actions.push(Action::ArmIgnition(ignition));
+                                }
                             }
                         }
                         if actions.is_empty() {
@@ -260,6 +260,34 @@ impl EngineRuntime {
         now_us: Micros,
     ) -> TimedInjectionPlan {
         InjectionScheduler::new(profile).plan_event(
+            self.crank_snapshot(now_us),
+            event_index,
+            FuelPlan::new(control.enriched_fuel),
+        )
+    }
+
+    fn make_full_ecu_ignition_plan(
+        &self,
+        profile: FullEcuOutputProfile,
+        event_index: usize,
+        control: &ControlPlan,
+        now_us: Micros,
+    ) -> TimedIgnitionPlan {
+        FullEcuIgnitionScheduler::new(profile.ignition, profile.event_count()).plan_event(
+            self.crank_snapshot(now_us),
+            event_index,
+            SparkPlan::new(control.ignition.dwell_us, control.ignition.advance_deg10),
+        )
+    }
+
+    fn make_full_ecu_injection_plan(
+        &self,
+        profile: FullEcuOutputProfile,
+        event_index: usize,
+        control: &ControlPlan,
+        now_us: Micros,
+    ) -> TimedInjectionPlan {
+        FullEcuInjectionScheduler::new(profile.injection).plan_event(
             self.crank_snapshot(now_us),
             event_index,
             FuelPlan::new(control.enriched_fuel),

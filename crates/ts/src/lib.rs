@@ -32,6 +32,7 @@ mod runtime_view;
 #[cfg(feature = "runtime")]
 pub use runtime_view::{
     apply_expert_trigger_page, decode_expert_trigger_page, encode_expert_trigger_page,
-    CalibrationCommandResult, CalibrationEditSurface, CalibrationWrite, ExpertTriggerPageError,
+    CalibrationCommandResult, CalibrationEditSurface, CalibrationPackageApplyResult,
+    CalibrationPackageWorkflowReview, CalibrationWrite, ExpertTriggerPageError,
     RuntimeSnapshotAdapter, TunerStudioRuntimeView, EXPERT_TRIGGER_PAGE_LEN, PAGE_EXPERT_TRIGGER,
 };

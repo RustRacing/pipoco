@@ -1,6 +1,6 @@
 use crate::{support::RuntimeAdapterContract, RuntimeFuelStrategy};
 use ecu_calibration::{FuelRuntimeTune, FUEL_RUNTIME_LOAD_BINS, FUEL_RUNTIME_RPM_BINS};
-use ecu_domain::{Kpa10, Micros, Rpm, SyncState};
+use ecu_domain::{Kpa10, Lambda100, Micros, Rpm, SyncState};
 
 // ---------------------------------------------------------------------------
 // v9 Runtime Semantic Fuel/Cut Evaluator Types
@@ -26,6 +26,18 @@ pub struct RuntimeSemanticTable2dU16 {
     /// Load axis values.
     pub load_axis: RuntimeSemanticAxis16,
     /// Table values indexed by [load_index][rpm_index].
+    pub values: [[u16; RUNTIME_SEMANTIC_TABLE_LEN]; RUNTIME_SEMANTIC_TABLE_LEN],
+}
+
+/// A deadtime table indexed by battery voltage and pressure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RuntimeSemanticDeadtimeTableU16 {
+    /// Battery voltage axis in millivolts.
+    pub vbat_mv_axis: RuntimeSemanticAxis16,
+    /// Pressure axis in kPa x10. Current runtime fuel input uses barometric
+    /// pressure here until dedicated fuel-pressure ingress exists.
+    pub pressure_kpa10_axis: RuntimeSemanticAxis16,
+    /// Table values indexed by [pressure_index][vbat_index].
     pub values: [[u16; RUNTIME_SEMANTIC_TABLE_LEN]; RUNTIME_SEMANTIC_TABLE_LEN],
 }
 
@@ -61,7 +73,7 @@ pub enum RuntimeSemanticEngineMode {
 pub struct RuntimeSemanticCalibration {
     pub ve_table: RuntimeSemanticTable2dU16,
     pub afr_target_table: RuntimeSemanticTable2dU16,
-    pub deadtime_table_us: RuntimeSemanticTable2dU16,
+    pub deadtime_table_us: RuntimeSemanticDeadtimeTableU16,
     pub clt_corr_curve: RuntimeSemanticCurve16U16,
     pub iat_corr_curve: RuntimeSemanticCurve16U16,
     pub baro_corr_curve: RuntimeSemanticCurve16U16,
@@ -133,6 +145,14 @@ pub fn runtime_semantic_calibration_from_fuel_tune(
         },
         values: [1000, 1000, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
     };
+    let deadtime_voltage_axis = RuntimeSemanticAxis16 {
+        len: 2,
+        values: [0, 20_000, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    };
+    let deadtime_baro_axis = RuntimeSemanticAxis16 {
+        len: 2,
+        values: [0, 2_000, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    };
     RuntimeSemanticCalibration {
         ve_table: RuntimeSemanticTable2dU16 {
             rpm_axis,
@@ -144,22 +164,22 @@ pub fn runtime_semantic_calibration_from_fuel_tune(
             load_axis,
             values: tune.afr_table,
         },
-        deadtime_table_us: RuntimeSemanticTable2dU16 {
-            rpm_axis,
-            load_axis,
+        deadtime_table_us: RuntimeSemanticDeadtimeTableU16 {
+            vbat_mv_axis: deadtime_voltage_axis,
+            pressure_kpa10_axis: deadtime_baro_axis,
             values: [[tune.injector_deadtime_us; 16]; 16],
         },
-        clt_corr_curve: flat100,
-        iat_corr_curve: flat100,
-        baro_corr_curve: flat100,
-        vbat_corr_curve: flat100,
-        cranking_curve: flat100,
+        clt_corr_curve: flat1000,
+        iat_corr_curve: flat1000,
+        baro_corr_curve: flat1000,
+        vbat_corr_curve: flat1000,
+        cranking_curve: flat1000,
         afterstart_table: RuntimeSemanticTable2dU16 {
             rpm_axis,
             load_axis,
-            values: [[100; 16]; 16],
+            values: [[1000; 16]; 16],
         },
-        warmup_curve: flat100,
+        warmup_curve: flat1000,
         ae_tps_threshold_curve: flat100,
         ae_map_threshold_curve: flat100,
         ae_shot_curve_us: RuntimeSemanticCurve16U16 {
@@ -231,6 +251,9 @@ pub struct RuntimeSemanticInputSnapshot {
     pub iat_c10: i16,
     pub baro_kpa10: Kpa10,
     pub vbatt_mv: u16,
+    pub lambda_valid: bool,
+    pub lambda_measured: Lambda100,
+    pub requested_open_loop: bool,
     pub knock_intensity_x100: u16,
     pub launch_armed: bool,
     pub flat_shift_armed: bool,
@@ -306,6 +329,7 @@ pub struct RuntimeSemanticFuelObservations {
     pub pw_base_us: u32,
     pub pw_air_us: u32,
     pub pw_corr_us: u32,
+    pub warmup_corr_x1000: u16,
     pub fuel_cut: bool,
     pub spark_cut: bool,
     /// Lambda closed-loop correction factor (x1000, e.g. 1000 = 1.000).
@@ -499,8 +523,6 @@ pub(super) const RUNTIME_SEMANTIC_LAMBDA_MAX_ACC: i32 = 2000;
 pub(crate) const RUNTIME_SEMANTIC_LAMBDA_CORR_MIN_X1000: u16 = 750;
 /// Maximum lambda correction factor in x1000 units (1.250).
 pub(crate) const RUNTIME_SEMANTIC_LAMBDA_CORR_MAX_X1000: u16 = 1250;
-/// Fixed lambda error for the v11 frozen oracle path (always zero).
-pub(super) const RUNTIME_SEMANTIC_LAMBDA_ERROR_X1000: i32 = 0;
 /// Idle closed-loop deadband in RPM.
 pub(super) const RUNTIME_SEMANTIC_IDLE_DEADBAND_RPM: i32 = 20;
 /// Minimum idle PI integrator accumulator value.

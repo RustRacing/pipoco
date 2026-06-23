@@ -512,6 +512,28 @@ fn single_tooth_cam_requires_matching_edge_after_primary_lock() {
 }
 
 #[test]
+fn single_tooth_cam_rejects_matching_edge_outside_tooth_one_window() {
+    let mut decoder = new_decoder(single_tooth_cam_config(Degrees10::new(840)));
+    lock_60_minus_2(&mut decoder);
+    assert_eq!(
+        decoder.ingest_primary_edge(Ticks::new(5_000)),
+        Ok(MissingToothDecoderEvent::Tooth { current_tooth: 2 })
+    );
+
+    assert_eq!(
+        decoder.ingest_secondary_edge(TriggerEdge::Falling),
+        Err(SyncLossReason::PhaseMismatch)
+    );
+    let diagnostics = decoder.diagnostics();
+    assert_eq!(
+        diagnostics.last_sync_loss,
+        Some(SyncLossReason::PhaseMismatch)
+    );
+    assert_eq!(diagnostics.authority.phase, PhaseSyncState::CrankOnly360);
+    assert_eq!(diagnostics.authority.absolute, AbsoluteTimeAuthority::None);
+}
+
+#[test]
 fn poll_level_validates_level_at_tooth_one_before_phase_promotion() {
     let mut decoder = new_decoder(poll_level_config(Degrees10::new(840)));
     lock_60_minus_2(&mut decoder);

@@ -209,6 +209,8 @@ fn snapshot_page_delegates_legacy_32_byte_layout() {
         fuel_mult_x100: 0x0708,
         final_pw: Micros::new(0x1112_1314),
         last_fault_code: 8,
+        fault_severity: 3,
+        cancel_reason: 4,
         isr_count: 0x2122_2324,
         isr_max_us: 0x3132_3334,
         isr_avg_us: 0x4142_4344,
@@ -224,14 +226,14 @@ fn snapshot_page_delegates_legacy_32_byte_layout() {
     let mut expected = [0u8; SNAPSHOT_PAGE_BYTES];
     expected[0..2].copy_from_slice(&0x1234u16.to_le_bytes());
     expected[2] = 2;
-    expected[3] = 0;
+    expected[3] = 4;
     expected[4..8].copy_from_slice(&0x0102_0304u32.to_le_bytes());
     expected[8..10].copy_from_slice(&0x0506u16.to_le_bytes());
     expected[10..12].copy_from_slice(&(-123i16).to_le_bytes());
     expected[12..14].copy_from_slice(&0x0708u16.to_le_bytes());
     expected[14..18].copy_from_slice(&0x1112_1314u32.to_le_bytes());
     expected[18] = 8;
-    expected[19] = 0;
+    expected[19] = 3;
     expected[20..24].copy_from_slice(&0x2122_2324u32.to_le_bytes());
     expected[24..28].copy_from_slice(&0x3132_3334u32.to_le_bytes());
     expected[28..32].copy_from_slice(&0x4142_4344u32.to_le_bytes());

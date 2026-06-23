@@ -2,14 +2,27 @@ use super::*;
 use crate::compat::StepInputs;
 use crate::semantic::runtime_semantic_evaluate_fuel;
 use crate::support::DifferentialInputSnapshot;
+use crate::support::{
+    extract_action_observations, extract_authority_observations,
+    extract_calibration_identity_observations, extract_calibration_observations,
+    extract_control_observations, extract_cut_observations, extract_engine_observations,
+    extract_fault_observations, extract_fuel_core_observations, extract_fuel_observations,
+    extract_fuel_strategy_observations, extract_idle_observations, extract_ignition_observations,
+    extract_ignition_trim_observations, extract_knock_observations,
+    extract_lambda_correction_observations, extract_lambda_observations,
+    extract_output_profile_observations, extract_protection_observations,
+    extract_runtime_observed_surface, extract_scheduler_observations, extract_torque_observations,
+    extract_transition_observations, extract_validated_observations,
+};
 use ecu_board_api::{
     AuxCommand, AuxCommandBatch, AuxOutput, AuxValue, EcuOutput, OutputLevel, OutputTransition,
     OutputTransitionBatch, TimingIslandCommand, TimingIslandCommandBatch,
 };
 #[cfg(test)]
 use ecu_calibration::{
+    ActiveCalibration, Calibration, CalibrationPackageIdentity, CalibrationRevision,
     ExpertIgnitionMode, ExpertInjectionLayout, ExpertTriggerCalibration, ExpertUnlock,
-    SecondaryTriggerMode, TriggerAuthority,
+    SecondaryTriggerMode, StagedCalibration, TriggerAuthority,
 };
 use ecu_domain::{ChannelId, CylinderId, Ticks};
 use ecu_spec::{
@@ -56,8 +69,19 @@ fn runtime_semantic_calibration_from_fuel_tune_preserves_fuel_values() {
     assert_eq!(cal.afr_target_table.values[4][5], 132);
     assert_eq!(cal.afr_target_table.values[14][8], 155);
     assert_eq!(cal.required_fuel_us, 3210);
+    assert_eq!(cal.deadtime_table_us.vbat_mv_axis.values[0], 0);
+    assert_eq!(cal.deadtime_table_us.vbat_mv_axis.values[1], 20_000);
+    assert_eq!(cal.deadtime_table_us.pressure_kpa10_axis.values[0], 0);
+    assert_eq!(cal.deadtime_table_us.pressure_kpa10_axis.values[1], 2_000);
     assert_eq!(cal.deadtime_table_us.values[0][0], 654);
     assert_eq!(cal.deadtime_table_us.values[15][15], 654);
+    assert_eq!(cal.clt_corr_curve.values[0], 1000);
+    assert_eq!(cal.iat_corr_curve.values[0], 1000);
+    assert_eq!(cal.baro_corr_curve.values[0], 1000);
+    assert_eq!(cal.vbat_corr_curve.values[0], 1000);
+    assert_eq!(cal.cranking_curve.values[0], 1000);
+    assert_eq!(cal.warmup_curve.values[0], 1000);
+    assert_eq!(cal.afterstart_table.values[0][0], 1000);
     assert_eq!(cal.pw_max_us, 20_000);
 }
 
@@ -641,7 +665,9 @@ fn running_control_inputs(now_us: u32, rpm: u16) -> ControlInputs {
             mapdot_kpa_s: 0,
         },
         lambda: LambdaTrimInputs {
+            now_us: Micros::new(now_us),
             clt_c: 80,
+            just_started: false,
             lambda_valid: true,
             measured_lambda100: ecu_domain::Lambda100::new(100),
             requested_open_loop: false,
@@ -655,6 +681,7 @@ fn running_control_inputs(now_us: u32, rpm: u16) -> ControlInputs {
             false,
             Rpm::new(rpm),
         ),
+        fuel_sensors: FuelSensorInputs::default(),
         knock_intensity_x100: 0,
     }
 }
@@ -792,6 +819,14 @@ fn semantic_table_u16(value: u16) -> RuntimeSemanticTable2dU16 {
     }
 }
 
+fn semantic_deadtime_table_u16(value: u16) -> RuntimeSemanticDeadtimeTableU16 {
+    RuntimeSemanticDeadtimeTableU16 {
+        vbat_mv_axis: semantic_axis2(),
+        pressure_kpa10_axis: semantic_axis2(),
+        values: [[value; RUNTIME_SEMANTIC_TABLE_LEN]; RUNTIME_SEMANTIC_TABLE_LEN],
+    }
+}
+
 fn semantic_table_i16(value: i16) -> RuntimeSemanticTable2dI16 {
     RuntimeSemanticTable2dI16 {
         rpm_axis: semantic_axis2(),
@@ -834,6 +869,9 @@ fn semantic_schedule_input(rpm: u16, sync: SyncState) -> RuntimeSemanticInputSna
         iat_c10: 250,
         baro_kpa10: Kpa10::new(1000),
         vbatt_mv: 12_000,
+        lambda_valid: true,
+        lambda_measured: Lambda100::new(100),
+        requested_open_loop: false,
         knock_intensity_x100: 0,
         launch_armed: false,
         flat_shift_armed: false,
@@ -869,7 +907,7 @@ fn semantic_fuel_calibration_with_ve_cells(
             values: ve_values,
         },
         afr_target_table: semantic_table_u16(1470),
-        deadtime_table_us: semantic_table_u16(0),
+        deadtime_table_us: semantic_deadtime_table_u16(0),
         clt_corr_curve: semantic_curve_u16(1000),
         iat_corr_curve: semantic_curve_u16(1000),
         baro_corr_curve: semantic_curve_u16(1000),
@@ -926,6 +964,7 @@ fn semantic_fuel_observations(
         pw_base_us: 1000,
         pw_air_us: 1000,
         pw_corr_us,
+        warmup_corr_x1000: 1000,
         fuel_cut,
         spark_cut,
         lambda_correction_x1000: 1000,
@@ -939,6 +978,19 @@ fn semantic_fuel_observations(
         },
         advance_deg10_trim: 0,
     }
+}
+
+fn semantic_fuel_state_calibration() -> RuntimeSemanticCalibration {
+    let mut calibration = semantic_fuel_calibration_with_ve_cells(100, 100);
+    calibration.warmup_curve = semantic_curve_u16(1200);
+    calibration.afterstart_table = semantic_table_u16(1200);
+    calibration.afterstart_window_cycles = 3;
+    calibration.ae_tps_threshold_curve = semantic_curve_u16(1);
+    calibration.ae_map_threshold_curve = semantic_curve_u16(1);
+    calibration.ae_shot_curve_us = semantic_curve_u16(250);
+    calibration.ae_decay_steps_curve = semantic_curve_u16(2);
+    calibration.ae_decay_ratio_curve_x1000 = semantic_curve_u16(1000);
+    calibration
 }
 
 fn semantic_launch_and_flat_shift_calibration() -> RuntimeSemanticCalibration {
@@ -1064,6 +1116,2049 @@ fn direct_pw_strategy_owns_model_when_switching_to_ve_and_back() {
             .observations
             .strategy_is_direct_pw
     );
+}
+
+#[test]
+fn semantic_strategy_does_not_apply_legacy_enrichment_twice() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_speed_density_ve(
+        semantic_fuel_calibration_with_ve_cells(7000, 9000),
+        RuntimeSemanticState::default(),
+    );
+    runtime.configure_warmup_enrichment(WarmupConfig {
+        start_c: 0,
+        end_c: 100,
+        max_percent_x100: 200,
+        min_percent_x100: 100,
+    });
+
+    let result = runtime.step(
+        running_step_inputs(1_000, 3_000, true, true),
+        running_control_inputs(1_000, 3_000),
+    );
+
+    assert!(
+        !result
+            .control
+            .fuel_intent
+            .observations
+            .strategy_is_direct_pw
+    );
+    assert!(result.control.enrichment.total_x100() > 100);
+    assert_eq!(
+        result.control.base_fuel,
+        result.control.fuel_intent.pulse_width_us
+    );
+    assert_eq!(result.control.enriched_fuel, result.control.base_fuel);
+}
+
+#[test]
+fn extract_fuel_observations_preserves_direct_fuel_state_shells() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_fuel_model(test_fuel_model());
+    runtime.configure_warmup_enrichment(WarmupConfig {
+        start_c: 0,
+        end_c: 100,
+        max_percent_x100: 150,
+        min_percent_x100: 100,
+    });
+
+    let mut control = running_control_inputs(1_000, 3_000);
+    control.enrichment.clt_c = -10;
+    control.enrichment.cranking = true;
+    control.enrichment.just_started = true;
+    let result = runtime.step(running_step_inputs(1_000, 3_000, true, true), control);
+
+    let fuel = extract_fuel_observations(&result);
+
+    assert_eq!(fuel.base_fuel_pw_us, result.control.base_fuel.get());
+    assert_eq!(fuel.enriched_fuel_pw_us, result.control.enriched_fuel.get());
+    assert_eq!(
+        fuel.lambda_target_x100,
+        result.control.lambda.target_lambda100.get()
+    );
+    assert!(fuel.startup_active);
+    assert_eq!(fuel.startup_window_remaining, 3000);
+    assert_eq!(
+        fuel.startup_window_mode,
+        ecu_control::FuelStartupWindowMode::Milliseconds
+    );
+    assert!(fuel.warmup_active);
+    assert_eq!(fuel.warmup_correction_x100, 150);
+    assert_eq!(
+        fuel.warmup_temperature_mode,
+        ecu_control::FuelWarmupTemperatureMode::ColdClamp
+    );
+    assert!(fuel.afterstart_active);
+    assert_eq!(fuel.afterstart_window_remaining, 5000);
+    assert_eq!(
+        fuel.afterstart_window_mode,
+        ecu_control::FuelAfterstartWindowMode::Milliseconds
+    );
+    assert!(!fuel.transient_enrichment_active);
+    assert_eq!(fuel.transient_enrichment_pulse_us, 0);
+    assert_eq!(fuel.transient_enrichment_decay_steps_remaining, 0);
+
+    let lambda = extract_lambda_observations(&result);
+    assert_eq!(lambda.mode, result.control.lambda.mode);
+    assert_eq!(lambda.active, result.control.lambda.active);
+    assert_eq!(
+        lambda.target_lambda_x100,
+        result.control.lambda.target_lambda100.get()
+    );
+    assert_eq!(
+        lambda.measured_lambda_x100,
+        result.control.lambda.measured_lambda100.get()
+    );
+    assert_eq!(lambda.trim_x100, result.control.lambda.trim_x100);
+    assert_eq!(lambda.disable_reason, result.control.lambda.disable_reason);
+}
+
+#[test]
+fn direct_pulse_width_acceleration_enrichment_reports_transient_and_freezes_lambda() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_fuel_model(test_fuel_model_with_base_pw(2500));
+    runtime.configure_acceleration_enrichment(AccelerationConfig {
+        tpsdot_thresh_pct_s: 10,
+        mapdot_thresh_kpa_s: 10,
+        percent_x100: 120,
+        decay_time_ms: 400,
+        lockout_ms: 0,
+    });
+
+    let mut control = running_control_inputs(1_000, 3_000);
+    control.enrichment.tpsdot_pct_s = 25;
+    let result = runtime.step(running_step_inputs(1_000, 3_000, true, true), control);
+    let observed = extract_runtime_observed_surface(&result, &runtime.snapshot());
+
+    assert!(observed.runtime_fuel.transient_enrichment_active);
+    assert_eq!(observed.runtime_fuel.transient_enrichment_pulse_us, 600);
+    assert_eq!(
+        observed
+            .runtime_fuel
+            .transient_enrichment_decay_steps_remaining,
+        0
+    );
+    assert_eq!(
+        observed.runtime_lambda.disable_reason,
+        LambdaDisableReason::AccelerationEnrichment
+    );
+    assert!(!observed.runtime_lambda.active);
+}
+
+#[test]
+fn direct_pulse_width_acceleration_pulse_reports_delta_after_other_enrichment() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_fuel_model(test_fuel_model_with_base_pw(2500));
+    runtime.configure_warmup_enrichment(WarmupConfig {
+        start_c: 0,
+        end_c: 100,
+        max_percent_x100: 150,
+        min_percent_x100: 100,
+    });
+    runtime.configure_acceleration_enrichment(AccelerationConfig {
+        tpsdot_thresh_pct_s: 10,
+        mapdot_thresh_kpa_s: 10,
+        percent_x100: 120,
+        decay_time_ms: 400,
+        lockout_ms: 0,
+    });
+
+    let mut control = running_control_inputs(1_000, 3_000);
+    control.enrichment.clt_c = -10;
+    control.enrichment.tpsdot_pct_s = 25;
+    let result = runtime.step(running_step_inputs(1_000, 3_000, true, true), control);
+    let observed = extract_runtime_observed_surface(&result, &runtime.snapshot());
+
+    assert_eq!(observed.runtime_fuel.transient_enrichment_pulse_us, 750);
+    assert_eq!(observed.runtime_fuel.enriched_fuel_pw_us, 4500);
+}
+
+#[test]
+fn direct_pulse_width_acceleration_freeze_holds_previous_lambda_trim() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_fuel_model(test_fuel_model_with_base_pw(2500));
+    runtime.configure_acceleration_enrichment(AccelerationConfig {
+        tpsdot_thresh_pct_s: 10,
+        mapdot_thresh_kpa_s: 10,
+        percent_x100: 120,
+        decay_time_ms: 400,
+        lockout_ms: 0,
+    });
+
+    let mut active_control = running_control_inputs(1_000, 3_000);
+    active_control.lambda.measured_lambda100 = Lambda100::new(90);
+    let active = runtime.step(
+        running_step_inputs(1_000, 3_000, true, true),
+        active_control,
+    );
+
+    let mut frozen_control = running_control_inputs(2_000, 3_000);
+    frozen_control.lambda.measured_lambda100 = Lambda100::new(50);
+    frozen_control.enrichment.tpsdot_pct_s = 25;
+    let frozen = runtime.step(
+        running_step_inputs(2_000, 3_000, true, true),
+        frozen_control,
+    );
+
+    assert_eq!(
+        frozen.control.lambda.trim_x100,
+        active.control.lambda.trim_x100
+    );
+    assert_eq!(
+        frozen.control.lambda.disable_reason,
+        LambdaDisableReason::AccelerationEnrichment
+    );
+}
+
+#[test]
+fn extract_runtime_observed_surface_preserves_semantic_fuel_state_shells() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_speed_density_ve(
+        semantic_fuel_state_calibration(),
+        RuntimeSemanticState::default(),
+    );
+
+    let mut control = running_control_inputs(1_000, 3_000);
+    control.enrichment.clt_c = -10;
+    control.enrichment.tpsdot_pct_s = 200;
+    let result = runtime.step(running_step_inputs(1_000, 3_000, true, true), control);
+    let snapshot = runtime.snapshot();
+
+    let observed = extract_runtime_observed_surface(&result, &snapshot);
+
+    assert_eq!(
+        observed.runtime_base_fuel_pw_us,
+        result.control.base_fuel.get()
+    );
+    assert_eq!(
+        observed.runtime_enriched_fuel_pw_us,
+        result.control.enriched_fuel.get()
+    );
+    assert_eq!(
+        observed.runtime_lambda_target_x100,
+        result.control.lambda.target_lambda100.get()
+    );
+    assert_eq!(observed.runtime_lambda.mode, result.control.lambda.mode);
+    assert_eq!(observed.runtime_lambda.active, result.control.lambda.active);
+    assert_eq!(
+        observed.runtime_lambda.target_lambda_x100,
+        observed.runtime_lambda_target_x100
+    );
+    assert_eq!(
+        observed.runtime_lambda.measured_lambda_x100,
+        result.control.lambda.measured_lambda100.get()
+    );
+    assert_eq!(
+        observed.runtime_lambda.trim_x100,
+        result.control.lambda.trim_x100
+    );
+    assert_eq!(
+        observed.runtime_lambda.disable_reason,
+        result.control.lambda.disable_reason
+    );
+    assert_eq!(
+        observed.runtime_lambda_correction,
+        extract_lambda_correction_observations(&result)
+    );
+    assert_eq!(
+        observed.runtime_fuel_core,
+        extract_fuel_core_observations(&result)
+    );
+    assert_eq!(
+        observed.runtime_ignition_trim,
+        extract_ignition_trim_observations(&result)
+    );
+    assert_eq!(
+        observed.runtime_authority,
+        extract_authority_observations(&snapshot)
+    );
+    assert_eq!(
+        observed.runtime_engine,
+        extract_engine_observations(&snapshot)
+    );
+    assert_eq!(
+        observed.runtime_control,
+        extract_control_observations(&snapshot)
+    );
+    assert_eq!(
+        observed.runtime_calibration,
+        extract_calibration_observations(&snapshot)
+    );
+    assert_eq!(
+        observed.runtime_calibration_identity,
+        extract_calibration_identity_observations(&snapshot)
+    );
+    assert_eq!(
+        observed.runtime_scheduler,
+        extract_scheduler_observations(&snapshot)
+    );
+    assert_eq!(
+        observed.runtime_output_profile,
+        extract_output_profile_observations(&snapshot)
+    );
+    assert_eq!(
+        observed.runtime_fuel_strategy,
+        extract_fuel_strategy_observations(&snapshot)
+    );
+    assert_eq!(observed.runtime_idle, extract_idle_observations(&result));
+    assert_eq!(
+        observed.runtime_actions,
+        extract_action_observations(&result)
+    );
+    assert_eq!(
+        observed.runtime_transitions,
+        extract_transition_observations(&result)
+    );
+    assert_eq!(
+        observed.runtime_validated,
+        extract_validated_observations(&result)
+    );
+    assert_eq!(observed.runtime_cut.reason, RuntimeCutReason::None);
+    assert!(!observed.runtime_cut.fuel_cut);
+    assert!(!observed.runtime_cut.spark_cut);
+    assert_eq!(
+        observed.runtime_protection,
+        RuntimeProtectionObservations::default()
+    );
+    assert_eq!(observed.runtime_fault, RuntimeFaultObservations::default());
+    assert_eq!(
+        observed.runtime_torque,
+        extract_torque_observations(&result)
+    );
+    assert_eq!(
+        observed.runtime_ignition,
+        extract_ignition_observations(&result)
+    );
+    assert_eq!(
+        observed.runtime_knock,
+        extract_knock_observations(&snapshot)
+    );
+    assert_eq!(
+        observed.runtime_fuel.base_fuel_pw_us,
+        observed.runtime_base_fuel_pw_us
+    );
+    assert_eq!(
+        observed.runtime_fuel.enriched_fuel_pw_us,
+        observed.runtime_enriched_fuel_pw_us
+    );
+    assert_eq!(
+        observed.runtime_fuel.lambda_target_x100,
+        observed.runtime_lambda_target_x100
+    );
+    assert!(!observed.runtime_fuel.startup_active);
+    assert!(observed.runtime_fuel.warmup_active);
+    assert_eq!(observed.runtime_fuel.warmup_correction_x100, 120);
+    assert_eq!(
+        observed.runtime_fuel.warmup_temperature_mode,
+        ecu_control::FuelWarmupTemperatureMode::ColdClamp
+    );
+    assert!(observed.runtime_fuel.afterstart_active);
+    assert_eq!(observed.runtime_fuel.afterstart_window_remaining, 2);
+    assert_eq!(
+        observed.runtime_fuel.afterstart_window_mode,
+        ecu_control::FuelAfterstartWindowMode::Cycles
+    );
+    assert!(observed.runtime_fuel.transient_enrichment_active);
+    assert_eq!(observed.runtime_fuel.transient_enrichment_pulse_us, 250);
+    assert_eq!(
+        observed
+            .runtime_fuel
+            .transient_enrichment_decay_steps_remaining,
+        2
+    );
+}
+
+#[test]
+fn extract_control_observations_preserve_normal_runtime_state() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_fuel_model(test_fuel_model());
+
+    let result = runtime.step(
+        running_step_inputs(1_000, 3_000, true, true),
+        running_control_inputs(1_000, 3_000),
+    );
+    let snapshot = runtime.snapshot();
+
+    let observed = extract_runtime_observed_surface(&result, &snapshot);
+
+    assert_eq!(observed.runtime_control, snapshot.control);
+}
+
+#[test]
+fn extract_control_observations_preserve_updated_runtime_state() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_fuel_model(test_fuel_model());
+    runtime.configure_warmup_enrichment(WarmupConfig {
+        start_c: -20,
+        end_c: 20,
+        max_percent_x100: 180,
+        min_percent_x100: 100,
+    });
+    runtime.configure_lambda_trim(LambdaTrimConfig {
+        closed_loop_target: Lambda100::new(105),
+        min_trim_x100: 90,
+        max_trim_x100: 130,
+        gain_x10: 10,
+        ..LambdaTrimConfig::DEFAULT
+    });
+    runtime.configure_dwell(DwellConfig {
+        base_dwell_us: 3200,
+        min_dwell_us: 1200,
+        max_dwell_us: 4200,
+        rpm_dwell_trim_us: 0,
+        rpm_trim_start: Rpm::new(1000),
+        rpm_trim_end: Rpm::new(8000),
+    });
+
+    let result = runtime.step(
+        StepInputs {
+            now_us: Micros::new(1_000),
+            rpm: 3000,
+            load_kpa10: 700,
+            angle_x10: 1200,
+            trigger_synced: true,
+            cam_seen: true,
+            launch_armed: false,
+            flat_shift_armed: false,
+            safety_latch_request: false,
+        },
+        running_control_inputs(1_000, 3_000),
+    );
+    let snapshot = runtime.snapshot();
+
+    let observed = extract_runtime_observed_surface(&result, &snapshot);
+
+    assert_eq!(observed.runtime_control, snapshot.control);
+    assert_eq!(observed.runtime_control.lambda_target, Lambda100::new(105));
+    assert_eq!(observed.runtime_control.dwell, DwellUs::new(3200));
+}
+
+#[test]
+fn extract_calibration_observations_preserve_default_runtime_state() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_fuel_model(test_fuel_model());
+
+    let result = runtime.step(
+        running_step_inputs(1_000, 3_000, true, true),
+        running_control_inputs(1_000, 3_000),
+    );
+    let snapshot = runtime.snapshot();
+
+    let observed = extract_runtime_observed_surface(&result, &snapshot);
+
+    assert_eq!(observed.runtime_calibration, snapshot.calibration);
+    assert_eq!(observed.runtime_calibration, CalibrationState::default());
+    assert_eq!(
+        observed.runtime_calibration_identity,
+        CalibrationPackageIdentity::from_snapshot(snapshot.calibration.active)
+    );
+    assert_eq!(
+        observed.runtime_calibration_identity.active_revision,
+        CalibrationRevision::default()
+    );
+    assert_eq!(
+        observed.runtime_calibration_identity.staged_base_revision,
+        CalibrationRevision::default()
+    );
+    assert_eq!(
+        observed.runtime_calibration_identity.staged_revision,
+        CalibrationRevision::default()
+    );
+    assert!(!observed.runtime_calibration_identity.staged_dirty);
+    assert_ne!(observed.runtime_calibration_identity.checksum.get(), 0);
+}
+
+#[test]
+fn extract_calibration_identity_observations_use_runtime_dirty_flag() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_fuel_model(test_fuel_model());
+
+    let calibration_snapshot = CalibrationSnapshot {
+        active: ActiveCalibration::new(CalibrationRevision::new(11), Calibration::default()),
+        staged: StagedCalibration::new(CalibrationRevision::new(11), Calibration::default()),
+    };
+
+    runtime.calibration.active = calibration_snapshot;
+    runtime.set_staged_dirty(true);
+
+    let result = runtime.step(
+        running_step_inputs(1_000, 3_000, true, true),
+        running_control_inputs(1_000, 3_000),
+    );
+    let snapshot = runtime.snapshot();
+
+    let observed = extract_runtime_observed_surface(&result, &snapshot);
+
+    assert!(observed.runtime_calibration.staged_dirty);
+    assert_eq!(
+        observed.runtime_calibration_identity.active_revision,
+        CalibrationRevision::new(11)
+    );
+    assert_eq!(
+        observed.runtime_calibration_identity.staged_base_revision,
+        CalibrationRevision::new(11)
+    );
+    assert_eq!(
+        observed.runtime_calibration_identity.staged_revision,
+        CalibrationRevision::new(11)
+    );
+    assert!(observed.runtime_calibration_identity.staged_dirty);
+    assert_eq!(
+        observed.runtime_calibration_identity,
+        CalibrationPackageIdentity::from_snapshot_with_staged_dirty(calibration_snapshot, true)
+    );
+    assert_ne!(
+        observed.runtime_calibration_identity.checksum,
+        CalibrationPackageIdentity::from_snapshot(calibration_snapshot).checksum
+    );
+}
+
+#[test]
+fn extract_calibration_observations_preserve_updated_runtime_state() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_fuel_model(test_fuel_model());
+
+    let active = ActiveCalibration::new(CalibrationRevision::new(7), Calibration::default());
+    let mut staged = StagedCalibration::new(CalibrationRevision::new(7), Calibration::default());
+    staged.mark_dirty();
+    let calibration_snapshot = CalibrationSnapshot { active, staged };
+
+    runtime.calibration.active = calibration_snapshot;
+    runtime.set_staged_dirty(true);
+
+    let result = runtime.step(
+        running_step_inputs(1_000, 3_000, true, true),
+        running_control_inputs(1_000, 3_000),
+    );
+    let snapshot = runtime.snapshot();
+
+    let observed = extract_runtime_observed_surface(&result, &snapshot);
+
+    assert_eq!(observed.runtime_calibration, snapshot.calibration);
+    assert_eq!(observed.runtime_calibration.active, calibration_snapshot);
+    assert!(observed.runtime_calibration.staged_dirty);
+    assert_eq!(
+        observed.runtime_calibration_identity,
+        CalibrationPackageIdentity::from_snapshot(calibration_snapshot)
+    );
+    assert_eq!(
+        observed.runtime_calibration_identity.active_revision,
+        CalibrationRevision::new(7)
+    );
+    assert_eq!(
+        observed.runtime_calibration_identity.staged_base_revision,
+        CalibrationRevision::new(7)
+    );
+    assert_eq!(
+        observed.runtime_calibration_identity.staged_revision,
+        CalibrationRevision::new(8)
+    );
+    assert!(observed.runtime_calibration_identity.staged_dirty);
+    assert_eq!(runtime.calibration_snapshot(), calibration_snapshot);
+}
+
+#[test]
+fn extract_action_observations_preserve_idle_publish_runtime_state() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_fuel_model(test_fuel_model());
+
+    let result = runtime.step(
+        StepInputs {
+            now_us: Micros::new(3_000),
+            rpm: 0,
+            load_kpa10: 0,
+            angle_x10: 0,
+            trigger_synced: false,
+            cam_seen: false,
+            launch_armed: false,
+            flat_shift_armed: false,
+            safety_latch_request: false,
+        },
+        ControlInputs {
+            enrichment: EnrichmentInputs {
+                now_us: Micros::new(3_000),
+                clt_c: 20,
+                cranking: false,
+                just_started: false,
+                tpsdot_pct_s: 0,
+                mapdot_kpa_s: 0,
+            },
+            lambda: LambdaTrimInputs {
+                now_us: Micros::new(3_000),
+                clt_c: 80,
+                just_started: false,
+                lambda_valid: true,
+                measured_lambda100: ecu_domain::Lambda100::new(100),
+                requested_open_loop: false,
+            },
+            torque: TorqueInputs::new(90, 90, 90, 90, 90),
+            ignition: IgnitionInputs::new(
+                ecu_domain::Degrees10::new(100),
+                0,
+                0,
+                0,
+                false,
+                Rpm::new(0),
+            ),
+            fuel_sensors: FuelSensorInputs::default(),
+            knock_intensity_x100: 0,
+        },
+    );
+    let snapshot = runtime.snapshot();
+
+    let observed = extract_runtime_observed_surface(&result, &snapshot);
+
+    assert_eq!(
+        observed.runtime_actions,
+        extract_action_observations(&result)
+    );
+    assert_eq!(observed.runtime_actions.total_action_count, 2);
+    assert_eq!(observed.runtime_actions.idle_count, 1);
+    assert!(observed.runtime_actions.publish_snapshot);
+    assert_eq!(observed.runtime_actions.publish_snapshot_count, 1);
+    assert!(!observed.runtime_actions.persist_calibration);
+    assert!(!observed.runtime_actions.cancel_scheduler);
+}
+
+#[test]
+fn extract_action_observations_preserve_mixed_runtime_state() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_fuel_model(test_fuel_model());
+    runtime.configure_full_ecu(inline_sequential_cop_profile());
+    runtime.set_engine_time_authority(validated_expert_authority());
+    runtime.calibration.staged_dirty = true;
+    runtime.set_fault_state(
+        FaultCode::SensorOutOfRange,
+        FaultSeverity::Warning,
+        CancelReason::Manual,
+    );
+
+    let result = runtime.step(
+        running_step_inputs(5_000, 3_000, true, true),
+        running_control_inputs(5_000, 3_000),
+    );
+    let snapshot = runtime.snapshot();
+
+    let observed = extract_runtime_observed_surface(&result, &snapshot);
+
+    assert_eq!(
+        observed.runtime_actions,
+        extract_action_observations(&result)
+    );
+    assert_eq!(observed.runtime_actions.total_action_count, 15);
+    assert_eq!(observed.runtime_actions.arm_scheduler_count, 0);
+    assert_eq!(observed.runtime_actions.arm_injection_count, 6);
+    assert_eq!(observed.runtime_actions.arm_ignition_count, 6);
+    assert_eq!(observed.runtime_actions.apply_aux_count, 1);
+    assert_eq!(observed.runtime_actions.apply_aux_command_count, 4);
+    assert_eq!(observed.runtime_actions.persist_calibration_count, 1);
+    assert!(observed.runtime_actions.persist_calibration);
+    assert_eq!(observed.runtime_actions.publish_snapshot_count, 1);
+    assert!(observed.runtime_actions.publish_snapshot);
+    assert!(!observed.runtime_actions.cancel_scheduler);
+    assert_eq!(observed.runtime_actions.idle_count, 0);
+}
+
+#[test]
+fn extract_action_observations_preserve_cancel_runtime_state() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_fuel_model(test_fuel_model());
+    runtime.set_fault_state(
+        FaultCode::SafetyCut,
+        FaultSeverity::Critical,
+        CancelReason::SafetyShutdown,
+    );
+
+    let result = runtime.step(
+        running_step_inputs(1_000, 3_000, true, true),
+        running_control_inputs(1_000, 3_000),
+    );
+    let snapshot = runtime.snapshot();
+
+    let observed = extract_runtime_observed_surface(&result, &snapshot);
+
+    assert_eq!(
+        observed.runtime_actions,
+        extract_action_observations(&result)
+    );
+    assert_eq!(observed.runtime_actions.total_action_count, 2);
+    assert!(observed.runtime_actions.cancel_scheduler);
+    assert_eq!(
+        observed.runtime_actions.cancel_reason,
+        CancelReason::SafetyShutdown
+    );
+    assert_eq!(observed.runtime_actions.cancel_scheduler_count, 1);
+    assert!(!observed.runtime_actions.multiple_cancel_reasons);
+    assert!(observed.runtime_actions.publish_snapshot);
+    assert_eq!(observed.runtime_actions.publish_snapshot_count, 1);
+    assert_eq!(observed.runtime_actions.idle_count, 0);
+}
+
+#[test]
+fn extract_transition_observations_preserve_single_point_injection_runtime_state() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_fuel_model(test_fuel_model());
+    runtime.configure_single_point_injection();
+    runtime.set_engine_time_authority(authority(
+        CrankSyncState::PrimaryLocked,
+        PhaseSyncState::CrankOnly360,
+        AbsoluteTimeAuthority::GeometryOnly,
+    ));
+
+    let result = runtime.step(
+        running_step_inputs(5_000, 3_000, true, false),
+        running_control_inputs(5_000, 3_000),
+    );
+    let snapshot = runtime.snapshot();
+
+    let observed = extract_runtime_observed_surface(&result, &snapshot);
+    let injection = result
+        .actions
+        .iter()
+        .find_map(|action| match action {
+            Action::ArmInjection(injection) => Some(injection),
+            _ => None,
+        })
+        .expect("single-point injection action");
+
+    assert_eq!(
+        observed.runtime_transitions,
+        extract_transition_observations(&result)
+    );
+    assert_eq!(observed.runtime_transitions.total_transition_count, 2);
+    assert_eq!(observed.runtime_transitions.injector_transition_count, 2);
+    assert_eq!(observed.runtime_transitions.ignition_transition_count, 0);
+    assert_eq!(
+        observed.runtime_transitions.earliest_transition_at_us,
+        Some(injection.start_at)
+    );
+    assert_eq!(
+        observed.runtime_transitions.latest_transition_at_us,
+        Some(injection.end_at)
+    );
+    assert_eq!(
+        observed
+            .runtime_transitions
+            .earliest_injector_transition_at_us,
+        Some(injection.start_at)
+    );
+    assert_eq!(
+        observed
+            .runtime_transitions
+            .latest_injector_transition_at_us,
+        Some(injection.end_at)
+    );
+    assert_eq!(
+        observed
+            .runtime_transitions
+            .earliest_ignition_transition_at_us,
+        None
+    );
+    assert_eq!(
+        observed
+            .runtime_transitions
+            .latest_ignition_transition_at_us,
+        None
+    );
+    assert!(!observed.runtime_transitions.export_error);
+}
+
+#[test]
+fn extract_transition_observations_preserve_full_ecu_runtime_state() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_fuel_model(test_fuel_model());
+    runtime.configure_full_ecu(inline_sequential_cop_profile());
+    runtime.set_engine_time_authority(validated_expert_authority());
+
+    let result = runtime.step(
+        running_step_inputs(1_000, 3_000, true, true),
+        running_control_inputs(1_000, 3_000),
+    );
+    let snapshot = runtime.snapshot();
+
+    let observed = extract_runtime_observed_surface(&result, &snapshot);
+    let mut earliest_transition: Option<Micros> = None;
+    let mut latest_transition: Option<Micros> = None;
+    let mut earliest_injector: Option<Micros> = None;
+    let mut latest_injector: Option<Micros> = None;
+    let mut earliest_ignition: Option<Micros> = None;
+    let mut latest_ignition: Option<Micros> = None;
+    let mut injector_transition_count = 0u8;
+    let mut ignition_transition_count = 0u8;
+
+    for action in result.actions.iter() {
+        match action {
+            Action::ArmInjection(injection) => {
+                injector_transition_count = injector_transition_count.saturating_add(2);
+                earliest_transition = Some(match earliest_transition {
+                    Some(current) if current.get() <= injection.start_at.get() => current,
+                    _ => injection.start_at,
+                });
+                earliest_transition = Some(match earliest_transition {
+                    Some(current) if current.get() <= injection.end_at.get() => current,
+                    _ => injection.end_at,
+                });
+                latest_transition = Some(match latest_transition {
+                    Some(current) if current.get() >= injection.start_at.get() => current,
+                    _ => injection.start_at,
+                });
+                latest_transition = Some(match latest_transition {
+                    Some(current) if current.get() >= injection.end_at.get() => current,
+                    _ => injection.end_at,
+                });
+                earliest_injector = Some(match earliest_injector {
+                    Some(current) if current.get() <= injection.start_at.get() => current,
+                    _ => injection.start_at,
+                });
+                earliest_injector = Some(match earliest_injector {
+                    Some(current) if current.get() <= injection.end_at.get() => current,
+                    _ => injection.end_at,
+                });
+                latest_injector = Some(match latest_injector {
+                    Some(current) if current.get() >= injection.start_at.get() => current,
+                    _ => injection.start_at,
+                });
+                latest_injector = Some(match latest_injector {
+                    Some(current) if current.get() >= injection.end_at.get() => current,
+                    _ => injection.end_at,
+                });
+            }
+            Action::ArmIgnition(ignition) => {
+                ignition_transition_count = ignition_transition_count.saturating_add(2);
+                earliest_transition = Some(match earliest_transition {
+                    Some(current) if current.get() <= ignition.start_at.get() => current,
+                    _ => ignition.start_at,
+                });
+                earliest_transition = Some(match earliest_transition {
+                    Some(current) if current.get() <= ignition.end_at.get() => current,
+                    _ => ignition.end_at,
+                });
+                latest_transition = Some(match latest_transition {
+                    Some(current) if current.get() >= ignition.start_at.get() => current,
+                    _ => ignition.start_at,
+                });
+                latest_transition = Some(match latest_transition {
+                    Some(current) if current.get() >= ignition.end_at.get() => current,
+                    _ => ignition.end_at,
+                });
+                earliest_ignition = Some(match earliest_ignition {
+                    Some(current) if current.get() <= ignition.start_at.get() => current,
+                    _ => ignition.start_at,
+                });
+                earliest_ignition = Some(match earliest_ignition {
+                    Some(current) if current.get() <= ignition.end_at.get() => current,
+                    _ => ignition.end_at,
+                });
+                latest_ignition = Some(match latest_ignition {
+                    Some(current) if current.get() >= ignition.start_at.get() => current,
+                    _ => ignition.start_at,
+                });
+                latest_ignition = Some(match latest_ignition {
+                    Some(current) if current.get() >= ignition.end_at.get() => current,
+                    _ => ignition.end_at,
+                });
+            }
+            _ => {}
+        }
+    }
+
+    assert_eq!(
+        observed.runtime_transitions,
+        extract_transition_observations(&result)
+    );
+    assert_eq!(observed.runtime_transitions.total_transition_count, 24);
+    assert_eq!(
+        observed.runtime_transitions.injector_transition_count,
+        injector_transition_count
+    );
+    assert_eq!(
+        observed.runtime_transitions.ignition_transition_count,
+        ignition_transition_count
+    );
+    assert_eq!(
+        observed.runtime_transitions.earliest_transition_at_us,
+        earliest_transition
+    );
+    assert_eq!(
+        observed.runtime_transitions.latest_transition_at_us,
+        latest_transition
+    );
+    assert_eq!(
+        observed
+            .runtime_transitions
+            .earliest_injector_transition_at_us,
+        earliest_injector
+    );
+    assert_eq!(
+        observed
+            .runtime_transitions
+            .latest_injector_transition_at_us,
+        latest_injector
+    );
+    assert_eq!(
+        observed
+            .runtime_transitions
+            .earliest_ignition_transition_at_us,
+        earliest_ignition
+    );
+    assert_eq!(
+        observed
+            .runtime_transitions
+            .latest_ignition_transition_at_us,
+        latest_ignition
+    );
+    assert!(!observed.runtime_transitions.export_error);
+}
+
+#[test]
+fn extract_scheduler_observations_preserve_idle_runtime_state() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_fuel_model(test_fuel_model());
+
+    let result = runtime.step(
+        StepInputs {
+            now_us: Micros::new(3_000),
+            rpm: 0,
+            load_kpa10: 0,
+            angle_x10: 0,
+            trigger_synced: false,
+            cam_seen: false,
+            launch_armed: false,
+            flat_shift_armed: false,
+            safety_latch_request: false,
+        },
+        running_control_inputs(3_000, 0),
+    );
+    let snapshot = runtime.snapshot();
+
+    let observed = extract_runtime_observed_surface(&result, &snapshot);
+
+    assert_eq!(
+        observed.runtime_scheduler,
+        extract_scheduler_observations(&snapshot)
+    );
+    assert_eq!(observed.runtime_scheduler, runtime.scheduler_state());
+    assert_eq!(
+        observed.runtime_scheduler.mode(),
+        ecu_scheduler::SchedulerMode::Idle
+    );
+    assert!(!observed.runtime_scheduler.is_armed());
+    assert_eq!(observed.runtime_scheduler.injection_count(), 0);
+    assert_eq!(observed.runtime_scheduler.ignition_count(), 0);
+}
+
+#[test]
+fn extract_scheduler_observations_preserve_armed_runtime_state() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_fuel_model(test_fuel_model());
+    runtime.configure_batch_injection(4);
+    runtime.set_engine_time_authority(authority(
+        CrankSyncState::PrimaryLocked,
+        PhaseSyncState::CrankOnly360,
+        AbsoluteTimeAuthority::GeometryOnly,
+    ));
+
+    let result = runtime.step(
+        running_step_inputs(5_000, 3_000, true, false),
+        running_control_inputs(5_000, 3_000),
+    );
+    let snapshot = runtime.snapshot();
+
+    let observed = extract_runtime_observed_surface(&result, &snapshot);
+
+    assert_eq!(
+        observed.runtime_scheduler,
+        extract_scheduler_observations(&snapshot)
+    );
+    assert_eq!(observed.runtime_scheduler, runtime.scheduler_state());
+    assert_eq!(
+        observed.runtime_scheduler.mode(),
+        ecu_scheduler::SchedulerMode::Armed
+    );
+    assert!(observed.runtime_scheduler.is_armed());
+    assert_eq!(observed.runtime_scheduler.injection_count(), 4);
+    assert_eq!(observed.runtime_scheduler.ignition_count(), 0);
+    assert!(observed.runtime_scheduler.last_injection_start().is_some());
+    assert!(observed.runtime_scheduler.last_injection_end().is_some());
+    assert_eq!(observed.runtime_scheduler.last_ignition_start(), None);
+    assert_eq!(observed.runtime_scheduler.last_ignition_end(), None);
+}
+
+#[test]
+fn extract_scheduler_observations_preserve_suspended_runtime_state() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_fuel_model(test_fuel_model());
+    runtime.configure_batch_injection(4);
+    runtime.set_engine_time_authority(authority(
+        CrankSyncState::PrimaryLocked,
+        PhaseSyncState::CrankOnly360,
+        AbsoluteTimeAuthority::GeometryOnly,
+    ));
+
+    let _ = runtime.step(
+        running_step_inputs(1_000, 3_000, true, false),
+        running_control_inputs(1_000, 3_000),
+    );
+
+    let result = runtime.step(
+        running_step_inputs(2_000, 0, false, false),
+        running_control_inputs(2_000, 0),
+    );
+    let snapshot = runtime.snapshot();
+
+    let observed = extract_runtime_observed_surface(&result, &snapshot);
+
+    assert_eq!(
+        observed.runtime_scheduler,
+        extract_scheduler_observations(&snapshot)
+    );
+    assert_eq!(observed.runtime_scheduler, runtime.scheduler_state());
+    assert_eq!(
+        observed.runtime_scheduler.mode(),
+        ecu_scheduler::SchedulerMode::Suspended
+    );
+    assert!(!observed.runtime_scheduler.is_armed());
+    assert_eq!(
+        observed.runtime_scheduler.active_stop_reason(),
+        ecu_board_api::frontier::TimingIslandStopReason::SyncLost
+    );
+    assert_eq!(observed.runtime_scheduler.injection_count(), 0);
+    assert_eq!(observed.runtime_scheduler.ignition_count(), 0);
+    assert!(observed.runtime_scheduler.last_injection_start().is_some());
+    assert!(observed.runtime_scheduler.last_injection_end().is_some());
+}
+
+#[test]
+fn extract_output_profile_observations_preserve_default_runtime_state() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_fuel_model(test_fuel_model());
+
+    let result = runtime.step(
+        StepInputs {
+            now_us: Micros::new(3_000),
+            rpm: 0,
+            load_kpa10: 0,
+            angle_x10: 0,
+            trigger_synced: false,
+            cam_seen: false,
+            launch_armed: false,
+            flat_shift_armed: false,
+            safety_latch_request: false,
+        },
+        running_control_inputs(3_000, 0),
+    );
+    let snapshot = runtime.snapshot();
+
+    let observed = extract_runtime_observed_surface(&result, &snapshot);
+
+    assert_eq!(
+        observed.runtime_output_profile,
+        extract_output_profile_observations(&snapshot)
+    );
+    assert_eq!(observed.runtime_output_profile, runtime.output_profile());
+    assert_eq!(
+        observed.runtime_output_profile,
+        ecu_board_api::legacy::single_channel_runtime_output_profile()
+    );
+}
+
+#[test]
+fn extract_output_profile_observations_preserve_updated_runtime_state() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_fuel_model(test_fuel_model());
+    let profile = inline_sequential_cop_profile();
+    runtime.configure_full_ecu(profile);
+    runtime.set_engine_time_authority(validated_expert_authority());
+
+    let result = runtime.step(
+        running_step_inputs(1_000, 3_000, true, true),
+        running_control_inputs(1_000, 3_000),
+    );
+    let snapshot = runtime.snapshot();
+
+    let observed = extract_runtime_observed_surface(&result, &snapshot);
+
+    assert_eq!(
+        observed.runtime_output_profile,
+        extract_output_profile_observations(&snapshot)
+    );
+    assert_eq!(observed.runtime_output_profile, runtime.output_profile());
+    assert_eq!(
+        observed.runtime_output_profile,
+        RuntimeOutputProfile::full_ecu(profile)
+    );
+}
+
+#[test]
+fn extract_fuel_strategy_observations_preserve_default_runtime_state() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_fuel_model(test_fuel_model());
+
+    let result = runtime.step(
+        StepInputs {
+            now_us: Micros::new(4_000),
+            rpm: 0,
+            load_kpa10: 0,
+            angle_x10: 0,
+            trigger_synced: false,
+            cam_seen: false,
+            launch_armed: false,
+            flat_shift_armed: false,
+            safety_latch_request: false,
+        },
+        running_control_inputs(4_000, 0),
+    );
+    let snapshot = runtime.snapshot();
+
+    let observed = extract_runtime_observed_surface(&result, &snapshot);
+
+    assert_eq!(
+        observed.runtime_fuel_strategy,
+        extract_fuel_strategy_observations(&snapshot)
+    );
+    assert_eq!(
+        observed.runtime_fuel_strategy,
+        RuntimeFuelStrategyMode::DirectPulseWidthTable
+    );
+}
+
+#[test]
+fn extract_fuel_strategy_observations_preserve_updated_runtime_state() {
+    let mut runtime = EngineRuntime::new();
+    let calibration = runtime_semantic_calibration_from_fuel_tune(&FuelRuntimeTune::new(
+        [[100; 16]; 16],
+        [[147; 16]; 16],
+        2_400,
+        800,
+        0,
+    ));
+    runtime.configure_speed_density_ve(calibration, RuntimeSemanticState::default());
+
+    let result = runtime.step(
+        running_step_inputs(2_500, 3_000, true, true),
+        running_control_inputs(2_500, 3_000),
+    );
+    let snapshot = runtime.snapshot();
+
+    let observed = extract_runtime_observed_surface(&result, &snapshot);
+
+    assert_eq!(
+        observed.runtime_fuel_strategy,
+        extract_fuel_strategy_observations(&snapshot)
+    );
+    assert_eq!(
+        observed.runtime_fuel_strategy,
+        RuntimeFuelStrategyMode::SpeedDensityVe
+    );
+}
+
+#[test]
+fn extract_idle_observations_preserve_direct_path_as_inactive() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_fuel_model(test_fuel_model());
+
+    let result = runtime.step(
+        running_step_inputs(4_500, 3_000, true, true),
+        running_control_inputs(4_500, 3_000),
+    );
+    let snapshot = runtime.snapshot();
+
+    let observed = extract_runtime_observed_surface(&result, &snapshot);
+
+    assert_eq!(observed.runtime_idle, extract_idle_observations(&result));
+    assert!(!observed.runtime_idle.active);
+    assert_eq!(observed.runtime_idle.duty_x1000, 0);
+    assert_eq!(observed.runtime_idle.integrator_acc, 0);
+    assert_eq!(observed.runtime_idle.integrator_min_acc, 0);
+    assert_eq!(observed.runtime_idle.integrator_max_acc, 0);
+    assert!(!observed.runtime_idle.integrator_frozen);
+}
+
+#[test]
+fn extract_idle_observations_preserve_semantic_idle_state() {
+    let mut runtime = EngineRuntime::new();
+    let mut calibration = semantic_fuel_calibration_with_ve_cells(7000, 7000);
+    calibration.idle_target_rpm = 1000;
+    calibration.idle_base_duty_x1000 = 350;
+    calibration.idle_kp_x1000 = 300;
+    calibration.idle_ki_x1000 = 500;
+    runtime.configure_speed_density_ve(calibration, RuntimeSemanticState::default());
+
+    let mut inputs = running_control_inputs(4_500, 700);
+    inputs.enrichment.clt_c = 80;
+    let result = runtime.step(running_step_inputs(4_500, 700, true, true), inputs);
+    let snapshot = runtime.snapshot();
+
+    let observed = extract_runtime_observed_surface(&result, &snapshot);
+
+    assert_eq!(observed.runtime_idle, extract_idle_observations(&result));
+    assert!(observed.runtime_idle.active);
+    assert_eq!(observed.runtime_idle.duty_x1000, 590);
+    assert_eq!(observed.runtime_idle.integrator_acc, 150);
+    assert_eq!(observed.runtime_idle.integrator_min_acc, -2000);
+    assert_eq!(observed.runtime_idle.integrator_max_acc, 2000);
+    assert!(!observed.runtime_idle.integrator_frozen);
+}
+
+#[test]
+fn extract_lambda_correction_observations_preserve_direct_path_as_inactive() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_fuel_model(test_fuel_model());
+
+    let mut inputs = running_control_inputs(4_750, 3_000);
+    inputs.lambda.requested_open_loop = true;
+    let result = runtime.step(running_step_inputs(4_750, 3_000, true, true), inputs);
+    let snapshot = runtime.snapshot();
+
+    let observed = extract_runtime_observed_surface(&result, &snapshot);
+
+    assert_eq!(
+        observed.runtime_lambda_correction,
+        extract_lambda_correction_observations(&result)
+    );
+    assert!(!observed.runtime_lambda_correction.active);
+    assert_eq!(observed.runtime_lambda_correction.correction_x1000, 1000);
+    assert!(!observed.runtime_lambda_correction.integrator_available);
+    assert_eq!(observed.runtime_lambda_correction.integrator_acc, 0);
+    assert_eq!(observed.runtime_lambda_correction.integrator_min_acc, 0);
+    assert_eq!(observed.runtime_lambda_correction.integrator_max_acc, 0);
+    assert!(!observed.runtime_lambda_correction.integrator_frozen);
+}
+
+#[test]
+fn extract_lambda_correction_observations_preserve_semantic_correction_state() {
+    let mut runtime = EngineRuntime::new();
+    let mut calibration = semantic_fuel_calibration_with_ve_cells(7000, 7000);
+    calibration.lambda_kp_x1000 = 0;
+    calibration.lambda_ki_x1000 = 1000;
+    runtime.configure_speed_density_ve(calibration, RuntimeSemanticState::default());
+
+    let mut inputs = running_control_inputs(4_750, 3_000);
+    inputs.enrichment.clt_c = 90;
+    inputs.lambda.clt_c = 90;
+    inputs.lambda.measured_lambda100 = Lambda100::new(95);
+    let result = runtime.step(running_step_inputs(4_750, 3_000, true, true), inputs);
+    let snapshot = runtime.snapshot();
+
+    let observed = extract_runtime_observed_surface(&result, &snapshot);
+
+    assert_eq!(
+        observed.runtime_lambda_correction,
+        extract_lambda_correction_observations(&result)
+    );
+    assert!(observed.runtime_lambda_correction.active);
+    assert_eq!(observed.runtime_lambda_correction.correction_x1000, 1050);
+    assert!(observed.runtime_lambda_correction.integrator_available);
+    assert_eq!(observed.runtime_lambda_correction.integrator_acc, 50);
+    assert_eq!(observed.runtime_lambda_correction.integrator_min_acc, -2000);
+    assert_eq!(observed.runtime_lambda_correction.integrator_max_acc, 2000);
+    assert!(!observed.runtime_lambda_correction.integrator_frozen);
+}
+
+#[test]
+fn extract_ignition_trim_observations_preserve_direct_path_as_inactive() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_fuel_model(test_fuel_model());
+
+    let result = runtime.step(
+        running_step_inputs(5_000, 3_000, true, true),
+        running_control_inputs(5_000, 3_000),
+    );
+    let snapshot = runtime.snapshot();
+
+    let observed = extract_runtime_observed_surface(&result, &snapshot);
+
+    assert_eq!(
+        observed.runtime_ignition_trim,
+        extract_ignition_trim_observations(&result)
+    );
+    assert!(!observed.runtime_ignition_trim.active);
+    assert_eq!(observed.runtime_ignition_trim.trim_deg10, 0);
+}
+
+#[test]
+fn extract_ignition_trim_observations_preserve_semantic_trim_state() {
+    let mut runtime = EngineRuntime::new();
+    let mut calibration = semantic_fuel_calibration_with_ve_cells(7000, 7000);
+    calibration.soft_rev_rpm = 2_500;
+    calibration.soft_retard_max_deg10 = 120;
+    runtime.configure_speed_density_ve(calibration, RuntimeSemanticState::default());
+
+    let result = runtime.step(
+        running_step_inputs(5_000, 3_000, true, true),
+        running_control_inputs(5_000, 3_000),
+    );
+    let snapshot = runtime.snapshot();
+
+    let observed = extract_runtime_observed_surface(&result, &snapshot);
+
+    assert_eq!(
+        observed.runtime_ignition_trim,
+        extract_ignition_trim_observations(&result)
+    );
+    assert!(observed.runtime_ignition_trim.active);
+    assert_eq!(observed.runtime_ignition_trim.trim_deg10, -120);
+}
+
+#[test]
+fn extract_fuel_core_observations_preserve_direct_path_fallback() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_fuel_model(test_fuel_model());
+
+    let result = runtime.step(
+        running_step_inputs(5_250, 3_000, true, true),
+        running_control_inputs(5_250, 3_000),
+    );
+    let snapshot = runtime.snapshot();
+
+    let observed = extract_runtime_observed_surface(&result, &snapshot);
+
+    assert_eq!(
+        observed.runtime_fuel_core,
+        extract_fuel_core_observations(&result)
+    );
+    assert!(!observed.runtime_fuel_core.semantic_available);
+    assert_eq!(observed.runtime_fuel_core.ve_pct_x100, None);
+    assert_eq!(observed.runtime_fuel_core.target_afr_x100, None);
+    assert_eq!(observed.runtime_fuel_core.pw_air_us, None);
+    assert_eq!(
+        observed.runtime_fuel_core.pw_base_us,
+        result.control.fuel_intent.observations.pw_base_us
+    );
+    assert_eq!(
+        observed.runtime_fuel_core.pw_corr_us,
+        result.control.fuel_intent.observations.pw_corr_us
+    );
+}
+
+#[test]
+fn extract_fuel_core_observations_preserve_semantic_core_state() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_speed_density_ve(
+        semantic_fuel_calibration_with_ve_cells(7000, 7000),
+        RuntimeSemanticState::default(),
+    );
+
+    let result = runtime.step(
+        running_step_inputs(5_250, 3_000, true, true),
+        running_control_inputs(5_250, 3_000),
+    );
+    let snapshot = runtime.snapshot();
+
+    let observed = extract_runtime_observed_surface(&result, &snapshot);
+
+    assert_eq!(
+        observed.runtime_fuel_core,
+        extract_fuel_core_observations(&result)
+    );
+    assert!(observed.runtime_fuel_core.semantic_available);
+    assert_eq!(observed.runtime_fuel_core.ve_pct_x100, Some(7000));
+    assert_eq!(observed.runtime_fuel_core.target_afr_x100, Some(1470));
+    assert_eq!(observed.runtime_fuel_core.pw_base_us, 700);
+    assert_eq!(observed.runtime_fuel_core.pw_air_us, Some(490));
+    assert_eq!(observed.runtime_fuel_core.pw_corr_us, 490);
+}
+
+#[test]
+fn extract_runtime_observed_surface_preserves_direct_cut_state_shell() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_fuel_model(test_fuel_model());
+    runtime.set_direct_cut_requests(true, false);
+
+    let result = runtime.step(
+        running_step_inputs(1_000, 3_000, true, true),
+        running_control_inputs(1_000, 3_000),
+    );
+    let snapshot = runtime.snapshot();
+
+    let observed = extract_runtime_observed_surface(&result, &snapshot);
+
+    assert!(snapshot.direct_fuel_cut_request);
+    assert!(!snapshot.direct_spark_cut_request);
+    assert_eq!(observed.runtime_cut.reason, RuntimeCutReason::DirectRequest);
+    assert_eq!(observed.runtime_cut.fuel_cut, snapshot.fuel_cut);
+    assert_eq!(observed.runtime_cut.spark_cut, snapshot.spark_cut);
+    assert!(observed.runtime_cut.fuel_cut);
+    assert!(!observed.runtime_cut.spark_cut);
+    assert_eq!(observed.runtime_torque, result.torque_observations);
+    assert_eq!(observed.runtime_torque.actuated_x1000, 0);
+}
+
+#[test]
+fn extract_ignition_observations_preserve_normal_runtime_state() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_fuel_model(test_fuel_model());
+
+    let result = runtime.step(
+        running_step_inputs(1_000, 3_000, true, true),
+        running_control_inputs(1_000, 3_000),
+    );
+    let snapshot = runtime.snapshot();
+
+    let observed = extract_runtime_observed_surface(&result, &snapshot);
+
+    assert_eq!(observed.runtime_ignition, result.control.ignition);
+}
+
+#[test]
+fn extract_ignition_observations_preserve_limited_runtime_state() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_fuel_model(test_fuel_model());
+
+    let mut control = running_control_inputs(1_000, 3_000);
+    control.ignition = IgnitionInputs::new(Degrees10::new(120), 0, 0, 0, true, Rpm::new(3_000));
+    let result = runtime.step(running_step_inputs(1_000, 3_000, true, true), control);
+    let snapshot = runtime.snapshot();
+
+    let observed = extract_runtime_observed_surface(&result, &snapshot);
+
+    assert_eq!(observed.runtime_ignition, result.control.ignition);
+    assert_eq!(
+        observed.runtime_ignition.limit_reason,
+        IgnitionLimitReason::RevLimiter
+    );
+}
+
+#[test]
+fn extract_knock_observations_preserve_inactive_runtime_state() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_fuel_model(test_fuel_model());
+
+    let result = runtime.step(
+        running_step_inputs(1_000, 3_000, true, true),
+        running_control_inputs(1_000, 3_000),
+    );
+    let snapshot = runtime.snapshot();
+
+    let observed = extract_runtime_observed_surface(&result, &snapshot);
+
+    assert_eq!(
+        observed.runtime_knock,
+        RuntimeKnockObservations {
+            intensity_x100: 0,
+            retard_deg10: 0,
+        }
+    );
+}
+
+#[test]
+fn extract_knock_observations_preserve_active_runtime_state() {
+    let mut runtime = EngineRuntime::new();
+    let mut calibration = semantic_fuel_calibration_with_ve_cells(7000, 9000);
+    calibration.knock_threshold_x100 = 500;
+    calibration.knock_retard_step_deg10 = 40;
+    calibration.knock_retard_max_deg10 = 120;
+    calibration.knock_recovery_step_deg10 = 40;
+    calibration.knock_recovery_delay_cycles = 0;
+    runtime.configure_speed_density_ve(calibration, RuntimeSemanticState::default());
+
+    let mut inputs = running_control_inputs(1_800, 3_000);
+    inputs.knock_intensity_x100 = 600;
+    let result = runtime.step(running_step_inputs(1_800, 3_000, true, true), inputs);
+    let snapshot = runtime.snapshot();
+
+    let observed = extract_runtime_observed_surface(&result, &snapshot);
+
+    assert_eq!(
+        observed.runtime_knock,
+        RuntimeKnockObservations {
+            intensity_x100: 600,
+            retard_deg10: 40,
+        }
+    );
+}
+
+#[test]
+fn extract_runtime_observed_surface_preserves_semantic_hard_rev_cut_state_shell() {
+    let mut runtime = EngineRuntime::new();
+    let mut calibration = semantic_fuel_calibration_with_ve_cells(7000, 9000);
+    calibration.hard_rev_rpm = 2_500;
+    runtime.configure_speed_density_ve(calibration, RuntimeSemanticState::default());
+
+    let result = runtime.step(
+        running_step_inputs(1_500, 3_000, true, true),
+        running_control_inputs(1_500, 3_000),
+    );
+    let snapshot = runtime.snapshot();
+
+    let observed = extract_runtime_observed_surface(&result, &snapshot);
+
+    assert!(snapshot.rev_hard_active);
+    assert_eq!(observed.runtime_cut.reason, RuntimeCutReason::HardRev);
+    assert_eq!(observed.runtime_cut.fuel_cut, snapshot.fuel_cut);
+    assert_eq!(observed.runtime_cut.spark_cut, snapshot.spark_cut);
+    assert!(observed.runtime_cut.fuel_cut || observed.runtime_cut.spark_cut);
+}
+
+#[test]
+fn extract_cut_observations_preserves_knock_retard_reason_without_active_cuts() {
+    let mut runtime = EngineRuntime::new();
+    let mut calibration = semantic_fuel_calibration_with_ve_cells(7000, 9000);
+    calibration.knock_threshold_x100 = 500;
+    calibration.knock_retard_step_deg10 = 40;
+    calibration.knock_retard_max_deg10 = 120;
+    calibration.knock_recovery_step_deg10 = 40;
+    calibration.knock_recovery_delay_cycles = 0;
+    runtime.configure_speed_density_ve(calibration, RuntimeSemanticState::default());
+
+    let mut inputs = running_control_inputs(1_800, 3_000);
+    inputs.knock_intensity_x100 = 600;
+    let _ = runtime.step(running_step_inputs(1_800, 3_000, true, true), inputs);
+    let snapshot = runtime.snapshot();
+
+    let cut = extract_cut_observations(&snapshot);
+
+    assert_eq!(cut.reason, RuntimeCutReason::KnockRetard);
+    assert!(!cut.fuel_cut);
+    assert!(!cut.spark_cut);
+}
+
+#[test]
+fn extract_engine_observations_preserve_normal_runtime_state() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_fuel_model(test_fuel_model());
+
+    let result = runtime.step(
+        running_step_inputs(1_000, 3_000, true, true),
+        running_control_inputs(1_000, 3_000),
+    );
+    let snapshot = runtime.snapshot();
+
+    let observed = extract_runtime_observed_surface(&result, &snapshot);
+
+    assert_eq!(observed.runtime_engine, snapshot.engine);
+}
+
+#[test]
+fn extract_engine_observations_preserve_unsynced_runtime_state() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_fuel_model(test_fuel_model());
+
+    let result = runtime.step_with_authority(
+        AuthorityStepInputs::new(
+            Micros::new(1_000),
+            3_000,
+            700,
+            2_000,
+            EngineTimeAuthority::none(),
+            false,
+            false,
+            false,
+        ),
+        running_control_inputs(1_000, 3_000),
+    );
+    let snapshot = runtime.snapshot();
+
+    let observed = extract_runtime_observed_surface(&result, &snapshot);
+
+    assert_eq!(observed.runtime_engine, snapshot.engine);
+    assert_eq!(observed.runtime_engine.sync, SyncState::Unsynced);
+}
+
+#[test]
+fn extract_protection_observations_is_inactive_for_normal_running_state() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_fuel_model(test_fuel_model());
+
+    let result = runtime.step(
+        running_step_inputs(1_000, 3_000, true, true),
+        running_control_inputs(1_000, 3_000),
+    );
+    let snapshot = runtime.snapshot();
+
+    let observed = extract_runtime_observed_surface(&result, &snapshot);
+    let fault = extract_fault_observations(&snapshot);
+    let protection = extract_protection_observations(&snapshot);
+
+    assert_eq!(fault, RuntimeFaultObservations::default());
+    assert_eq!(observed.runtime_fault, fault);
+    assert_eq!(protection, RuntimeProtectionObservations::default());
+    assert_eq!(observed.runtime_protection, protection);
+}
+
+#[test]
+fn extract_validated_observations_preserve_unclamped_runtime_state() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_fuel_model(test_fuel_model());
+
+    let result = runtime.step(
+        running_step_inputs(1_000, 3_000, true, true),
+        running_control_inputs(1_000, 3_000),
+    );
+    let snapshot = runtime.snapshot();
+
+    let observed = extract_runtime_observed_surface(&result, &snapshot);
+
+    assert_eq!(
+        observed.runtime_validated,
+        ValidatedInputs {
+            rpm: Rpm::new(3_000),
+            load_kpa10: Kpa10::new(700),
+            angle_x10: Degrees10::new(2_000),
+            clamped: false,
+        }
+    );
+}
+
+#[test]
+fn extract_validated_observations_preserve_clamped_runtime_state() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_fuel_model(test_fuel_model());
+
+    let result = runtime.step(
+        StepInputs {
+            now_us: Micros::new(1_000),
+            rpm: 50_000,
+            load_kpa10: 5_000,
+            angle_x10: 8_000,
+            trigger_synced: false,
+            cam_seen: true,
+            launch_armed: false,
+            flat_shift_armed: false,
+            safety_latch_request: false,
+        },
+        running_control_inputs(1_000, 3_000),
+    );
+    let snapshot = runtime.snapshot();
+
+    let observed = extract_runtime_observed_surface(&result, &snapshot);
+
+    assert_eq!(
+        observed.runtime_validated,
+        ValidatedInputs {
+            rpm: Rpm::new(9_000),
+            load_kpa10: Kpa10::new(2_000),
+            angle_x10: Degrees10::new(7_200),
+            clamped: true,
+        }
+    );
+}
+
+#[test]
+fn extract_authority_observations_preserve_unsynced_runtime_state() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_fuel_model(test_fuel_model());
+
+    let result = runtime.step_with_authority(
+        AuthorityStepInputs::new(
+            Micros::new(1_000),
+            3_000,
+            700,
+            2_000,
+            EngineTimeAuthority::none(),
+            false,
+            false,
+            false,
+        ),
+        running_control_inputs(1_000, 3_000),
+    );
+    let snapshot = runtime.snapshot();
+
+    let observed = extract_runtime_observed_surface(&result, &snapshot);
+
+    assert_eq!(
+        observed.runtime_authority,
+        RuntimeAuthorityObservations {
+            authority: EngineTimeAuthority::none(),
+            summary: SyncState::Unsynced,
+            phase: snapshot.engine.phase,
+            full_sequential_authorized: false,
+        }
+    );
+}
+
+#[test]
+fn extract_authority_observations_preserve_crank_only_runtime_state() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_fuel_model(test_fuel_model());
+    let authority = authority(
+        CrankSyncState::PrimaryLocked,
+        PhaseSyncState::CrankOnly360,
+        AbsoluteTimeAuthority::GeometryOnly,
+    );
+
+    let result = runtime.step_with_authority(
+        AuthorityStepInputs::new(
+            Micros::new(2_000),
+            3_000,
+            700,
+            2_000,
+            authority,
+            false,
+            false,
+            false,
+        ),
+        running_control_inputs(2_000, 3_000),
+    );
+    let snapshot = runtime.snapshot();
+
+    let observed = extract_runtime_observed_surface(&result, &snapshot);
+
+    assert_eq!(
+        observed.runtime_authority,
+        RuntimeAuthorityObservations {
+            authority,
+            summary: SyncState::Locked { cam_ref: false },
+            phase: snapshot.engine.phase,
+            full_sequential_authorized: false,
+        }
+    );
+}
+
+#[test]
+fn extract_authority_observations_preserve_validated_runtime_state() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_fuel_model(test_fuel_model());
+    let authority = validated_expert_authority();
+
+    let result = runtime.step_with_authority(
+        AuthorityStepInputs::new(
+            Micros::new(3_000),
+            3_000,
+            700,
+            2_000,
+            authority,
+            false,
+            false,
+            false,
+        ),
+        running_control_inputs(3_000, 3_000),
+    );
+    let snapshot = runtime.snapshot();
+
+    let observed = extract_runtime_observed_surface(&result, &snapshot);
+
+    assert_eq!(
+        observed.runtime_authority,
+        RuntimeAuthorityObservations {
+            authority,
+            summary: SyncState::Locked { cam_ref: false },
+            phase: snapshot.engine.phase,
+            full_sequential_authorized: true,
+        }
+    );
+}
+
+#[test]
+fn extract_runtime_fault_observations_preserve_warning_fault_as_limp_home() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_fuel_model(test_fuel_model());
+    runtime.set_fault_state(
+        FaultCode::SensorOutOfRange,
+        FaultSeverity::Warning,
+        CancelReason::Manual,
+    );
+
+    let result = runtime.step(
+        running_step_inputs(1_000, 3_000, true, true),
+        running_control_inputs(1_000, 3_000),
+    );
+    let snapshot = runtime.snapshot();
+
+    let observed = extract_runtime_observed_surface(&result, &snapshot);
+
+    assert_eq!(
+        observed.runtime_fault,
+        RuntimeFaultObservations {
+            active: true,
+            fault: FaultCode::SensorOutOfRange,
+            severity: FaultSeverity::Warning,
+            cancel_reason: CancelReason::Manual,
+            action: RuntimeFaultAction::LimpHome,
+            persistence: RuntimeProtectionPersistence::LatchedUntilClear,
+        }
+    );
+    assert_eq!(
+        observed.runtime_protection,
+        RuntimeProtectionObservations {
+            level: RuntimeProtectionLevel::Degraded,
+            source: RuntimeProtectionSource::RuntimeFault,
+            action: RuntimeProtectionAction::LimpHome,
+            persistence: RuntimeProtectionPersistence::LatchedUntilClear,
+        }
+    );
+}
+
+#[test]
+fn extract_runtime_fault_observations_preserve_critical_fault_as_shutdown() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_fuel_model(test_fuel_model());
+    runtime.set_fault_state(
+        FaultCode::SafetyCut,
+        FaultSeverity::Critical,
+        CancelReason::SafetyShutdown,
+    );
+
+    let result = runtime.step(
+        running_step_inputs(1_000, 3_000, true, true),
+        running_control_inputs(1_000, 3_000),
+    );
+    let snapshot = runtime.snapshot();
+
+    let observed = extract_runtime_observed_surface(&result, &snapshot);
+
+    assert_eq!(
+        observed.runtime_fault,
+        RuntimeFaultObservations {
+            active: true,
+            fault: FaultCode::SafetyCut,
+            severity: FaultSeverity::Critical,
+            cancel_reason: CancelReason::SafetyShutdown,
+            action: RuntimeFaultAction::Shutdown,
+            persistence: RuntimeProtectionPersistence::LatchedUntilClear,
+        }
+    );
+    assert_eq!(
+        observed.runtime_protection,
+        RuntimeProtectionObservations {
+            level: RuntimeProtectionLevel::ShutdownDriving,
+            source: RuntimeProtectionSource::RuntimeFault,
+            action: RuntimeProtectionAction::Shutdown,
+            persistence: RuntimeProtectionPersistence::LatchedUntilClear,
+        }
+    );
+}
+
+#[test]
+fn extract_runtime_fault_observations_preserve_safety_cut_as_shutdown_regardless_of_severity() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_fuel_model(test_fuel_model());
+    runtime.set_fault_state(
+        FaultCode::SafetyCut,
+        FaultSeverity::Info,
+        CancelReason::Manual,
+    );
+
+    let result = runtime.step(
+        running_step_inputs(1_000, 3_000, true, true),
+        running_control_inputs(1_000, 3_000),
+    );
+    let snapshot = runtime.snapshot();
+
+    let observed = extract_runtime_observed_surface(&result, &snapshot);
+
+    assert_eq!(
+        observed.runtime_fault,
+        RuntimeFaultObservations {
+            active: true,
+            fault: FaultCode::SafetyCut,
+            severity: FaultSeverity::Info,
+            cancel_reason: CancelReason::Manual,
+            action: RuntimeFaultAction::Shutdown,
+            persistence: RuntimeProtectionPersistence::LatchedUntilClear,
+        }
+    );
+    assert_eq!(
+        observed.runtime_protection,
+        RuntimeProtectionObservations {
+            level: RuntimeProtectionLevel::ShutdownDriving,
+            source: RuntimeProtectionSource::RuntimeFault,
+            action: RuntimeProtectionAction::Shutdown,
+            persistence: RuntimeProtectionPersistence::LatchedUntilClear,
+        }
+    );
+}
+
+#[test]
+fn extract_protection_observations_preserves_safety_latch_as_output_suppressed() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_fuel_model(test_fuel_model());
+
+    let result = runtime.step(
+        StepInputs {
+            safety_latch_request: true,
+            ..running_step_inputs(1_000, 3_000, true, true)
+        },
+        running_control_inputs(1_000, 3_000),
+    );
+    let snapshot = runtime.snapshot();
+
+    let observed = extract_runtime_observed_surface(&result, &snapshot);
+
+    assert_eq!(
+        observed.runtime_protection,
+        RuntimeProtectionObservations {
+            level: RuntimeProtectionLevel::ShutdownDriving,
+            source: RuntimeProtectionSource::SafetyLatch,
+            action: RuntimeProtectionAction::OutputSuppressed,
+            persistence: RuntimeProtectionPersistence::LatchedUntilClear,
+        }
+    );
+}
+
+#[test]
+fn direct_pw_fuel_cut_request_suppresses_injector_outputs_but_keeps_ignition() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_fuel_model(test_fuel_model());
+    runtime.set_direct_cut_requests(true, false);
+
+    let result = runtime.step(
+        running_step_inputs(1_000, 3000, true, true),
+        running_control_inputs(1_000, 3000),
+    );
+
+    assert!(result.control.fuel_cut);
+    assert!(!result.control.spark_cut);
+    assert_eq!(
+        result.control.fuel_intent.pulse_width_us,
+        PulseWidthUs::new(0)
+    );
+    assert!(runtime.snapshot().fuel_cut);
+    assert!(!runtime.snapshot().spark_cut);
+
+    let mut outputs = OutputTransitionBatch::<4>::new();
+    let mut aux = AuxCommandBatch::<RUNTIME_AUX_COMMAND_CAP>::new();
+    let status = lower_action_batch_to_board_batches(result.actions, &mut outputs, &mut aux)
+        .expect("direct pw fuel-cut actions should lower");
+
+    assert_eq!(status.scheduled_output_transitions, 2);
+    assert!(outputs
+        .as_slice()
+        .iter()
+        .all(|transition| matches!(transition.output, EcuOutput::Ignition(_))));
+}
+
+#[test]
+fn direct_pw_spark_cut_request_suppresses_ignition_outputs_but_keeps_injection() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_fuel_model(test_fuel_model());
+    runtime.set_direct_cut_requests(false, true);
+
+    let result = runtime.step(
+        running_step_inputs(1_000, 3000, true, true),
+        running_control_inputs(1_000, 3000),
+    );
+
+    assert!(!result.control.fuel_cut);
+    assert!(result.control.spark_cut);
+    assert!(result.control.fuel_intent.pulse_width_us.get() > 0);
+    assert!(!runtime.snapshot().fuel_cut);
+    assert!(runtime.snapshot().spark_cut);
+
+    let mut outputs = OutputTransitionBatch::<4>::new();
+    let mut aux = AuxCommandBatch::<RUNTIME_AUX_COMMAND_CAP>::new();
+    let status = lower_action_batch_to_board_batches(result.actions, &mut outputs, &mut aux)
+        .expect("direct pw spark-cut actions should lower");
+
+    assert_eq!(status.scheduled_output_transitions, 2);
+    assert!(outputs
+        .as_slice()
+        .iter()
+        .all(|transition| matches!(transition.output, EcuOutput::Injector(_))));
+}
+
+#[test]
+fn direct_pw_safety_latch_holds_until_off_clear() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_fuel_model(test_fuel_model());
+
+    let latched = runtime.step(
+        StepInputs {
+            safety_latch_request: true,
+            ..running_step_inputs(1_000, 3000, true, true)
+        },
+        running_control_inputs(1_000, 3000),
+    );
+    assert!(runtime.snapshot().safety_latched);
+    assert!(latched.control.fuel_cut);
+    assert!(latched.control.spark_cut);
+
+    let mut outputs = OutputTransitionBatch::<4>::new();
+    let mut aux = AuxCommandBatch::<RUNTIME_AUX_COMMAND_CAP>::new();
+    let status = lower_action_batch_to_board_batches(latched.actions, &mut outputs, &mut aux)
+        .expect("latched direct pw actions should lower");
+    assert_eq!(status.scheduled_output_transitions, 0);
+
+    let held = runtime.step(
+        running_step_inputs(2_000, 3000, true, true),
+        running_control_inputs(2_000, 3000),
+    );
+    assert!(runtime.snapshot().safety_latched);
+    assert!(held.control.fuel_cut);
+    assert!(held.control.spark_cut);
+
+    let _ = runtime.step(
+        StepInputs {
+            now_us: Micros::new(3_000),
+            rpm: 0,
+            load_kpa10: 0,
+            angle_x10: 0,
+            trigger_synced: false,
+            cam_seen: false,
+            launch_armed: false,
+            flat_shift_armed: false,
+            safety_latch_request: false,
+        },
+        running_control_inputs(3_000, 0),
+    );
+    let cleared = runtime.step(
+        running_step_inputs(4_000, 3000, true, true),
+        running_control_inputs(4_000, 3000),
+    );
+    assert!(!runtime.snapshot().safety_latched);
+    assert!(!cleared.control.fuel_cut);
+    assert!(!cleared.control.spark_cut);
+}
+
+#[test]
+fn direct_pw_sync_loss_sets_paired_cut_and_cancels_outputs() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_fuel_model(test_fuel_model());
+
+    let armed = runtime.step(
+        running_step_inputs(1_000, 3000, true, true),
+        running_control_inputs(1_000, 3000),
+    );
+    assert!(!armed.control.fuel_cut);
+    assert!(!armed.control.spark_cut);
+    assert!(armed.actions.iter().any(|action| {
+        matches!(
+            action,
+            Action::ArmScheduler { .. } | Action::ArmInjection(_) | Action::ArmIgnition(_)
+        )
+    }));
+
+    let lost = runtime.step(
+        running_step_inputs(2_000, 3000, false, false),
+        running_control_inputs(2_000, 3000),
+    );
+
+    assert_eq!(
+        runtime.engine.engine_time_authority.crank,
+        CrankSyncState::SyncLost
+    );
+    assert!(lost.control.fuel_cut);
+    assert!(lost.control.spark_cut);
+    assert_eq!(
+        lost.control.fuel_intent.pulse_width_us,
+        PulseWidthUs::new(0)
+    );
+    assert!(runtime.snapshot().fuel_cut);
+    assert!(runtime.snapshot().spark_cut);
+
+    let mut actions = lost.actions.iter();
+    assert_eq!(
+        actions.next(),
+        Some(Action::CancelScheduler(CancelReason::SyncLoss))
+    );
+    assert_eq!(actions.next(), Some(Action::PublishSnapshot));
+    assert!(actions.next().is_none());
+    assert_eq!(arm_scheduler_count(lost.actions), 0);
+    assert_eq!(arm_injection_count(lost.actions), 0);
+    assert_eq!(arm_ignition_count(lost.actions), 0);
+    assert_eq!(
+        runtime.scheduler.mode(),
+        ecu_scheduler::SchedulerMode::Suspended
+    );
+
+    let mut outputs = OutputTransitionBatch::<4>::new();
+    let mut aux = AuxCommandBatch::<RUNTIME_AUX_COMMAND_CAP>::new();
+    let status = lower_action_batch_to_board_batches(lost.actions, &mut outputs, &mut aux)
+        .expect("sync-loss direct pw actions should lower");
+    assert_eq!(status.scheduled_output_transitions, 0);
+    assert!(status.cancel_scheduled_outputs());
+    assert!(outputs.is_empty());
 }
 
 #[test]
@@ -1492,7 +3587,9 @@ fn runtime_step_preserves_explicit_high_resolution_torque_request_observation() 
                 mapdot_kpa_s: 0,
             },
             lambda: LambdaTrimInputs {
+                now_us: Micros::new(1_900),
                 clt_c: 80,
+                just_started: false,
                 lambda_valid: true,
                 measured_lambda100: ecu_domain::Lambda100::new(100),
                 requested_open_loop: false,
@@ -1506,6 +3603,7 @@ fn runtime_step_preserves_explicit_high_resolution_torque_request_observation() 
                 false,
                 Rpm::new(3_000),
             ),
+            fuel_sensors: FuelSensorInputs::default(),
             knock_intensity_x100: 0,
         },
     );
@@ -1671,8 +3769,11 @@ fn typed_fuel_input_propagates_mode_and_afr_override_into_semantic_input() {
         iat_c10: 300,
         baro_kpa10: Kpa10::new(1000),
         vbatt_mv: 12100,
+        maf_valid: true,
         lambda_valid: true,
         lambda_measured: Lambda100::new(97),
+        requested_open_loop: false,
+        baro_valid: true,
         sync: SyncState::Locked { cam_ref: false },
         mode: FuelEngineMode::Running,
         launch_armed: true,
@@ -1692,6 +3793,9 @@ fn typed_fuel_input_propagates_mode_and_afr_override_into_semantic_input() {
     assert_eq!(semantic.mode, RuntimeSemanticEngineMode::Running);
     assert!(semantic.launch_armed);
     assert!(!semantic.flat_shift_armed);
+    assert!(semantic.lambda_valid);
+    assert_eq!(semantic.lambda_measured, Lambda100::new(97));
+    assert!(!semantic.requested_open_loop);
     assert!(!semantic.fuel_cut);
     assert!(!semantic.spark_cut);
     assert!(!semantic.direct_fuel_cut_request);
@@ -1717,14 +3821,146 @@ fn maf_strategy_uses_maf_signal_instead_of_map_load() {
 
     runtime.configure_maf(calibration, state);
     runtime.engine.load_kpa10 = Kpa10::new(400);
-    let maf_inputs = running_control_inputs(1_000, 3000);
-    // Keep control inputs stable; runtime FuelInputSnapshot now carries maf_x100.
+    let mut maf_inputs = running_control_inputs(1_000, 3000);
+    maf_inputs.fuel_sensors = FuelSensorInputs {
+        maf_valid: true,
+        maf_x100: 100,
+        iat_c10: 250,
+        vbatt_mv: 12_000,
+        baro_valid: true,
+        baro_kpa10: Kpa10::new(1_010),
+    };
     let maf_result = runtime.step(running_step_inputs(1_000, 3000, true, true), maf_inputs);
 
-    // MAF path maps maf_x100 into semantic load and must not collapse to the MAP path value.
+    // MAF path must use the explicit control-side sensor ingress, not a placeholder zero or MAP load.
     assert_ne!(
         map_result.control.fuel_intent.pulse_width_us,
         maf_result.control.fuel_intent.pulse_width_us
+    );
+}
+
+#[test]
+fn maf_strategy_invalid_signal_fails_closed_instead_of_using_placeholder_load() {
+    let mut runtime = EngineRuntime::new();
+    let calibration = semantic_fuel_calibration_with_ve_cells(4000, 9000);
+    runtime.configure_maf(calibration, RuntimeSemanticState::default());
+    let mut control_inputs = running_control_inputs(1_000, 3000);
+    control_inputs.fuel_sensors = FuelSensorInputs {
+        maf_valid: false,
+        maf_x100: 100,
+        iat_c10: 250,
+        vbatt_mv: 12_000,
+        baro_valid: true,
+        baro_kpa10: Kpa10::new(1_010),
+    };
+
+    let result = runtime.step(running_step_inputs(1_000, 3000, true, true), control_inputs);
+
+    assert!(result.control.fuel_cut);
+    assert!(result.control.spark_cut);
+    assert_eq!(
+        result.control.fuel_intent.pulse_width_us,
+        PulseWidthUs::new(0)
+    );
+    assert_eq!(result.control.fuel_intent.observations.ve_pct_x100, None);
+    assert_eq!(result.control.fuel_intent.observations.pw_corr_us, 0);
+    assert!(runtime.snapshot().fuel_cut);
+    assert!(runtime.snapshot().spark_cut);
+    assert_eq!(arm_injection_count(result.actions), 0);
+    assert_eq!(arm_ignition_count(result.actions), 0);
+
+    let mut outputs = OutputTransitionBatch::<4>::new();
+    let mut aux = AuxCommandBatch::<RUNTIME_AUX_COMMAND_CAP>::new();
+    let status = lower_action_batch_to_board_batches(result.actions, &mut outputs, &mut aux)
+        .expect("invalid MAF cut actions should lower");
+    assert_eq!(status.scheduled_output_transitions, 0);
+    assert!(outputs.is_empty());
+    assert!(aux.is_empty());
+}
+
+#[test]
+fn runtime_step_uses_explicit_fuel_sensor_corrections_in_semantic_path() {
+    let mut calibration = semantic_fuel_calibration_with_ve_cells(7000, 7000);
+    calibration.iat_corr_curve.axis = RuntimeSemanticAxis16 {
+        len: 2,
+        values: [0, 1000, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    };
+    calibration.iat_corr_curve.values = [1050, 900, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    calibration.baro_corr_curve.axis = RuntimeSemanticAxis16 {
+        len: 2,
+        values: [900, 1100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    };
+    calibration.baro_corr_curve.values = [900, 1100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    calibration.vbat_corr_curve.axis = RuntimeSemanticAxis16 {
+        len: 2,
+        values: [11_000, 14_000, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    };
+    calibration.vbat_corr_curve.values = [900, 1100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+
+    let run_with_sensors = |fuel_sensors| {
+        let mut runtime = EngineRuntime::new();
+        runtime.configure_speed_density_ve(calibration, RuntimeSemanticState::default());
+        let mut inputs = running_control_inputs(1_000, 3000);
+        inputs.fuel_sensors = fuel_sensors;
+        runtime.step(running_step_inputs(1_000, 3000, true, true), inputs)
+    };
+
+    let unfavorable = run_with_sensors(FuelSensorInputs {
+        maf_valid: false,
+        maf_x100: 0,
+        iat_c10: 900,
+        vbatt_mv: 11_000,
+        baro_valid: true,
+        baro_kpa10: Kpa10::new(900),
+    });
+    let favorable = run_with_sensors(FuelSensorInputs {
+        maf_valid: false,
+        maf_x100: 0,
+        iat_c10: 100,
+        vbatt_mv: 14_000,
+        baro_valid: true,
+        baro_kpa10: Kpa10::new(1_100),
+    });
+
+    assert!(
+        favorable.control.fuel_intent.pulse_width_us
+            > unfavorable.control.fuel_intent.pulse_width_us
+    );
+}
+
+#[test]
+fn runtime_step_ignores_invalid_baro_value_in_semantic_path() {
+    let mut calibration = semantic_fuel_calibration_with_ve_cells(7000, 7000);
+    calibration.baro_corr_curve.axis = RuntimeSemanticAxis16 {
+        len: 2,
+        values: [500, 1_500, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    };
+    calibration.baro_corr_curve.values = [500, 1_500, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+
+    let run_with_baro = |baro_valid, baro_kpa10| {
+        let mut runtime = EngineRuntime::new();
+        runtime.configure_speed_density_ve(calibration, RuntimeSemanticState::default());
+        let mut inputs = running_control_inputs(1_000, 3000);
+        inputs.fuel_sensors = FuelSensorInputs {
+            baro_valid,
+            baro_kpa10,
+            ..FuelSensorInputs::default()
+        };
+        runtime.step(running_step_inputs(1_000, 3000, true, true), inputs)
+    };
+
+    let invalid_low = run_with_baro(false, Kpa10::new(500));
+    let invalid_high = run_with_baro(false, Kpa10::new(1_500));
+    let valid_low = run_with_baro(true, Kpa10::new(500));
+    let valid_high = run_with_baro(true, Kpa10::new(1_500));
+
+    assert_eq!(
+        invalid_low.control.fuel_intent.pulse_width_us,
+        invalid_high.control.fuel_intent.pulse_width_us
+    );
+    assert!(
+        valid_high.control.fuel_intent.pulse_width_us
+            > valid_low.control.fuel_intent.pulse_width_us
     );
 }
 
@@ -2046,6 +4282,45 @@ fn semantic_fuel_advance_trim_combines_soft_rev_and_knock_retard() {
 }
 
 #[test]
+fn semantic_fuel_deadtime_uses_voltage_and_pressure_axes() {
+    let mut calibration = semantic_fuel_calibration_with_ve_cells(0, 0);
+    calibration.required_fuel_us = 0;
+    let mut values = [[0u16; RUNTIME_SEMANTIC_TABLE_LEN]; RUNTIME_SEMANTIC_TABLE_LEN];
+    values[0][0] = 100;
+    values[0][1] = 200;
+    values[1][0] = 300;
+    values[1][1] = 500;
+    calibration.deadtime_table_us = RuntimeSemanticDeadtimeTableU16 {
+        vbat_mv_axis: RuntimeSemanticAxis16 {
+            len: 2,
+            values: [10_000, 14_000, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        },
+        pressure_kpa10_axis: RuntimeSemanticAxis16 {
+            len: 2,
+            values: [800, 1200, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        },
+        values,
+    };
+
+    let out = runtime_semantic_evaluate_fuel(
+        &calibration,
+        RuntimeSemanticInputSnapshot {
+            rpm: Rpm::new(6500),
+            map_kpa10: Kpa10::new(1000),
+            load_kpa10: Kpa10::new(100),
+            baro_kpa10: Kpa10::new(1000),
+            vbatt_mv: 12_000,
+            ..semantic_schedule_input(3_000, SyncState::Locked { cam_ref: false })
+        },
+        RuntimeSemanticState::default(),
+    )
+    .expect("semantic deadtime eval");
+
+    assert_eq!(out.pw_base_us, 0);
+    assert_eq!(out.pw_corr_us, 275);
+}
+
+#[test]
 fn semantic_fuel_correction_order_matches_spec_pipeline() {
     let mut calibration = semantic_fuel_calibration_with_ve_cells(8000, 8000);
     calibration.required_fuel_us = 2000;
@@ -2062,7 +4337,7 @@ fn semantic_fuel_correction_order_matches_spec_pipeline() {
     calibration.iat_corr_curve.values = [900, 900, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
     calibration.baro_corr_curve = semantic_curve_u16(1100);
     calibration.vbat_corr_curve = semantic_curve_u16(950);
-    calibration.deadtime_table_us = semantic_table_u16(300);
+    calibration.deadtime_table_us = semantic_deadtime_table_u16(300);
     calibration.ae_shot_curve_us = semantic_curve_u16(200);
     calibration.ae_decay_steps_curve = semantic_curve_u16(1);
     calibration.ae_decay_ratio_curve_x1000 = semantic_curve_u16(1000);
@@ -2077,6 +4352,9 @@ fn semantic_fuel_correction_order_matches_spec_pipeline() {
         iat_c10: 500,
         baro_kpa10: Kpa10::new(1000),
         vbatt_mv: 12_000,
+        lambda_valid: true,
+        lambda_measured: Lambda100::new(100),
+        requested_open_loop: false,
         knock_intensity_x100: 0,
         launch_armed: false,
         flat_shift_armed: false,
@@ -2111,6 +4389,7 @@ fn lambda_integrator_freezes_when_engine_is_cold() {
             clt_c10: 650,
             ..semantic_schedule_input(3000, SyncState::Locked { cam_ref: false })
         },
+        1470,
         false,
         false,
         123,
@@ -2128,6 +4407,7 @@ fn lambda_integrator_freezes_when_fuel_cut_is_active() {
     let (corr, integ) = runtime_semantic_lambda_step(
         &cal,
         &semantic_schedule_input(3000, SyncState::Locked { cam_ref: false }),
+        1470,
         true,
         false,
         77,
@@ -2148,16 +4428,73 @@ fn lambda_integrator_updates_when_not_frozen_and_ki_enabled() {
         &cal,
         &RuntimeSemanticInputSnapshot {
             clt_c10: 900,
+            lambda_measured: Lambda100::new(95),
             ..semantic_schedule_input(3000, SyncState::Locked { cam_ref: false })
         },
+        1470,
         false,
         false,
         0,
         false,
     );
-    assert_eq!(corr, 1000);
-    assert_eq!(integ.acc, 0);
+    assert_eq!(corr, 1050);
+    assert_eq!(integ.acc, 50);
     assert!(!integ.frozen);
+}
+
+#[test]
+fn lambda_integrator_freezes_when_requested_open_loop() {
+    let mut cal = semantic_fuel_calibration_with_ve_cells(7000, 7000);
+    cal.lambda_kp_x1000 = 1000;
+    cal.lambda_ki_x1000 = 1000;
+    let (corr, integ) = runtime_semantic_lambda_step(
+        &cal,
+        &RuntimeSemanticInputSnapshot {
+            clt_c10: 900,
+            lambda_measured: Lambda100::new(95),
+            requested_open_loop: true,
+            ..semantic_schedule_input(3000, SyncState::Locked { cam_ref: false })
+        },
+        1470,
+        false,
+        false,
+        123,
+        false,
+    );
+    assert_eq!(corr, 1000);
+    assert_eq!(integ.acc, 123);
+    assert!(integ.frozen);
+}
+
+#[test]
+fn semantic_lambda_correction_changes_pulse_width_when_sensor_is_valid() {
+    let mut calibration = semantic_fuel_calibration_with_ve_cells(7000, 7000);
+    calibration.lambda_kp_x1000 = 1000;
+
+    let rich = runtime_semantic_evaluate_fuel(
+        &calibration,
+        RuntimeSemanticInputSnapshot {
+            lambda_valid: true,
+            lambda_measured: Lambda100::new(95),
+            ..semantic_schedule_input(3000, SyncState::Locked { cam_ref: false })
+        },
+        RuntimeSemanticState::default(),
+    )
+    .expect("rich lambda semantic eval");
+    let lean = runtime_semantic_evaluate_fuel(
+        &calibration,
+        RuntimeSemanticInputSnapshot {
+            lambda_valid: true,
+            lambda_measured: Lambda100::new(105),
+            ..semantic_schedule_input(3000, SyncState::Locked { cam_ref: false })
+        },
+        RuntimeSemanticState::default(),
+    )
+    .expect("lean lambda semantic eval");
+
+    assert!(rich.pw_corr_us > lean.pw_corr_us);
+    assert_eq!(rich.lambda_correction_x1000, 1050);
+    assert_eq!(lean.lambda_correction_x1000, 950);
 }
 
 #[test]
@@ -2355,6 +4692,48 @@ fn queue_pressure_and_degraded_authority_keep_runtime_output_suppressed() {
 }
 
 #[test]
+fn full_ecu_live_path_enforces_fuel_and_spark_cuts_independently() {
+    for (fuel_cut, spark_cut, expected_injection, expected_ignition) in [
+        (false, false, 6, 6),
+        (true, false, 0, 6),
+        (false, true, 6, 0),
+        (true, true, 0, 0),
+    ] {
+        let mut runtime = EngineRuntime::new();
+        runtime.configure_fuel_model(test_fuel_model());
+        runtime.configure_full_ecu(inline_sequential_cop_profile());
+        runtime.set_direct_cut_requests(fuel_cut, spark_cut);
+
+        let result = runtime.step_with_authority(
+            AuthorityStepInputs::new(
+                Micros::new(10),
+                3000,
+                700,
+                120,
+                validated_expert_authority(),
+                false,
+                false,
+                false,
+            ),
+            running_control_inputs(10, 3000),
+        );
+
+        assert_eq!(result.control.fuel_cut, fuel_cut);
+        assert_eq!(result.control.spark_cut, spark_cut);
+        assert_eq!(arm_injection_count(result.actions), expected_injection);
+        assert_eq!(arm_ignition_count(result.actions), expected_ignition);
+        if fuel_cut && spark_cut {
+            assert_eq!(result.actions.iter().count(), 2);
+            assert!(matches!(result.actions.iter().next(), Some(Action::Idle)));
+            assert!(result
+                .actions
+                .iter()
+                .any(|action| matches!(action, Action::PublishSnapshot)));
+        }
+    }
+}
+
+#[test]
 fn runtime_differential_mapping_matches_oracle_fuel_and_state() {
     let input = canonical_runtime_input();
     let oracle = spec_step(
@@ -2427,7 +4806,9 @@ fn runtime_differential_mapping_matches_oracle_fuel_and_state() {
                 mapdot_kpa_s: 0,
             },
             lambda: LambdaTrimInputs {
+                now_us: ecu_domain::Micros::new(10_000),
                 clt_c: 80,
+                just_started: false,
                 lambda_valid: true,
                 measured_lambda100: ecu_domain::Lambda100::new(100),
                 requested_open_loop: false,
@@ -2441,6 +4822,7 @@ fn runtime_differential_mapping_matches_oracle_fuel_and_state() {
                 false,
                 ecu_domain::Rpm::new(1000),
             ),
+            fuel_sensors: FuelSensorInputs::default(),
             knock_intensity_x100: 0,
         },
     );
@@ -2481,6 +4863,16 @@ fn engine_runtime_layout_defaults_cleanly() {
     assert!(!runtime.calibration.staged_dirty);
     assert_eq!(runtime.scheduler.mode(), ecu_scheduler::SchedulerMode::Idle);
     assert_eq!(runtime.runtime_snapshot.engine.phase, EnginePhase::Off);
+    assert_eq!(runtime.runtime_snapshot.calibration, runtime.calibration);
+    assert_eq!(runtime.runtime_snapshot.scheduler, runtime.scheduler);
+    assert_eq!(
+        runtime.runtime_snapshot.output_profile,
+        runtime.output_profile()
+    );
+    assert_eq!(
+        runtime.runtime_snapshot.fuel_strategy_mode,
+        RuntimeFuelStrategyMode::DirectPulseWidthTable
+    );
     assert_eq!(runtime.calibration_snapshot, CalibrationSnapshot::default());
     assert_eq!(
         runtime.output_profile(),
@@ -2709,7 +5101,9 @@ fn runtime_step_validates_inputs_and_orders_derivation() {
                 mapdot_kpa_s: 90,
             },
             lambda: LambdaTrimInputs {
+                now_us: Micros::new(0),
                 clt_c: 80,
+                just_started: true,
                 lambda_valid: true,
                 measured_lambda100: ecu_domain::Lambda100::new(96),
                 requested_open_loop: false,
@@ -2723,6 +5117,7 @@ fn runtime_step_validates_inputs_and_orders_derivation() {
                 false,
                 Rpm::new(2800),
             ),
+            fuel_sensors: FuelSensorInputs::default(),
             knock_intensity_x100: 0,
         },
     );
@@ -2796,7 +5191,9 @@ fn runtime_full_ecu_limp_home_emits_fan_and_profile_aux_commands() {
                 mapdot_kpa_s: 0,
             },
             lambda: LambdaTrimInputs {
+                now_us: Micros::new(5_000),
                 clt_c: 80,
+                just_started: false,
                 lambda_valid: true,
                 measured_lambda100: ecu_domain::Lambda100::new(100),
                 requested_open_loop: false,
@@ -2810,6 +5207,7 @@ fn runtime_full_ecu_limp_home_emits_fan_and_profile_aux_commands() {
                 false,
                 Rpm::new(3000),
             ),
+            fuel_sensors: FuelSensorInputs::default(),
             knock_intensity_x100: 0,
         },
     );
@@ -2844,7 +5242,7 @@ fn runtime_full_ecu_limp_home_emits_fan_and_profile_aux_commands() {
     }
 
     assert_eq!(injection_count, 6);
-    assert_eq!(ignition_count, 3);
+    assert_eq!(ignition_count, 6);
     assert!(aux_seen);
     assert!(publish_seen);
 }
@@ -2899,6 +5297,56 @@ fn runtime_action_capacity_covers_max_full_ecu_aux_persist_snapshot_step() {
 }
 
 #[test]
+fn runtime_full_ecu_board_output_capacity_covers_max_cop_step_exactly() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_fuel_model(test_fuel_model());
+    runtime.configure_full_ecu(inline_sequential_cop_profile());
+    runtime.set_engine_time_authority(validated_expert_authority());
+
+    let result = runtime.step(
+        running_step_inputs(5_000, 3_000, true, true),
+        running_control_inputs(5_000, 3_000),
+    );
+
+    assert_eq!(arm_injection_count(result.actions), 6);
+    assert_eq!(arm_ignition_count(result.actions), 6);
+
+    let mut exact = BoardApiBatchExecutor::<24, RUNTIME_AUX_COMMAND_CAP>::new();
+    exact
+        .execute_batch(result.actions)
+        .expect("max six-cylinder COP output batch should fit exact transition capacity");
+    assert_eq!(exact.status().scheduled_output_transitions, 24);
+    assert_eq!(exact.output_transitions().len(), 24);
+    assert_eq!(exact.aux_commands().len(), 0);
+    assert_eq!(
+        exact
+            .output_transitions()
+            .as_slice()
+            .iter()
+            .filter(|transition| matches!(transition.output, EcuOutput::Injector(_)))
+            .count(),
+        12
+    );
+    assert_eq!(
+        exact
+            .output_transitions()
+            .as_slice()
+            .iter()
+            .filter(|transition| matches!(transition.output, EcuOutput::Ignition(_)))
+            .count(),
+        12
+    );
+
+    let mut short = BoardApiBatchExecutor::<23, RUNTIME_AUX_COMMAND_CAP>::new();
+    assert_eq!(
+        short.execute_batch(result.actions),
+        Err(ActionLoweringError::OutputBatchFull)
+    );
+    assert!(short.output_transitions().is_empty());
+    assert!(short.aux_commands().is_empty());
+}
+
+#[test]
 fn runtime_unsynced_path_emits_idle_and_snapshot() {
     let mut runtime = EngineRuntime::new();
     runtime.configure_fuel_model(test_fuel_model());
@@ -2925,7 +5373,9 @@ fn runtime_unsynced_path_emits_idle_and_snapshot() {
                 mapdot_kpa_s: 0,
             },
             lambda: LambdaTrimInputs {
+                now_us: Micros::new(3_000),
                 clt_c: 80,
+                just_started: false,
                 lambda_valid: true,
                 measured_lambda100: ecu_domain::Lambda100::new(100),
                 requested_open_loop: false,
@@ -2939,6 +5389,7 @@ fn runtime_unsynced_path_emits_idle_and_snapshot() {
                 false,
                 Rpm::new(0),
             ),
+            fuel_sensors: FuelSensorInputs::default(),
             knock_intensity_x100: 0,
         },
     );
@@ -2981,7 +5432,9 @@ fn runtime_shutdown_path_emits_cancel_and_snapshot() {
                 mapdot_kpa_s: 0,
             },
             lambda: LambdaTrimInputs {
+                now_us: Micros::new(4_000),
                 clt_c: 80,
+                just_started: false,
                 lambda_valid: true,
                 measured_lambda100: ecu_domain::Lambda100::new(100),
                 requested_open_loop: false,
@@ -2995,6 +5448,7 @@ fn runtime_shutdown_path_emits_cancel_and_snapshot() {
                 false,
                 Rpm::new(3000),
             ),
+            fuel_sensors: FuelSensorInputs::default(),
             knock_intensity_x100: 0,
         },
     );
@@ -3006,6 +5460,23 @@ fn runtime_shutdown_path_emits_cancel_and_snapshot() {
     );
     assert_eq!(actions.next(), Some(Action::PublishSnapshot));
     assert!(actions.next().is_none());
+    assert_eq!(result.operating_mode, ControlMode::Shutdown);
+    assert!(result.control.fuel_cut);
+    assert!(result.control.spark_cut);
+    assert_eq!(
+        result.control.fuel_intent.pulse_width_us,
+        PulseWidthUs::new(0)
+    );
+    assert!(runtime.snapshot().fuel_cut);
+    assert!(runtime.snapshot().spark_cut);
+
+    let mut outputs = OutputTransitionBatch::<4>::new();
+    let mut aux = AuxCommandBatch::<RUNTIME_AUX_COMMAND_CAP>::new();
+    let status = lower_action_batch_to_board_batches(result.actions, &mut outputs, &mut aux)
+        .expect("shutdown direct pw actions should lower");
+    assert_eq!(status.scheduled_output_transitions, 0);
+    assert!(status.cancel_scheduled_outputs());
+    assert!(outputs.is_empty());
 }
 
 #[test]
@@ -3065,8 +5536,8 @@ fn runtime_ignition_only_wasted_spark_accepts_crank_only_authority() {
     }
 
     assert_eq!(runtime.engine.sync, SyncState::Locked { cam_ref: false });
-    assert_eq!(seen, 2);
-    assert_eq!(&channels[..seen], &[0, 1]);
+    assert_eq!(seen, 3);
+    assert_eq!(&channels[..seen], &[0, 1, 2]);
     assert_eq!(arm_scheduler_count(result.actions), 0);
     assert!(publish_seen);
 }
@@ -3099,7 +5570,7 @@ fn runtime_ignition_only_single_coil_uses_one_channel() {
         }
     }
 
-    assert_eq!(seen, 1);
+    assert_eq!(seen, 2);
     assert_eq!(arm_scheduler_count(result.actions), 0);
 }
 
@@ -3256,7 +5727,7 @@ fn runtime_ignition_only_sync_loss_cancels_pending_outputs() {
         spark_only_control_inputs(1_000, 3_000),
     );
 
-    assert_eq!(arm_ignition_count(first.actions), 2);
+    assert_eq!(arm_ignition_count(first.actions), 3);
     assert_eq!(
         runtime.scheduler.mode(),
         ecu_scheduler::SchedulerMode::Armed
@@ -3381,7 +5852,9 @@ fn runtime_full_ecu_validated_authority_emits_six_injectors_and_wasted_spark() {
                 mapdot_kpa_s: 0,
             },
             lambda: LambdaTrimInputs {
+                now_us: Micros::new(5_000),
                 clt_c: 80,
+                just_started: false,
                 lambda_valid: true,
                 measured_lambda100: ecu_domain::Lambda100::new(100),
                 requested_open_loop: false,
@@ -3395,24 +5868,27 @@ fn runtime_full_ecu_validated_authority_emits_six_injectors_and_wasted_spark() {
                 false,
                 Rpm::new(3000),
             ),
+            fuel_sensors: FuelSensorInputs::default(),
             knock_intensity_x100: 0,
         },
     );
 
     let mut injector_channels = [u8::MAX; 6];
     let mut ignition_channels = [u8::MAX; 6];
-    let mut start_times = [0u32; 6];
+    let mut injection_start_times = [0u32; 6];
+    let mut ignition_fire_times = [0u32; 6];
     let mut injection_seen = 0usize;
     let mut ignition_seen = 0usize;
     let mut publish_seen = false;
     for action in result.actions.iter() {
         match action {
             Action::ArmInjection(injection) => {
-                start_times[injection_seen] = injection.start_at.get();
+                injection_start_times[injection_seen] = injection.start_at.get();
                 injector_channels[injection_seen] = injection.plan.output.channel().get();
                 injection_seen += 1;
             }
             Action::ArmIgnition(ignition) => {
+                ignition_fire_times[ignition_seen] = ignition.end_at.get();
                 ignition_channels[ignition_seen] = ignition.plan.output.channel().get();
                 ignition_seen += 1;
             }
@@ -3422,26 +5898,229 @@ fn runtime_full_ecu_validated_authority_emits_six_injectors_and_wasted_spark() {
     }
 
     assert_eq!(injection_seen, 6);
-    assert_eq!(ignition_seen, 3);
+    assert_eq!(ignition_seen, 6);
     assert_eq!(arm_scheduler_count(result.actions), 0);
-    assert!(start_times[..injection_seen]
-        .windows(2)
-        .all(|window| window[1] - window[0] == 6_666));
-    assert!(start_times[injection_seen - 1] - start_times[0] < 40_000);
     assert_eq!(injector_channels, [0, 1, 2, 3, 4, 5]);
-    assert_eq!(&ignition_channels[..ignition_seen], &[0, 1, 2]);
-    assert!(ignition_channels[..ignition_seen]
-        .windows(2)
-        .all(|window| window[1] >= window[0]));
+    assert_eq!(&ignition_channels[..ignition_seen], &[0, 1, 2, 0, 1, 2]);
+    assert!(injection_start_times[..injection_seen]
+        .iter()
+        .all(|at_us| *at_us >= 5_000));
+    assert!(ignition_fire_times[..ignition_seen]
+        .iter()
+        .all(|at_us| *at_us >= 5_000));
     assert!(publish_seen);
 }
 
 #[test]
-fn runtime_full_ecu_cycle_slot_spacing_is_sixth_of_720_degree_cycle() {
-    let profile = inline_sequential_wasted_spark_profile();
+fn runtime_full_ecu_injection_timing_changes_with_current_angle() {
+    let make_runtime = || {
+        let mut runtime = EngineRuntime::new();
+        runtime.configure_fuel_model(test_fuel_model());
+        runtime.configure_full_ecu(inline_sequential_wasted_spark_profile());
+        runtime.set_engine_time_authority(validated_expert_authority());
+        runtime
+    };
 
-    assert_eq!(profile.cycle_slot_us(Rpm::new(0)), 0);
-    assert_eq!(profile.cycle_slot_us(Rpm::new(3_000)), 6_666);
+    let mut early_angle_runtime = make_runtime();
+    let mut late_angle_runtime = make_runtime();
+
+    let early = early_angle_runtime.step(
+        running_step_inputs(5_000, 3_000, true, true),
+        running_control_inputs(5_000, 3_000),
+    );
+    let late = late_angle_runtime.step(
+        StepInputs {
+            now_us: Micros::new(5_000),
+            rpm: 3_000,
+            load_kpa10: 700,
+            angle_x10: 2_600,
+            trigger_synced: true,
+            cam_seen: true,
+            launch_armed: false,
+            flat_shift_armed: false,
+            safety_latch_request: false,
+        },
+        running_control_inputs(5_000, 3_000),
+    );
+
+    let early_first_injection = early
+        .actions
+        .iter()
+        .find_map(|action| match action {
+            Action::ArmInjection(injection) => Some(injection.start_at.get()),
+            _ => None,
+        })
+        .expect("full ecu should emit at least one injector action");
+    let late_first_injection = late
+        .actions
+        .iter()
+        .find_map(|action| match action {
+            Action::ArmInjection(injection) => Some(injection.start_at.get()),
+            _ => None,
+        })
+        .expect("full ecu should emit at least one injector action");
+
+    assert_ne!(early_first_injection, late_first_injection);
+}
+
+#[test]
+fn runtime_full_ecu_ignition_timing_changes_with_current_angle() {
+    let make_runtime = || {
+        let mut runtime = EngineRuntime::new();
+        runtime.configure_fuel_model(test_fuel_model());
+        runtime.configure_full_ecu(inline_sequential_wasted_spark_profile());
+        runtime.set_engine_time_authority(validated_expert_authority());
+        runtime
+    };
+
+    let mut early_angle_runtime = make_runtime();
+    let mut late_angle_runtime = make_runtime();
+
+    let early = early_angle_runtime.step(
+        running_step_inputs(5_000, 3_000, true, true),
+        running_control_inputs(5_000, 3_000),
+    );
+    let late = late_angle_runtime.step(
+        StepInputs {
+            now_us: Micros::new(5_000),
+            rpm: 3_000,
+            load_kpa10: 700,
+            angle_x10: 2_600,
+            trigger_synced: true,
+            cam_seen: true,
+            launch_armed: false,
+            flat_shift_armed: false,
+            safety_latch_request: false,
+        },
+        running_control_inputs(5_000, 3_000),
+    );
+
+    let early_first_fire = early
+        .actions
+        .iter()
+        .find_map(|action| match action {
+            Action::ArmIgnition(ignition) => Some(ignition.end_at.get()),
+            _ => None,
+        })
+        .expect("full ecu should emit at least one ignition action");
+    let late_first_fire = late
+        .actions
+        .iter()
+        .find_map(|action| match action {
+            Action::ArmIgnition(ignition) => Some(ignition.end_at.get()),
+            _ => None,
+        })
+        .expect("full ecu should emit at least one ignition action");
+
+    assert_ne!(early_first_fire, late_first_fire);
+}
+
+#[test]
+fn runtime_full_ecu_ignition_timing_changes_with_advance() {
+    let make_runtime = || {
+        let mut runtime = EngineRuntime::new();
+        runtime.configure_fuel_model(test_fuel_model());
+        runtime.configure_full_ecu(inline_sequential_wasted_spark_profile());
+        runtime.set_engine_time_authority(validated_expert_authority());
+        runtime
+    };
+
+    let mut base_runtime = make_runtime();
+    let mut advanced_runtime = make_runtime();
+
+    let baseline = base_runtime.step(
+        running_step_inputs(5_000, 3_000, true, true),
+        running_control_inputs(5_000, 3_000),
+    );
+    let advanced = advanced_runtime.step(
+        running_step_inputs(5_000, 3_000, true, true),
+        ControlInputs {
+            ignition: IgnitionInputs::new(
+                ecu_domain::Degrees10::new(200),
+                0,
+                0,
+                0,
+                false,
+                Rpm::new(3000),
+            ),
+            ..running_control_inputs(5_000, 3_000)
+        },
+    );
+
+    let baseline_first_fire = baseline
+        .actions
+        .iter()
+        .find_map(|action| match action {
+            Action::ArmIgnition(ignition) => Some(ignition.end_at.get()),
+            _ => None,
+        })
+        .expect("full ecu should emit at least one ignition action");
+    let advanced_first_fire = advanced
+        .actions
+        .iter()
+        .find_map(|action| match action {
+            Action::ArmIgnition(ignition) => Some(ignition.end_at.get()),
+            _ => None,
+        })
+        .expect("full ecu should emit at least one ignition action");
+
+    assert_ne!(baseline_first_fire, advanced_first_fire);
+}
+
+#[test]
+fn runtime_full_ecu_fuel_cut_lowers_only_ignition_transitions() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_full_ecu(inline_sequential_wasted_spark_profile());
+    runtime.configure_speed_density_ve(
+        semantic_fuel_calibration_with_ve_cells(7000, 9000),
+        RuntimeSemanticState::default(),
+    );
+    runtime.set_direct_cut_requests(true, false);
+    runtime.set_engine_time_authority(validated_expert_authority());
+
+    let result = runtime.step(
+        running_step_inputs(5_000, 3_000, true, true),
+        running_control_inputs(5_000, 3_000),
+    );
+
+    let mut outputs = OutputTransitionBatch::<16>::new();
+    let mut aux = AuxCommandBatch::<RUNTIME_AUX_COMMAND_CAP>::new();
+    let status = lower_action_batch_to_board_batches(result.actions, &mut outputs, &mut aux)
+        .expect("full ecu fuel-cut actions should lower");
+
+    assert_eq!(status.scheduled_output_transitions, 12);
+    assert!(outputs
+        .as_slice()
+        .iter()
+        .all(|transition| matches!(transition.output, EcuOutput::Ignition(_))));
+}
+
+#[test]
+fn runtime_full_ecu_spark_cut_lowers_only_injector_transitions() {
+    let mut runtime = EngineRuntime::new();
+    runtime.configure_full_ecu(inline_sequential_wasted_spark_profile());
+    runtime.configure_speed_density_ve(
+        semantic_fuel_calibration_with_ve_cells(7000, 9000),
+        RuntimeSemanticState::default(),
+    );
+    runtime.set_direct_cut_requests(false, true);
+    runtime.set_engine_time_authority(validated_expert_authority());
+
+    let result = runtime.step(
+        running_step_inputs(5_000, 3_000, true, true),
+        running_control_inputs(5_000, 3_000),
+    );
+
+    let mut outputs = OutputTransitionBatch::<16>::new();
+    let mut aux = AuxCommandBatch::<RUNTIME_AUX_COMMAND_CAP>::new();
+    let status = lower_action_batch_to_board_batches(result.actions, &mut outputs, &mut aux)
+        .expect("full ecu spark-cut actions should lower");
+
+    assert_eq!(status.scheduled_output_transitions, 12);
+    assert!(outputs
+        .as_slice()
+        .iter()
+        .all(|transition| matches!(transition.output, EcuOutput::Injector(_))));
 }
 
 #[test]
@@ -3479,7 +6158,9 @@ fn runtime_full_ecu_cop_profile_with_validated_authority_emits_ignition_channel_
                 mapdot_kpa_s: 0,
             },
             lambda: LambdaTrimInputs {
+                now_us: Micros::new(6_000),
                 clt_c: 80,
+                just_started: false,
                 lambda_valid: true,
                 measured_lambda100: ecu_domain::Lambda100::new(100),
                 requested_open_loop: false,
@@ -3493,6 +6174,7 @@ fn runtime_full_ecu_cop_profile_with_validated_authority_emits_ignition_channel_
                 false,
                 Rpm::new(3000),
             ),
+            fuel_sensors: FuelSensorInputs::default(),
             knock_intensity_x100: 0,
         },
     );
@@ -3596,7 +6278,9 @@ fn runtime_snapshot_matches_state_after_step() {
                 mapdot_kpa_s: 0,
             },
             lambda: LambdaTrimInputs {
+                now_us: Micros::new(2_000),
                 clt_c: 80,
+                just_started: false,
                 lambda_valid: true,
                 measured_lambda100: ecu_domain::Lambda100::new(100),
                 requested_open_loop: false,
@@ -3610,6 +6294,7 @@ fn runtime_snapshot_matches_state_after_step() {
                 false,
                 Rpm::new(3000),
             ),
+            fuel_sensors: FuelSensorInputs::default(),
             knock_intensity_x100: 0,
         },
     );
@@ -3647,7 +6332,9 @@ fn sync_loss_cancels_pending_outputs() {
                 mapdot_kpa_s: 0,
             },
             lambda: LambdaTrimInputs {
+                now_us: Micros::new(1_000),
                 clt_c: 80,
+                just_started: false,
                 lambda_valid: true,
                 measured_lambda100: ecu_domain::Lambda100::new(100),
                 requested_open_loop: false,
@@ -3661,6 +6348,7 @@ fn sync_loss_cancels_pending_outputs() {
                 false,
                 Rpm::new(3000),
             ),
+            fuel_sensors: FuelSensorInputs::default(),
             knock_intensity_x100: 0,
         },
     );
@@ -3687,7 +6375,9 @@ fn sync_loss_cancels_pending_outputs() {
                 mapdot_kpa_s: 0,
             },
             lambda: LambdaTrimInputs {
+                now_us: Micros::new(2_000),
                 clt_c: 80,
+                just_started: false,
                 lambda_valid: true,
                 measured_lambda100: ecu_domain::Lambda100::new(100),
                 requested_open_loop: false,
@@ -3701,6 +6391,7 @@ fn sync_loss_cancels_pending_outputs() {
                 false,
                 Rpm::new(0),
             ),
+            fuel_sensors: FuelSensorInputs::default(),
             knock_intensity_x100: 0,
         },
     );
@@ -3796,7 +6487,9 @@ fn torque_observations_zero_allowed_when_engine_is_off() {
                 mapdot_kpa_s: 0,
             },
             lambda: LambdaTrimInputs {
+                now_us: Micros::new(500),
                 clt_c: 80,
+                just_started: false,
                 lambda_valid: true,
                 measured_lambda100: ecu_domain::Lambda100::new(100),
                 requested_open_loop: false,
@@ -3810,6 +6503,7 @@ fn torque_observations_zero_allowed_when_engine_is_off() {
                 false,
                 ecu_domain::Rpm::new(0),
             ),
+            fuel_sensors: FuelSensorInputs::default(),
             knock_intensity_x100: 0,
         },
     );

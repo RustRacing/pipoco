@@ -8,6 +8,7 @@ name = "ecu_transport"
 path = "src/lib.rs"
 
 [dependencies]
+ecu-domain = { path = "../domain" }
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 postcard = { version = "1.0", default-features = false, features = ["use-crc"] }
 bbqueue = { version = "0.5", optional = true }

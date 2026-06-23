@@ -1,5 +1,7 @@
 use ecu_domain::{Micros, PulseWidthUs};
 
+use crate::types::FuelWarmupTemperatureMode;
+
 /// Configurable startup enrichment behavior.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StartupConfig {
@@ -57,6 +59,19 @@ impl WarmupConfig {
         let configured_min = self.min_percent_x100 as i32;
         let value = configured_max - (configured_max - configured_min) * pos / span;
         value.clamp(min, max) as u16
+    }
+
+    pub fn temperature_mode(&self, clt_c: i16) -> FuelWarmupTemperatureMode {
+        if self.start_c >= self.end_c {
+            return FuelWarmupTemperatureMode::NeutralFallback;
+        }
+        if clt_c <= self.start_c {
+            return FuelWarmupTemperatureMode::ColdClamp;
+        }
+        if clt_c >= self.end_c {
+            return FuelWarmupTemperatureMode::HotClamp;
+        }
+        FuelWarmupTemperatureMode::Interpolating
     }
 }
 
@@ -206,6 +221,25 @@ impl StartupState {
         let pct = 100 + (extra * remain) / taper_us.max(1);
         pct as u16
     }
+
+    pub const fn active(&self) -> bool {
+        self.active
+    }
+
+    pub fn remaining_ms(&self, now_us: Micros, cfg: &StartupConfig) -> u16 {
+        if !self.active {
+            return 0;
+        }
+
+        let taper_us = cfg.taper_time_ms.saturating_mul(1000);
+        let elapsed = now_us.get().wrapping_sub(self.start_us.get());
+        if elapsed >= taper_us {
+            return 0;
+        }
+
+        let remain_ms = (taper_us - elapsed) / 1000;
+        remain_ms.min(u32::from(u16::MAX)) as u16
+    }
 }
 
 /// After-start enrichment state machine.
@@ -250,6 +284,25 @@ impl AfterStartState {
         let extra = cfg.percent_x100.saturating_sub(100) as u32;
         let pct = 100 + (extra * remain) / dur.max(1);
         pct as u16
+    }
+
+    pub const fn active(&self) -> bool {
+        self.active
+    }
+
+    pub fn remaining_ms(&self, now_us: Micros, cfg: &AfterStartConfig) -> u16 {
+        if !self.active {
+            return 0;
+        }
+
+        let dur_us = cfg.taper_time_ms.saturating_mul(1000);
+        let elapsed = now_us.get().wrapping_sub(self.start_us.get());
+        if elapsed >= dur_us {
+            return 0;
+        }
+
+        let remain_ms = (dur_us - elapsed) / 1000;
+        remain_ms.min(u32::from(u16::MAX)) as u16
     }
 }
 

@@ -1,30 +1,52 @@
+use crate::kv::ab::StoreIntegrityStatus;
 use crate::live_inputs::SplitSyncState;
 use crate::outputs::ScheduledActionExecutor;
 use crate::sensor_sample::map_speed_density_capture_sample;
+#[cfg(feature = "transport-can")]
+use ecu_board_api::BoardSensorValidityFlags;
 use ecu_board_api::{
     BoardSensorSnapshot, BoardSensorSnapshotCapture, CaptureSample, CaptureSampleSource,
-    CaptureSink, CommonActionTelemetry, CommonCamEdgeTelemetry, CommonControlReasonTelemetry,
-    CommonControlTelemetry, CommonDecisionTelemetry, CommonDiagnosticsTelemetry,
-    CommonEngineTelemetry, CommonEnrichmentTelemetry, CommonFaultTransitionTelemetry,
-    CommonFrontierTelemetry, CommonFuelObservationTelemetry, CommonFuelStrategyMode,
-    CommonIgnitionLimitReason, CommonLambdaMode, CommonPendingInputTelemetry, CommonSchedulerMode,
-    CommonSchedulerOwnershipTelemetry, CommonSchedulerReservationTelemetry,
+    CaptureSink, CommonActionTelemetry, CommonAfterstartTelemetry, CommonAfterstartWindowMode,
+    CommonCamEdgeTelemetry, CommonControlReasonTelemetry, CommonControlTelemetry, CommonCutReason,
+    CommonDecisionTelemetry, CommonDiagnosticsTelemetry, CommonEngineTelemetry,
+    CommonEnrichmentTelemetry, CommonFaultTransitionAction, CommonFaultTransitionEventId,
+    CommonFaultTransitionEventTelemetry, CommonFaultTransitionTelemetry, CommonFrontierFaultAction,
+    CommonFrontierFaultEventId, CommonFrontierFaultTelemetry, CommonFrontierTelemetry,
+    CommonFuelObservationTelemetry, CommonFuelStrategyMode, CommonHighRateLogTelemetry,
+    CommonIgnitionLimitReason, CommonLambdaActivity, CommonLambdaCorrectionTelemetry,
+    CommonLambdaDisableReason, CommonLambdaMode, CommonLambdaTelemetry, CommonLimpActionLevel,
+    CommonLimpActionSource, CommonLimpActionTelemetry, CommonPendingInputTelemetry,
+    CommonProtectionAction, CommonProtectionLevel, CommonProtectionPersistence,
+    CommonProtectionSource, CommonProtectionTelemetry, CommonRuntimeFaultTelemetry,
+    CommonSchedulerMode, CommonSchedulerOwnershipTelemetry, CommonSchedulerReservationTelemetry,
     CommonSchedulerStateSummaryTelemetry, CommonSchedulerWindowTelemetry,
-    CommonShiftArmingTelemetry, CommonSyncTelemetryState, CommonTorqueLimitReason,
-    CommonTorqueTelemetry, CommonTriggerEdgeTelemetry, CommonValidatedInputTelemetry,
-    EngineTimeAuthorityTelemetry, Watchdog,
+    CommonShiftArmingTelemetry, CommonStartupTelemetry, CommonStartupWindowMode,
+    CommonSyncTelemetryState, CommonTorqueLimitReason, CommonTorqueTelemetry,
+    CommonTransientEnrichmentTelemetry, CommonTriggerEdgeTelemetry, CommonValidatedInputTelemetry,
+    CommonWarmupTelemetry, CommonWarmupTemperatureMode, EngineTimeAuthorityTelemetry, Watchdog,
 };
 use ecu_calibration::{
     CalibrationPackageIdentity, PersistedCalibrationBlob, PersistedCalibrationStore,
 };
+#[cfg(feature = "transport-can")]
+use ecu_compat::constants::voltage::{BROWNOUT_CRITICAL_MV, OVERVOLTAGE_MV};
+#[cfg(feature = "transport-can")]
+use ecu_domain::diag::{DiagCode, DiagSource};
+use ecu_domain::diag::{DiagEvent, DiagLog};
 use ecu_domain::EngineTimeAuthority;
-use ecu_domain::{Degrees10, Kpa10, Micros, Rpm};
+use ecu_domain::{ControlMode, Degrees10, Kpa10, Micros, Rpm};
 use ecu_runtime::{
     Action, ActionExecutor, AuthorityStepInputs, ControlInputs, DecoderObservation, EngineRuntime,
-    RuntimeFuelStrategy, RuntimeSemanticCalibration, RuntimeSemanticState, StepResult,
-    TransportPublisher,
+    RuntimeFuelStrategy, RuntimeSemanticCalibration, RuntimeSemanticState, RuntimeSnapshot,
+    StepResult, TransportPublisher,
 };
 pub use ecu_scheduler::ScheduledTimingMetrics;
+use ecu_ts::pages::DIAG_LOG_ENTRY_COUNT;
+
+#[cfg(feature = "transport-can")]
+const OIL_PRESSURE_MIN_KPA10: Kpa10 = Kpa10::new(1_000);
+#[cfg(feature = "transport-can")]
+const FUEL_PRESSURE_MIN_KPA10: Kpa10 = Kpa10::new(2_500);
 
 /// Board-like event surface for the runtime-driven board adapters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,10 +66,106 @@ pub enum BoardEvent {
     SensorSnapshotCapture {
         capture: BoardSensorSnapshotCapture,
     },
+    PressureSnapshot {
+        now_us: Micros,
+        oil_pressure_kpa10: Kpa10,
+        fuel_pressure_kpa10: Kpa10,
+        oil_valid: bool,
+        fuel_valid: bool,
+    },
     Tick {
         now_us: Micros,
         control: ControlInputs,
     },
+}
+
+#[cfg(feature = "transport-can")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct SharedLiveDiagState {
+    low_voltage_active: bool,
+    overvoltage_active: bool,
+    knock_active: bool,
+    oil_pressure_low_active: bool,
+    fuel_pressure_low_active: bool,
+    lambda_invalid_active: bool,
+    map_range: SharedDiagLatchState,
+    tps_range: SharedDiagLatchState,
+}
+
+#[cfg(feature = "transport-can")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct SharedDiagLatchState {
+    active: bool,
+    start_us: u32,
+    in_range_since_us: u32,
+    total_us: u32,
+}
+
+#[cfg(feature = "transport-can")]
+impl SharedDiagLatchState {
+    const fn is_active(self) -> bool {
+        self.active
+    }
+
+    fn latch(&mut self, since: Micros) {
+        self.active = true;
+        self.start_us = since.get();
+        self.in_range_since_us = 0;
+    }
+
+    fn clear(&mut self, _at: Micros) {
+        self.active = false;
+    }
+}
+
+#[cfg(feature = "transport-can")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SharedSensorLimits {
+    map_min_kpa_x10: u16,
+    map_max_kpa_x10: u16,
+    tps_min_percent: u8,
+    tps_max_percent: u8,
+    clear_time_s: u16,
+}
+
+#[cfg(feature = "transport-can")]
+impl Default for SharedSensorLimits {
+    fn default() -> Self {
+        Self {
+            map_min_kpa_x10: 100,
+            map_max_kpa_x10: 3000,
+            tps_min_percent: 0,
+            tps_max_percent: 100,
+            clear_time_s: 3,
+        }
+    }
+}
+
+#[cfg(feature = "transport-can")]
+fn shared_live_diag_event(
+    code: DiagCode,
+    timestamp: Micros,
+    source: DiagSource,
+    context: Option<u32>,
+) -> DiagEvent {
+    DiagEvent {
+        code,
+        timestamp,
+        source,
+        context,
+        start_us: timestamp.get(),
+        end_us: 0,
+    }
+}
+
+#[cfg(feature = "transport-can")]
+fn shared_live_knock_threshold_x100(strategy: &RuntimeFuelStrategy) -> Option<u16> {
+    match strategy {
+        RuntimeFuelStrategy::DirectPulseWidthTable(_) => None,
+        RuntimeFuelStrategy::SpeedDensityVe { calibration, .. }
+        | RuntimeFuelStrategy::AlphaN { calibration, .. }
+        | RuntimeFuelStrategy::Maf { calibration, .. } => Some(calibration.knock_threshold_x100),
+    }
 }
 
 impl BoardEvent {
@@ -56,6 +174,9 @@ impl BoardEvent {
             BoardEvent::TriggerEdge { .. } => CommonObservabilityRecordKind::TriggerEdge,
             BoardEvent::CamEdge { .. } => CommonObservabilityRecordKind::CamEdge,
             BoardEvent::SensorSnapshotCapture { .. } => {
+                CommonObservabilityRecordKind::SensorSnapshotCapture
+            }
+            BoardEvent::PressureSnapshot { .. } => {
                 CommonObservabilityRecordKind::SensorSnapshotCapture
             }
             BoardEvent::Tick { .. } => CommonObservabilityRecordKind::Tick,
@@ -139,6 +260,16 @@ pub struct CommonDiagnosticsSnapshot {
 pub struct CommonObservabilitySnapshot {
     pub diagnostics: CommonDiagnosticsTelemetry,
     pub fault_state: ecu_runtime::FaultState,
+    pub fault: CommonRuntimeFaultTelemetry,
+    pub lambda: CommonLambdaTelemetry,
+    pub lambda_correction: CommonLambdaCorrectionTelemetry,
+    pub warmup: CommonWarmupTelemetry,
+    pub startup: CommonStartupTelemetry,
+    pub afterstart: CommonAfterstartTelemetry,
+    pub transient_enrichment: CommonTransientEnrichmentTelemetry,
+    pub protection: CommonProtectionTelemetry,
+    pub limp_action: CommonLimpActionTelemetry,
+    pub high_rate_log: CommonHighRateLogTelemetry,
     pub sync_state: SplitSyncState,
     pub decision: CommonDecisionTelemetry,
     pub fuel_strategy_mode: CommonFuelStrategyMode,
@@ -240,6 +371,14 @@ pub struct CommonObservabilityTracePairStatus {
     pub record: CommonObservabilityTraceStatus,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct LastLambdaInputs {
+    seen: bool,
+    lambda_valid: bool,
+    measured_lambda100: ecu_domain::Lambda100,
+    requested_open_loop: bool,
+}
+
 /// Owned pair of common observability traces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FixedCommonObservabilityTracePair<const S: usize, const R: usize> {
@@ -313,6 +452,12 @@ impl<const S: usize, const R: usize> FixedCommonObservabilityTracePair<S, R> {
     }
 }
 
+impl<const S: usize, const R: usize> Default for FixedCommonObservabilityTracePair<S, R> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Fixed-capacity trace for common observability samples.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FixedCommonObservabilityTrace<const N: usize> {
@@ -360,7 +505,7 @@ impl<const N: usize> FixedCommonObservabilityTrace<N> {
         CommonObservabilityTraceStatus {
             len: self.len,
             capacity: N,
-            free_slots: if self.len >= N { 0 } else { N - self.len },
+            free_slots: N.saturating_sub(self.len),
             overflow_count: self.overflow_count,
         }
     }
@@ -441,6 +586,12 @@ impl<const N: usize> FixedCommonObservabilityTrace<N> {
     }
 }
 
+impl<const N: usize> Default for FixedCommonObservabilityTrace<N> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Fixed-capacity common observability record trace overflow.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CommonObservabilityRecordTraceOverflow {
@@ -494,7 +645,7 @@ impl<const N: usize> FixedCommonObservabilityRecordTrace<N> {
         CommonObservabilityTraceStatus {
             len: self.len,
             capacity: N,
-            free_slots: if self.len >= N { 0 } else { N - self.len },
+            free_slots: N.saturating_sub(self.len),
             overflow_count: self.overflow_count,
         }
     }
@@ -575,6 +726,12 @@ impl<const N: usize> FixedCommonObservabilityRecordTrace<N> {
     }
 }
 
+impl<const N: usize> Default for FixedCommonObservabilityRecordTrace<N> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub fn drain_common_observability_cycle<
     const S: usize,
     const R: usize,
@@ -606,9 +763,11 @@ fn common_sync_telemetry_state(sync_state: SplitSyncState) -> CommonSyncTelemetr
         SplitSyncState::NoSignal => CommonSyncTelemetryState::NoSignal,
         SplitSyncState::Unsynced => CommonSyncTelemetryState::Unsynced,
         SplitSyncState::CrankSynced => CommonSyncTelemetryState::CrankSynced,
+        SplitSyncState::CamSynced => CommonSyncTelemetryState::CamSynced,
         SplitSyncState::FullSequentialAuthorized => {
             CommonSyncTelemetryState::FullSequentialAuthorized
         }
+        SplitSyncState::SyncSuspect => CommonSyncTelemetryState::SyncSuspect,
         SplitSyncState::SyncLost => CommonSyncTelemetryState::SyncLost,
     }
 }
@@ -617,6 +776,102 @@ fn common_lambda_mode(mode: ecu_runtime::LambdaMode) -> CommonLambdaMode {
     match mode {
         ecu_runtime::LambdaMode::OpenLoop => CommonLambdaMode::OpenLoop,
         ecu_runtime::LambdaMode::ClosedLoop => CommonLambdaMode::ClosedLoop,
+    }
+}
+
+fn common_lambda_disable_reason(
+    reason: ecu_runtime::LambdaDisableReason,
+) -> CommonLambdaDisableReason {
+    match reason {
+        ecu_runtime::LambdaDisableReason::None => CommonLambdaDisableReason::None,
+        ecu_runtime::LambdaDisableReason::RequestedOpenLoop => {
+            CommonLambdaDisableReason::RequestedOpenLoop
+        }
+        ecu_runtime::LambdaDisableReason::SensorInvalid => CommonLambdaDisableReason::SensorInvalid,
+        ecu_runtime::LambdaDisableReason::WarmupGate => CommonLambdaDisableReason::WarmupGate,
+        ecu_runtime::LambdaDisableReason::LowLoadGate => CommonLambdaDisableReason::LowLoadGate,
+        ecu_runtime::LambdaDisableReason::StartupDelay => CommonLambdaDisableReason::StartupDelay,
+        ecu_runtime::LambdaDisableReason::PowerReductionCut => {
+            CommonLambdaDisableReason::PowerReductionCut
+        }
+        ecu_runtime::LambdaDisableReason::AccelerationEnrichment => {
+            CommonLambdaDisableReason::AccelerationEnrichment
+        }
+    }
+}
+
+fn common_lambda_telemetry(
+    reasons: CommonControlReasonTelemetry,
+    last_inputs: LastLambdaInputs,
+) -> CommonLambdaTelemetry {
+    if !last_inputs.seen {
+        return CommonLambdaTelemetry::default();
+    }
+
+    if reasons.lambda_active {
+        return CommonLambdaTelemetry {
+            activity: CommonLambdaActivity::Active,
+            reason: CommonLambdaDisableReason::None,
+        };
+    }
+
+    match reasons.lambda_disable_reason {
+        CommonLambdaDisableReason::RequestedOpenLoop => CommonLambdaTelemetry {
+            activity: CommonLambdaActivity::Frozen,
+            reason: CommonLambdaDisableReason::RequestedOpenLoop,
+        },
+        CommonLambdaDisableReason::SensorInvalid => CommonLambdaTelemetry {
+            activity: CommonLambdaActivity::Inactive,
+            reason: CommonLambdaDisableReason::SensorInvalid,
+        },
+        CommonLambdaDisableReason::WarmupGate => CommonLambdaTelemetry {
+            activity: CommonLambdaActivity::Inactive,
+            reason: CommonLambdaDisableReason::WarmupGate,
+        },
+        CommonLambdaDisableReason::LowLoadGate => CommonLambdaTelemetry {
+            activity: CommonLambdaActivity::Inactive,
+            reason: CommonLambdaDisableReason::LowLoadGate,
+        },
+        CommonLambdaDisableReason::StartupDelay => CommonLambdaTelemetry {
+            activity: CommonLambdaActivity::Inactive,
+            reason: CommonLambdaDisableReason::StartupDelay,
+        },
+        CommonLambdaDisableReason::PowerReductionCut => CommonLambdaTelemetry {
+            activity: CommonLambdaActivity::Frozen,
+            reason: CommonLambdaDisableReason::PowerReductionCut,
+        },
+        CommonLambdaDisableReason::AccelerationEnrichment => CommonLambdaTelemetry {
+            activity: CommonLambdaActivity::Frozen,
+            reason: CommonLambdaDisableReason::AccelerationEnrichment,
+        },
+        CommonLambdaDisableReason::None | CommonLambdaDisableReason::OpenLoop => {
+            if matches!(reasons.lambda_mode, CommonLambdaMode::OpenLoop) {
+                CommonLambdaTelemetry {
+                    activity: CommonLambdaActivity::Inactive,
+                    reason: CommonLambdaDisableReason::OpenLoop,
+                }
+            } else {
+                CommonLambdaTelemetry::default()
+            }
+        }
+    }
+}
+
+fn common_lambda_correction_telemetry(
+    control: CommonControlTelemetry,
+    reasons: CommonControlReasonTelemetry,
+    status: CommonLambdaTelemetry,
+    last_inputs: LastLambdaInputs,
+) -> CommonLambdaCorrectionTelemetry {
+    if !last_inputs.seen {
+        return CommonLambdaCorrectionTelemetry::default();
+    }
+
+    CommonLambdaCorrectionTelemetry {
+        measured_lambda: last_inputs.measured_lambda100,
+        target_lambda: control.lambda_target,
+        trim_x100: reasons.lambda_trim_x100,
+        status,
     }
 }
 
@@ -647,6 +902,332 @@ fn common_scheduler_mode(mode: ecu_scheduler::SchedulerMode) -> CommonSchedulerM
         ecu_scheduler::SchedulerMode::Idle => CommonSchedulerMode::Idle,
         ecu_scheduler::SchedulerMode::Armed => CommonSchedulerMode::Armed,
         ecu_scheduler::SchedulerMode::Suspended => CommonSchedulerMode::Suspended,
+    }
+}
+
+fn common_frontier_fault_telemetry(
+    reason: ecu_board_api::TimingIslandStopReason,
+) -> CommonFrontierFaultTelemetry {
+    use ecu_board_api::TimingIslandStopReason::{
+        AdmittedEventRejected, BoardOutputFault, HeartbeatExpired, HorizonExpired, None,
+        PermitDenied, SyncLost, TimingFault,
+    };
+
+    match reason {
+        None => CommonFrontierFaultTelemetry {
+            event_id: CommonFrontierFaultEventId::None,
+            severity: ecu_domain::FaultSeverity::Info,
+            action: CommonFrontierFaultAction::None,
+        },
+        SyncLost => CommonFrontierFaultTelemetry {
+            event_id: CommonFrontierFaultEventId::SyncLost,
+            severity: ecu_domain::FaultSeverity::Warning,
+            action: CommonFrontierFaultAction::SafeStateTransition,
+        },
+        HeartbeatExpired => CommonFrontierFaultTelemetry {
+            event_id: CommonFrontierFaultEventId::HeartbeatExpired,
+            severity: ecu_domain::FaultSeverity::Warning,
+            action: CommonFrontierFaultAction::OutputSuppressed,
+        },
+        HorizonExpired => CommonFrontierFaultTelemetry {
+            event_id: CommonFrontierFaultEventId::HorizonExpired,
+            severity: ecu_domain::FaultSeverity::Info,
+            action: CommonFrontierFaultAction::OutputSuppressed,
+        },
+        PermitDenied => CommonFrontierFaultTelemetry {
+            event_id: CommonFrontierFaultEventId::PermitDenied,
+            severity: ecu_domain::FaultSeverity::Warning,
+            action: CommonFrontierFaultAction::SafeStateTransition,
+        },
+        TimingFault => CommonFrontierFaultTelemetry {
+            event_id: CommonFrontierFaultEventId::TimingFault,
+            severity: ecu_domain::FaultSeverity::Critical,
+            action: CommonFrontierFaultAction::SafeStateTransition,
+        },
+        AdmittedEventRejected => CommonFrontierFaultTelemetry {
+            event_id: CommonFrontierFaultEventId::AdmittedEventRejected,
+            severity: ecu_domain::FaultSeverity::Critical,
+            action: CommonFrontierFaultAction::SafeStateTransition,
+        },
+        BoardOutputFault => CommonFrontierFaultTelemetry {
+            event_id: CommonFrontierFaultEventId::BoardOutputFault,
+            severity: ecu_domain::FaultSeverity::Critical,
+            action: CommonFrontierFaultAction::SafeStateTransition,
+        },
+    }
+}
+
+fn common_fault_transition_event(
+    previous: ecu_runtime::FaultState,
+    current: ecu_runtime::FaultState,
+) -> CommonFaultTransitionEventTelemetry {
+    let event_id = if previous.fault == ecu_domain::FaultCode::None
+        && current.fault != ecu_domain::FaultCode::None
+    {
+        CommonFaultTransitionEventId::FaultEntered
+    } else if previous.fault != ecu_domain::FaultCode::None
+        && current.fault == ecu_domain::FaultCode::None
+    {
+        CommonFaultTransitionEventId::FaultCleared
+    } else {
+        CommonFaultTransitionEventId::FaultUpdated
+    };
+
+    let action = if current.fault == ecu_domain::FaultCode::None {
+        CommonFaultTransitionAction::Cleared
+    } else if current.cancel_reason == ecu_domain::CancelReason::SafetyShutdown
+        || current.severity == ecu_domain::FaultSeverity::Critical
+    {
+        CommonFaultTransitionAction::Shutdown
+    } else if current.severity == ecu_domain::FaultSeverity::Warning
+        || current.fault == ecu_domain::FaultCode::SensorOutOfRange
+    {
+        CommonFaultTransitionAction::LimpHome
+    } else {
+        CommonFaultTransitionAction::ObserveOnly
+    };
+
+    CommonFaultTransitionEventTelemetry {
+        event_id,
+        severity: current.severity,
+        action,
+    }
+}
+
+fn common_runtime_fault_telemetry(state: ecu_runtime::FaultState) -> CommonRuntimeFaultTelemetry {
+    let active = state.fault != ecu_domain::FaultCode::None;
+    let action = if !active {
+        CommonFaultTransitionAction::None
+    } else if state.cancel_reason == ecu_domain::CancelReason::SafetyShutdown
+        || state.severity == ecu_domain::FaultSeverity::Critical
+    {
+        CommonFaultTransitionAction::Shutdown
+    } else if state.severity == ecu_domain::FaultSeverity::Warning
+        || state.fault == ecu_domain::FaultCode::SensorOutOfRange
+    {
+        CommonFaultTransitionAction::LimpHome
+    } else {
+        CommonFaultTransitionAction::ObserveOnly
+    };
+
+    CommonRuntimeFaultTelemetry {
+        active,
+        fault_code: state.fault,
+        severity: state.severity,
+        cancel_reason: state.cancel_reason,
+        action,
+    }
+}
+
+fn common_protection_telemetry(
+    decision: CommonDecisionTelemetry,
+    fault: CommonRuntimeFaultTelemetry,
+    frontier_fault: CommonFrontierFaultTelemetry,
+) -> CommonProtectionTelemetry {
+    if frontier_fault.action != CommonFrontierFaultAction::None {
+        return CommonProtectionTelemetry {
+            level: if frontier_fault.action == CommonFrontierFaultAction::OutputSuppressed {
+                CommonProtectionLevel::Degraded
+            } else {
+                CommonProtectionLevel::ShutdownDriving
+            },
+            source: CommonProtectionSource::FrontierFault,
+            action: match frontier_fault.action {
+                CommonFrontierFaultAction::None => CommonProtectionAction::None,
+                CommonFrontierFaultAction::OutputSuppressed => {
+                    CommonProtectionAction::OutputSuppressed
+                }
+                CommonFrontierFaultAction::SafeStateTransition => {
+                    CommonProtectionAction::SafeStateTransition
+                }
+            },
+            persistence: CommonProtectionPersistence::LatchedUntilRecovery,
+        };
+    }
+
+    if fault.active {
+        let action = match fault.action {
+            CommonFaultTransitionAction::None | CommonFaultTransitionAction::Cleared => {
+                CommonProtectionAction::None
+            }
+            CommonFaultTransitionAction::ObserveOnly => CommonProtectionAction::ObserveOnly,
+            CommonFaultTransitionAction::LimpHome => CommonProtectionAction::LimpHome,
+            CommonFaultTransitionAction::Shutdown => CommonProtectionAction::Shutdown,
+        };
+
+        return CommonProtectionTelemetry {
+            level: if action == CommonProtectionAction::Shutdown {
+                CommonProtectionLevel::ShutdownDriving
+            } else {
+                CommonProtectionLevel::Degraded
+            },
+            source: CommonProtectionSource::RuntimeFault,
+            action,
+            persistence: CommonProtectionPersistence::LatchedUntilClear,
+        };
+    }
+
+    match decision.control_mode {
+        ControlMode::Shutdown => CommonProtectionTelemetry {
+            level: CommonProtectionLevel::ShutdownDriving,
+            source: CommonProtectionSource::ControlMode,
+            action: CommonProtectionAction::Shutdown,
+            persistence: CommonProtectionPersistence::Reversible,
+        },
+        ControlMode::LimpHome => CommonProtectionTelemetry {
+            level: CommonProtectionLevel::Degraded,
+            source: CommonProtectionSource::ControlMode,
+            action: CommonProtectionAction::LimpHome,
+            persistence: CommonProtectionPersistence::Reversible,
+        },
+        _ => CommonProtectionTelemetry::default(),
+    }
+}
+
+fn common_limp_action_telemetry(
+    actions: CommonActionTelemetry,
+    protection: CommonProtectionTelemetry,
+    frontier_fault: CommonFrontierFaultTelemetry,
+) -> CommonLimpActionTelemetry {
+    let apply_aux = actions.apply_aux_count > 0 || actions.apply_aux_command_count > 0;
+    let mapped_source = match protection.source {
+        CommonProtectionSource::RuntimeFault => CommonLimpActionSource::RuntimeFault,
+        CommonProtectionSource::FrontierFault => CommonLimpActionSource::FrontierFault,
+        CommonProtectionSource::ControlMode => CommonLimpActionSource::ControlMode,
+        CommonProtectionSource::None => CommonLimpActionSource::None,
+    };
+
+    if frontier_fault.action != CommonFrontierFaultAction::None {
+        return CommonLimpActionTelemetry {
+            level: if frontier_fault.action == CommonFrontierFaultAction::OutputSuppressed {
+                CommonLimpActionLevel::OutputSuppressed
+            } else {
+                CommonLimpActionLevel::ShutdownDriving
+            },
+            source: CommonLimpActionSource::FrontierFault,
+            cancel_scheduler: actions.cancel_scheduler,
+            cancel_reason: actions.cancel_reason,
+            apply_aux,
+            aux_command_count: actions.apply_aux_command_count,
+            persistence: CommonProtectionPersistence::LatchedUntilRecovery,
+        };
+    }
+
+    if actions.cancel_scheduler && actions.cancel_reason == ecu_domain::CancelReason::SyncLoss {
+        return CommonLimpActionTelemetry {
+            level: CommonLimpActionLevel::OutputSuppressed,
+            source: if mapped_source == CommonLimpActionSource::None {
+                CommonLimpActionSource::SyncAuthority
+            } else {
+                mapped_source
+            },
+            cancel_scheduler: true,
+            cancel_reason: actions.cancel_reason,
+            apply_aux,
+            aux_command_count: actions.apply_aux_command_count,
+            persistence: CommonProtectionPersistence::LatchedUntilRecovery,
+        };
+    }
+
+    if actions.cancel_scheduler {
+        return CommonLimpActionTelemetry {
+            level: CommonLimpActionLevel::ShutdownDriving,
+            source: mapped_source,
+            cancel_scheduler: actions.cancel_scheduler,
+            cancel_reason: actions.cancel_reason,
+            apply_aux,
+            aux_command_count: actions.apply_aux_command_count,
+            persistence: protection.persistence,
+        };
+    }
+
+    if apply_aux {
+        return CommonLimpActionTelemetry {
+            level: CommonLimpActionLevel::AuxOnly,
+            source: mapped_source,
+            cancel_scheduler: false,
+            cancel_reason: actions.cancel_reason,
+            apply_aux: true,
+            aux_command_count: actions.apply_aux_command_count,
+            persistence: protection.persistence,
+        };
+    }
+
+    CommonLimpActionTelemetry::default()
+}
+
+fn common_high_rate_log_telemetry(
+    decision: CommonDecisionTelemetry,
+    fault: CommonRuntimeFaultTelemetry,
+    frontier_fault: CommonFrontierFaultTelemetry,
+    diagnostics: CommonDiagnosticsTelemetry,
+    calibration: CalibrationPackageIdentity,
+) -> CommonHighRateLogTelemetry {
+    CommonHighRateLogTelemetry {
+        decision,
+        fault,
+        frontier_fault,
+        late_event_count: diagnostics.late_event_count,
+        max_lateness_us: diagnostics.max_lateness_us,
+        calibration_checksum: calibration.checksum.get(),
+    }
+}
+
+fn common_fuel_cut_reason(snapshot: &RuntimeSnapshot) -> CommonCutReason {
+    if !snapshot.fuel_cut {
+        return CommonCutReason::None;
+    }
+
+    if snapshot.safety_latched {
+        CommonCutReason::SafetyLatched
+    } else if snapshot.direct_fuel_cut_request {
+        CommonCutReason::DirectRequest
+    } else if matches!(snapshot.engine.mode, ControlMode::Shutdown) {
+        CommonCutReason::Shutdown
+    } else if snapshot.rev_hard_active {
+        CommonCutReason::HardRev
+    } else if snapshot.launch_active {
+        CommonCutReason::Launch
+    } else if snapshot.flat_shift_active {
+        CommonCutReason::FlatShift
+    } else if snapshot.fuel_cut && !snapshot.spark_cut {
+        CommonCutReason::FuelOnly
+    } else if snapshot.rev_soft_active {
+        CommonCutReason::SoftRev
+    } else if snapshot.direct_spark_cut_request {
+        CommonCutReason::DirectRequest
+    } else {
+        CommonCutReason::None
+    }
+}
+
+fn common_spark_cut_reason(snapshot: &RuntimeSnapshot) -> CommonCutReason {
+    if !snapshot.spark_cut {
+        return CommonCutReason::None;
+    }
+
+    if snapshot.safety_latched {
+        CommonCutReason::SafetyLatched
+    } else if snapshot.direct_spark_cut_request {
+        CommonCutReason::DirectRequest
+    } else if matches!(snapshot.engine.mode, ControlMode::Shutdown) {
+        CommonCutReason::Shutdown
+    } else if snapshot.rev_hard_active {
+        CommonCutReason::HardRev
+    } else if snapshot.launch_active {
+        CommonCutReason::Launch
+    } else if snapshot.flat_shift_active {
+        CommonCutReason::FlatShift
+    } else if snapshot.rev_soft_active {
+        CommonCutReason::SoftRev
+    } else if snapshot.spark_cut && !snapshot.fuel_cut {
+        CommonCutReason::SparkOnly
+    } else if snapshot.legacy_cut_reason_code == 7 {
+        CommonCutReason::KnockRetard
+    } else if snapshot.direct_fuel_cut_request {
+        CommonCutReason::DirectRequest
+    } else {
+        CommonCutReason::None
     }
 }
 
@@ -735,7 +1316,7 @@ fn initial_inputs() -> AuthorityStepInputs {
 /// - board events update runtime input state only
 /// - control decisions come from `EngineRuntime::step_with_authority`
 /// - action delivery is limited to I/O plumbing and publishing
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct BoardAdapter<S, C, A, W, T, P> {
     runtime: EngineRuntime,
     sensor: S,
@@ -747,16 +1328,35 @@ pub struct BoardAdapter<S, C, A, W, T, P> {
     pending_inputs: AuthorityStepInputs,
     action_telemetry: CommonActionTelemetry,
     control_reasons: CommonControlReasonTelemetry,
+    last_lambda_inputs: LastLambdaInputs,
     fault_transition: CommonFaultTransitionTelemetry,
     staged_dirty: bool,
     fuel: CommonFuelObservationTelemetry,
     enrichment: CommonEnrichmentTelemetry,
+    warmup: CommonWarmupTelemetry,
+    startup: CommonStartupTelemetry,
+    afterstart: CommonAfterstartTelemetry,
+    transient_enrichment: CommonTransientEnrichmentTelemetry,
     torque: CommonTorqueTelemetry,
     trigger_edge: CommonTriggerEdgeTelemetry,
     cam_edge: CommonCamEdgeTelemetry,
     validated: CommonValidatedInputTelemetry,
     capture_sample: Option<CaptureSample>,
     logical_sensor_capture: Option<BoardSensorSnapshotCapture>,
+    diag_log: DiagLog<DIAG_LOG_ENTRY_COUNT>,
+    store_integrity_latched: bool,
+    #[cfg(feature = "transport-can")]
+    retained_obd2_history: crate::transport_service::Obd2RetainedDiagnosticHistory,
+    #[cfg(feature = "transport-can")]
+    provisioned_obd2_identity: crate::transport_service::ProvisionedObd2Identity,
+    #[cfg(feature = "transport-can")]
+    obd2_identity_key_lifecycle_status: Option<ecu_transport::CanObd2IdentityKeyLifecycleStatus>,
+    #[cfg(feature = "transport-can")]
+    obd2_flash_write_fault_status: Option<ecu_transport::CanObd2FlashWriteFaultStatus>,
+    #[cfg(feature = "transport-can")]
+    shared_live_diag_state: SharedLiveDiagState,
+    #[cfg(feature = "transport-can")]
+    sensor_limits: SharedSensorLimits,
 }
 
 impl<S, C, A, W, T, P> BoardAdapter<S, C, A, W, T, P>
@@ -780,16 +1380,39 @@ where
             pending_inputs: initial_inputs(),
             action_telemetry: CommonActionTelemetry::default(),
             control_reasons: CommonControlReasonTelemetry::default(),
+            last_lambda_inputs: LastLambdaInputs::default(),
             fault_transition: CommonFaultTransitionTelemetry::default(),
             staged_dirty: false,
             fuel: CommonFuelObservationTelemetry::default(),
             enrichment: CommonEnrichmentTelemetry::default(),
+            warmup: CommonWarmupTelemetry::default(),
+            startup: CommonStartupTelemetry::default(),
+            afterstart: CommonAfterstartTelemetry::default(),
+            transient_enrichment: CommonTransientEnrichmentTelemetry::default(),
             torque: CommonTorqueTelemetry::default(),
             trigger_edge: CommonTriggerEdgeTelemetry::default(),
             cam_edge: CommonCamEdgeTelemetry::default(),
             validated: CommonValidatedInputTelemetry::default(),
             capture_sample: None,
             logical_sensor_capture: None,
+            diag_log: DiagLog::new(),
+            store_integrity_latched: false,
+            #[cfg(feature = "transport-can")]
+            retained_obd2_history: crate::transport_service::Obd2RetainedDiagnosticHistory::new(
+                crate::transport_service::obd2_current_data_from_board_inputs(None, None),
+            ),
+            #[cfg(feature = "transport-can")]
+            provisioned_obd2_identity: crate::transport_service::ProvisionedObd2Identity::default(),
+            #[cfg(feature = "transport-can")]
+            obd2_identity_key_lifecycle_status: Some(
+                ecu_transport::CanObd2IdentityKeyLifecycleStatus::absent(),
+            ),
+            #[cfg(feature = "transport-can")]
+            obd2_flash_write_fault_status: None,
+            #[cfg(feature = "transport-can")]
+            shared_live_diag_state: SharedLiveDiagState::default(),
+            #[cfg(feature = "transport-can")]
+            sensor_limits: SharedSensorLimits::default(),
         }
     }
 
@@ -806,10 +1429,63 @@ where
     }
 
     pub fn calibration_package_identity(&self) -> CalibrationPackageIdentity {
-        let mut identity =
-            CalibrationPackageIdentity::from_snapshot(self.runtime.calibration_snapshot());
-        identity.staged_dirty = self.staged_dirty;
-        identity
+        CalibrationPackageIdentity::from_snapshot_with_staged_dirty(
+            self.runtime.calibration_snapshot(),
+            self.staged_dirty,
+        )
+    }
+
+    #[cfg(feature = "transport-can")]
+    pub const fn provisioned_obd2_identity(
+        &self,
+    ) -> crate::transport_service::ProvisionedObd2Identity {
+        self.provisioned_obd2_identity
+    }
+
+    #[cfg(feature = "transport-can")]
+    pub fn set_provisioned_obd2_identity(
+        &mut self,
+        identity: crate::transport_service::ProvisionedObd2Identity,
+    ) {
+        self.provisioned_obd2_identity = identity;
+    }
+
+    #[cfg(feature = "transport-can")]
+    pub fn install_provisioned_obd2_identity_record(
+        &mut self,
+        record: crate::transport_service::Obd2ProvisionedIdentityRecord,
+    ) {
+        self.set_provisioned_obd2_identity(record.into_provisioned_identity());
+    }
+
+    #[cfg(feature = "transport-can")]
+    pub const fn obd2_identity_key_lifecycle_status(
+        &self,
+    ) -> Option<ecu_transport::CanObd2IdentityKeyLifecycleStatus> {
+        self.obd2_identity_key_lifecycle_status
+    }
+
+    #[cfg(feature = "transport-can")]
+    pub fn set_obd2_identity_key_lifecycle_status(
+        &mut self,
+        status: Option<ecu_transport::CanObd2IdentityKeyLifecycleStatus>,
+    ) {
+        self.obd2_identity_key_lifecycle_status = status;
+    }
+
+    #[cfg(feature = "transport-can")]
+    pub const fn obd2_flash_write_fault_status(
+        &self,
+    ) -> Option<ecu_transport::CanObd2FlashWriteFaultStatus> {
+        self.obd2_flash_write_fault_status
+    }
+
+    #[cfg(feature = "transport-can")]
+    pub fn set_obd2_flash_write_fault_status(
+        &mut self,
+        status: Option<ecu_transport::CanObd2FlashWriteFaultStatus>,
+    ) {
+        self.obd2_flash_write_fault_status = status;
     }
 
     pub fn engine_time_telemetry(&self) -> EngineTimeAuthorityTelemetry {
@@ -824,8 +1500,71 @@ where
         self.fault_transition
     }
 
+    pub fn diag_log(&self) -> &DiagLog<DIAG_LOG_ENTRY_COUNT> {
+        &self.diag_log
+    }
+
+    #[cfg(feature = "transport-can")]
+    pub fn obd2_retained_history_snapshot(
+        &self,
+    ) -> crate::transport_service::Obd2RetainedDiagnosticHistorySnapshot {
+        self.retained_obd2_history.snapshot()
+    }
+
+    #[cfg(feature = "transport-can")]
+    pub fn restore_obd2_retained_history(
+        &mut self,
+        snapshot: &crate::transport_service::Obd2RetainedDiagnosticHistorySnapshot,
+    ) {
+        self.retained_obd2_history.restore_from_snapshot(snapshot);
+    }
+
+    pub fn push_live_diag_event(&mut self, event: DiagEvent) {
+        self.push_shared_diag_log_event(event);
+    }
+
+    pub fn record_store_integrity_status(&mut self, status: StoreIntegrityStatus) {
+        if self.store_integrity_latched {
+            return;
+        }
+        if matches!(
+            status,
+            StoreIntegrityStatus::Corrupt | StoreIntegrityStatus::ValidWithCorruptSibling
+        ) {
+            self.push_live_diag_event(DiagEvent {
+                code: ecu_domain::diag::DiagCode::PersistCrcFault,
+                timestamp: Micros::new(0),
+                source: ecu_domain::diag::DiagSource::User,
+                context: None,
+                start_us: 0,
+                end_us: 0,
+            });
+            self.store_integrity_latched = true;
+        }
+    }
+
     pub fn control_reason_telemetry(&self) -> CommonControlReasonTelemetry {
         self.control_reasons
+    }
+
+    pub fn lambda_telemetry(&self) -> CommonLambdaTelemetry {
+        common_lambda_telemetry(self.control_reasons, self.last_lambda_inputs)
+    }
+
+    pub fn lambda_correction_telemetry(&self) -> CommonLambdaCorrectionTelemetry {
+        let runtime_snapshot = self.runtime.snapshot();
+        common_lambda_correction_telemetry(
+            CommonControlTelemetry {
+                fuel_pulse_width: runtime_snapshot.control.fuel_pulse_width,
+                ignition_advance: runtime_snapshot.control.ignition_advance,
+                dwell: runtime_snapshot.control.dwell,
+                lambda_target: runtime_snapshot.control.lambda_target,
+                torque_limit_x100: runtime_snapshot.control.torque_limit_x100,
+            },
+            self.control_reason_telemetry(),
+            self.lambda_telemetry(),
+            self.last_lambda_inputs,
+        )
     }
 
     pub fn fuel_strategy_mode(&self) -> CommonFuelStrategyMode {
@@ -873,6 +1612,22 @@ where
         self.enrichment
     }
 
+    pub fn warmup_telemetry(&self) -> CommonWarmupTelemetry {
+        self.warmup
+    }
+
+    pub fn startup_telemetry(&self) -> CommonStartupTelemetry {
+        self.startup
+    }
+
+    pub fn afterstart_telemetry(&self) -> CommonAfterstartTelemetry {
+        self.afterstart
+    }
+
+    pub fn transient_enrichment_telemetry(&self) -> CommonTransientEnrichmentTelemetry {
+        self.transient_enrichment
+    }
+
     pub fn validated_input_telemetry(&self) -> CommonValidatedInputTelemetry {
         self.validated
     }
@@ -889,6 +1644,288 @@ where
         self.logical_sensor_capture()
             .map(|capture| capture.snapshot)
     }
+
+    pub fn clear_diagnostics(&mut self) -> ecu_domain::diag::DiagClearSummary {
+        let summary = ecu_domain::diag::DiagClearSummary {
+            cleared_active_count: u8::from(
+                self.runtime.snapshot().faults.fault != ecu_domain::FaultCode::None,
+            ),
+            cleared_log_entries: self
+                .diag_log
+                .events
+                .iter()
+                .filter(|entry| entry.is_some())
+                .count() as u8,
+            ..ecu_domain::diag::DiagClearSummary::default()
+        };
+        self.runtime.set_fault_state(
+            ecu_domain::FaultCode::None,
+            ecu_domain::FaultSeverity::Info,
+            ecu_domain::CancelReason::Manual,
+        );
+        self.diag_log = DiagLog::new();
+        self.store_integrity_latched = false;
+        #[cfg(feature = "transport-can")]
+        self.retained_obd2_history.clear();
+        self.reset_shared_live_diag_state();
+        summary
+    }
+
+    #[cfg(feature = "transport-can")]
+    fn reset_shared_live_diag_state(&mut self) {
+        self.shared_live_diag_state = SharedLiveDiagState::default();
+    }
+
+    #[cfg(not(feature = "transport-can"))]
+    fn reset_shared_live_diag_state(&mut self) {}
+
+    #[cfg(feature = "transport-can")]
+    fn current_obd2_value_source(&self) -> ecu_transport::Message {
+        crate::transport_service::obd2_current_data_from_board_inputs(
+            self.logical_sensor_capture(),
+            self.capture_sample(),
+        )
+    }
+
+    #[cfg(feature = "transport-can")]
+    fn current_obd2_diag_event_from_live_fault(&self) -> Option<DiagEvent> {
+        let current_data_value_source = self.current_obd2_value_source();
+        crate::transport_service::obd2_diag_event_from_runtime_fault(
+            self.fault_state(),
+            &current_data_value_source,
+        )
+    }
+
+    #[cfg(feature = "transport-can")]
+    fn current_obd2_recent_diag_events(
+        &self,
+    ) -> [Option<DiagEvent>; crate::transport_service::OBD2_LIVE_DIAG_EVENT_INGRESS_CAP] {
+        let current_data_value_source = self.current_obd2_value_source();
+        [
+            crate::transport_service::obd2_diag_event_from_fault_transition(
+                self.fault_transition_telemetry(),
+                &current_data_value_source,
+            ),
+            None,
+        ]
+    }
+
+    #[cfg(feature = "transport-can")]
+    fn reseed_obd2_retained_history_from_live_state(&mut self) {
+        let current_data_value_source = self.current_obd2_value_source();
+        self.retained_obd2_history.observe_live_diagnostic(
+            self.fault_state(),
+            self.current_obd2_diag_event_from_live_fault(),
+            crate::transport_service::obd2_diag_log_events_array(self.diag_log()),
+            self.current_obd2_recent_diag_events(),
+            current_data_value_source,
+        );
+    }
+
+    #[cfg(not(feature = "transport-can"))]
+    fn reseed_obd2_retained_history_from_live_state(&mut self) {}
+
+    fn push_shared_diag_log_event(&mut self, event: DiagEvent) {
+        self.diag_log.push(event);
+        self.reseed_obd2_retained_history_from_live_state();
+    }
+
+    #[cfg(feature = "transport-can")]
+    fn observe_shared_sensor_recovery_sources(
+        &mut self,
+        now_us: Micros,
+        snapshot: BoardSensorSnapshot,
+    ) {
+        let now_us_raw = now_us.get();
+        let lim = self.sensor_limits;
+        let raw_map_kpa_x10 = snapshot.map_kpa10.get();
+        let raw_tps_percent = (snapshot.tps_x100 / 100).min(u8::MAX as u16) as u8;
+        let clear_time_us = u32::from(lim.clear_time_s) * 1_000_000;
+
+        let map_oob =
+            raw_map_kpa_x10 < lim.map_min_kpa_x10 || raw_map_kpa_x10 > lim.map_max_kpa_x10;
+        if map_oob {
+            if !self.shared_live_diag_state.map_range.is_active() {
+                self.shared_live_diag_state
+                    .map_range
+                    .latch(Micros::new(now_us_raw));
+            }
+        } else if self.shared_live_diag_state.map_range.is_active() {
+            if self.shared_live_diag_state.map_range.in_range_since_us == 0 {
+                self.shared_live_diag_state.map_range.in_range_since_us = now_us_raw;
+            }
+            if now_us_raw.wrapping_sub(self.shared_live_diag_state.map_range.in_range_since_us)
+                >= clear_time_us
+            {
+                let dur = now_us_raw.wrapping_sub(self.shared_live_diag_state.map_range.start_us);
+                self.shared_live_diag_state.map_range.total_us = self
+                    .shared_live_diag_state
+                    .map_range
+                    .total_us
+                    .saturating_add(dur);
+                let start_us = self.shared_live_diag_state.map_range.start_us;
+                self.push_shared_diag_log_event(DiagEvent {
+                    code: DiagCode::MapRange,
+                    timestamp: now_us,
+                    source: DiagSource::Sensor,
+                    context: Some(u32::from(raw_map_kpa_x10)),
+                    start_us,
+                    end_us: now_us_raw,
+                });
+                self.shared_live_diag_state
+                    .map_range
+                    .clear(Micros::new(now_us_raw));
+                self.shared_live_diag_state.map_range = SharedDiagLatchState::default();
+            }
+        }
+
+        let tps_oob =
+            raw_tps_percent < lim.tps_min_percent || raw_tps_percent > lim.tps_max_percent;
+        if tps_oob {
+            if !self.shared_live_diag_state.tps_range.is_active() {
+                self.shared_live_diag_state
+                    .tps_range
+                    .latch(Micros::new(now_us_raw));
+            }
+        } else if self.shared_live_diag_state.tps_range.is_active() {
+            if self.shared_live_diag_state.tps_range.in_range_since_us == 0 {
+                self.shared_live_diag_state.tps_range.in_range_since_us = now_us_raw;
+            }
+            if now_us_raw.wrapping_sub(self.shared_live_diag_state.tps_range.in_range_since_us)
+                >= clear_time_us
+            {
+                let dur = now_us_raw.wrapping_sub(self.shared_live_diag_state.tps_range.start_us);
+                self.shared_live_diag_state.tps_range.total_us = self
+                    .shared_live_diag_state
+                    .tps_range
+                    .total_us
+                    .saturating_add(dur);
+                let start_us = self.shared_live_diag_state.tps_range.start_us;
+                self.push_shared_diag_log_event(DiagEvent {
+                    code: DiagCode::TpsRange,
+                    timestamp: now_us,
+                    source: DiagSource::Sensor,
+                    context: Some(u32::from(raw_tps_percent)),
+                    start_us,
+                    end_us: now_us_raw,
+                });
+                self.shared_live_diag_state
+                    .tps_range
+                    .clear(Micros::new(now_us_raw));
+                self.shared_live_diag_state.tps_range = SharedDiagLatchState::default();
+            }
+        }
+    }
+
+    #[cfg(feature = "transport-can")]
+    fn observe_shared_live_diag_sources(&mut self, now_us: Micros) {
+        let Some(capture) = self.logical_sensor_capture() else {
+            return;
+        };
+
+        let snapshot = capture.snapshot;
+        self.observe_shared_sensor_recovery_sources(now_us, snapshot);
+        let low_voltage_active = snapshot.vbatt_mv > 0 && snapshot.vbatt_mv < BROWNOUT_CRITICAL_MV;
+        if low_voltage_active && !self.shared_live_diag_state.low_voltage_active {
+            self.push_shared_diag_log_event(shared_live_diag_event(
+                DiagCode::LowVoltage,
+                now_us,
+                DiagSource::Sensor,
+                Some(u32::from(snapshot.vbatt_mv)),
+            ));
+        }
+        self.shared_live_diag_state.low_voltage_active = low_voltage_active;
+
+        let overvoltage_active = snapshot.vbatt_mv > OVERVOLTAGE_MV;
+        if overvoltage_active && !self.shared_live_diag_state.overvoltage_active {
+            self.push_shared_diag_log_event(shared_live_diag_event(
+                DiagCode::Overvoltage,
+                now_us,
+                DiagSource::Sensor,
+                Some(u32::from(snapshot.vbatt_mv)),
+            ));
+        }
+        self.shared_live_diag_state.overvoltage_active = overvoltage_active;
+
+        let knock_active = snapshot.validity.contains(BoardSensorValidityFlags::KNOCK)
+            && shared_live_knock_threshold_x100(self.runtime.fuel_strategy())
+                .map(|threshold| snapshot.knock_x100.get() >= threshold)
+                .unwrap_or(false);
+        if knock_active && !self.shared_live_diag_state.knock_active {
+            self.push_shared_diag_log_event(shared_live_diag_event(
+                DiagCode::KnockDetected,
+                now_us,
+                DiagSource::Sensor,
+                Some(u32::from(snapshot.knock_x100.get())),
+            ));
+        }
+        self.shared_live_diag_state.knock_active = knock_active;
+
+        let lambda_invalid_active = snapshot.lambda_x100.get() > 0
+            && !snapshot.validity.contains(BoardSensorValidityFlags::LAMBDA);
+        if lambda_invalid_active && !self.shared_live_diag_state.lambda_invalid_active {
+            self.push_shared_diag_log_event(shared_live_diag_event(
+                DiagCode::LambdaInvalid,
+                now_us,
+                DiagSource::Sensor,
+                Some(u32::from(snapshot.lambda_x100.get())),
+            ));
+        }
+        self.shared_live_diag_state.lambda_invalid_active = lambda_invalid_active;
+    }
+
+    #[cfg(feature = "transport-can")]
+    fn observe_shared_pressure_diag_sources(
+        &mut self,
+        now_us: Micros,
+        oil_pressure_kpa10: Kpa10,
+        fuel_pressure_kpa10: Kpa10,
+        oil_valid: bool,
+        fuel_valid: bool,
+    ) {
+        let oil_pressure_low_active = oil_valid && oil_pressure_kpa10 < OIL_PRESSURE_MIN_KPA10;
+        if oil_pressure_low_active && !self.shared_live_diag_state.oil_pressure_low_active {
+            self.push_shared_diag_log_event(shared_live_diag_event(
+                DiagCode::OilPressureLow,
+                now_us,
+                DiagSource::Sensor,
+                Some(u32::from(oil_pressure_kpa10.get())),
+            ));
+        }
+        self.shared_live_diag_state.oil_pressure_low_active = oil_pressure_low_active;
+
+        let fuel_pressure_low_active = fuel_valid && fuel_pressure_kpa10 < FUEL_PRESSURE_MIN_KPA10;
+        if fuel_pressure_low_active && !self.shared_live_diag_state.fuel_pressure_low_active {
+            self.push_shared_diag_log_event(shared_live_diag_event(
+                DiagCode::FuelPressureLow,
+                now_us,
+                DiagSource::Sensor,
+                Some(u32::from(fuel_pressure_kpa10.get())),
+            ));
+        }
+        self.shared_live_diag_state.fuel_pressure_low_active = fuel_pressure_low_active;
+    }
+
+    #[cfg(not(feature = "transport-can"))]
+    fn observe_shared_live_diag_sources(&mut self, _now_us: Micros) {}
+
+    #[cfg(feature = "transport-can")]
+    fn push_fault_transition_live_diag_event(&mut self) {
+        let current_data_value_source =
+            crate::transport_service::obd2_current_data_from_board_inputs(
+                self.logical_sensor_capture(),
+                self.capture_sample(),
+            );
+        if let Some(diag_event) = crate::transport_service::obd2_diag_event_from_fault_transition(
+            self.fault_transition,
+            &current_data_value_source,
+        ) {
+            self.push_shared_diag_log_event(diag_event);
+        }
+    }
+
+    #[cfg(not(feature = "transport-can"))]
+    fn push_fault_transition_live_diag_event(&mut self) {}
 
     pub fn configure_fuel_model(&mut self, fuel_model: ecu_runtime::BaseFuelModel) {
         self.runtime.configure_fuel_model(fuel_model);
@@ -1031,6 +2068,30 @@ where
                     .map_err(BoardAdapterError::Capture)?;
                 Ok(None)
             }
+            BoardEvent::PressureSnapshot {
+                now_us,
+                oil_pressure_kpa10,
+                fuel_pressure_kpa10,
+                oil_valid,
+                fuel_valid,
+            } => {
+                self.pending_inputs.now_us = now_us;
+                #[cfg(feature = "transport-can")]
+                self.observe_shared_pressure_diag_sources(
+                    now_us,
+                    oil_pressure_kpa10,
+                    fuel_pressure_kpa10,
+                    oil_valid,
+                    fuel_valid,
+                );
+                let _ = (
+                    oil_pressure_kpa10,
+                    fuel_pressure_kpa10,
+                    oil_valid,
+                    fuel_valid,
+                );
+                Ok(None)
+            }
             BoardEvent::Tick { now_us, control } => {
                 self.pending_inputs.now_us = now_us;
                 let pre_step_fault_state = self.runtime.snapshot().faults;
@@ -1038,6 +2099,7 @@ where
                     .runtime
                     .step_with_authority(self.pending_inputs, control);
                 self.execute_step(&result)?;
+                self.observe_shared_live_diag_sources(now_us);
                 let post_step_fault_state = self.runtime.snapshot().faults;
                 let cached_fault_state = if self.fault_transition.changed {
                     ecu_runtime::FaultState {
@@ -1059,6 +2121,10 @@ where
                     self.fault_transition = CommonFaultTransitionTelemetry {
                         changed: true,
                         at_us: now_us,
+                        event: common_fault_transition_event(
+                            previous_fault_state,
+                            post_step_fault_state,
+                        ),
                         previous_fault: previous_fault_state.fault,
                         previous_severity: previous_fault_state.severity,
                         previous_cancel_reason: previous_fault_state.cancel_reason,
@@ -1066,16 +2132,26 @@ where
                         current_severity: post_step_fault_state.severity,
                         current_cancel_reason: post_step_fault_state.cancel_reason,
                     };
+                    self.push_fault_transition_live_diag_event();
                 }
                 self.action_telemetry = common_action_telemetry(&result);
                 self.control_reasons = CommonControlReasonTelemetry {
                     lambda_mode: common_lambda_mode(result.control.lambda.mode),
                     lambda_active: result.control.lambda.active,
                     lambda_trim_x100: result.control.lambda.trim_x100,
+                    lambda_disable_reason: common_lambda_disable_reason(
+                        result.control.lambda.disable_reason,
+                    ),
                     ignition_limit_reason: common_ignition_limit_reason(
                         result.control.ignition.limit_reason,
                     ),
                     torque_limit_reason: common_torque_limit_reason(result.control.torque.reason),
+                };
+                self.last_lambda_inputs = LastLambdaInputs {
+                    seen: true,
+                    lambda_valid: control.lambda.lambda_valid,
+                    measured_lambda100: control.lambda.measured_lambda100,
+                    requested_open_loop: control.lambda.requested_open_loop,
                 };
                 self.validated = CommonValidatedInputTelemetry {
                     rpm: result.validated.rpm,
@@ -1089,10 +2165,97 @@ where
                 };
                 self.enrichment = CommonEnrichmentTelemetry {
                     startup_x100: result.control.enrichment.startup_x100,
-                    warmup_x100: result.control.enrichment.warmup_x100,
+                    warmup_x100: result
+                        .control
+                        .fuel_intent
+                        .observations
+                        .warmup_correction_x100,
                     after_start_x100: result.control.enrichment.after_start_x100,
                     acceleration_x100: result.control.enrichment.acceleration_x100,
                     total_x100: result.control.enrichment.total_x100(),
+                };
+                self.warmup = CommonWarmupTelemetry {
+                    active: result.control.fuel_intent.observations.warmup_active,
+                    correction_x100: result
+                        .control
+                        .fuel_intent
+                        .observations
+                        .warmup_correction_x100,
+                    temperature_mode: match result
+                        .control
+                        .fuel_intent
+                        .observations
+                        .warmup_temperature_mode
+                    {
+                        ecu_runtime::FuelWarmupTemperatureMode::Inactive => {
+                            CommonWarmupTemperatureMode::Inactive
+                        }
+                        ecu_runtime::FuelWarmupTemperatureMode::ColdClamp => {
+                            CommonWarmupTemperatureMode::ColdClamp
+                        }
+                        ecu_runtime::FuelWarmupTemperatureMode::Interpolating => {
+                            CommonWarmupTemperatureMode::Interpolating
+                        }
+                        ecu_runtime::FuelWarmupTemperatureMode::HotClamp => {
+                            CommonWarmupTemperatureMode::HotClamp
+                        }
+                        ecu_runtime::FuelWarmupTemperatureMode::NeutralFallback => {
+                            CommonWarmupTemperatureMode::NeutralFallback
+                        }
+                    },
+                };
+                self.startup = CommonStartupTelemetry {
+                    active: result.control.fuel_intent.observations.startup_active,
+                    remaining_window: result
+                        .control
+                        .fuel_intent
+                        .observations
+                        .startup_window_remaining,
+                    window_mode: match result.control.fuel_intent.observations.startup_window_mode {
+                        ecu_runtime::FuelStartupWindowMode::Inactive => {
+                            CommonStartupWindowMode::Inactive
+                        }
+                        ecu_runtime::FuelStartupWindowMode::Milliseconds => {
+                            CommonStartupWindowMode::Milliseconds
+                        }
+                    },
+                };
+                self.afterstart = CommonAfterstartTelemetry {
+                    active: result.control.fuel_intent.observations.afterstart_active,
+                    remaining_window: result
+                        .control
+                        .fuel_intent
+                        .observations
+                        .afterstart_window_remaining,
+                    window_mode: match result
+                        .control
+                        .fuel_intent
+                        .observations
+                        .afterstart_window_mode
+                    {
+                        ecu_runtime::FuelAfterstartWindowMode::Inactive => {
+                            CommonAfterstartWindowMode::Inactive
+                        }
+                        ecu_runtime::FuelAfterstartWindowMode::Milliseconds => {
+                            CommonAfterstartWindowMode::Milliseconds
+                        }
+                        ecu_runtime::FuelAfterstartWindowMode::Cycles => {
+                            CommonAfterstartWindowMode::Cycles
+                        }
+                    },
+                };
+                self.transient_enrichment = CommonTransientEnrichmentTelemetry {
+                    acceleration_active: result
+                        .control
+                        .fuel_intent
+                        .observations
+                        .lambda_ae_freeze_active,
+                    acceleration_pulse_us: result.control.fuel_intent.observations.ae_pulse_us,
+                    acceleration_decay_steps_remaining: result
+                        .control
+                        .fuel_intent
+                        .observations
+                        .ae_decay_steps_remaining,
                 };
                 self.torque = CommonTorqueTelemetry {
                     request_x1000: result.torque_observations.request_x1000,
@@ -1134,6 +2297,134 @@ where
     }
 }
 
+#[cfg(feature = "transport-can")]
+impl<S, C, A, W, T, P> crate::transport_service::Obd2RetainedHistoryOwner
+    for BoardAdapter<S, C, A, W, T, P>
+where
+    S: CaptureSampleSource,
+    C: CaptureSink,
+    A: ActionExecutor,
+    W: Watchdog,
+    T: TransportPublisher,
+    P: PersistedCalibrationStore,
+{
+    fn obd2_retained_history_snapshot(
+        &self,
+    ) -> crate::transport_service::Obd2RetainedDiagnosticHistorySnapshot {
+        BoardAdapter::obd2_retained_history_snapshot(self)
+    }
+
+    fn restore_obd2_retained_history(
+        &mut self,
+        snapshot: &crate::transport_service::Obd2RetainedDiagnosticHistorySnapshot,
+    ) {
+        BoardAdapter::restore_obd2_retained_history(self, snapshot);
+    }
+}
+
+#[cfg(feature = "transport-can")]
+impl<S, C, A, W, T, P> crate::transport_service::DiagnosticClearOwner
+    for BoardAdapter<S, C, A, W, T, P>
+where
+    S: CaptureSampleSource,
+    C: CaptureSink,
+    A: ActionExecutor,
+    W: Watchdog,
+    T: TransportPublisher,
+    P: PersistedCalibrationStore,
+{
+    fn clear_diagnostics(&mut self) -> ecu_domain::diag::DiagClearSummary {
+        BoardAdapter::clear_diagnostics(self)
+    }
+}
+
+#[cfg(feature = "transport-can")]
+impl<S, C, A, W, T, P> crate::transport_service::LiveObd2RequestOwner
+    for BoardAdapter<S, C, A, W, T, P>
+where
+    S: CaptureSampleSource,
+    C: CaptureSink,
+    A: ActionExecutor,
+    W: Watchdog,
+    T: TransportPublisher,
+    P: PersistedCalibrationStore,
+{
+    fn fault_state(&self) -> ecu_runtime::FaultState {
+        self.fault_state()
+    }
+
+    fn current_obd2_sensor_data(&self) -> ecu_transport::Message {
+        crate::transport_service::obd2_current_data_from_board_inputs(
+            self.logical_sensor_capture(),
+            self.capture_sample(),
+        )
+    }
+
+    fn obd2_retained_history(&self) -> &crate::transport_service::Obd2RetainedDiagnosticHistory {
+        &self.retained_obd2_history
+    }
+
+    fn obd2_retained_history_mut(
+        &mut self,
+    ) -> &mut crate::transport_service::Obd2RetainedDiagnosticHistory {
+        &mut self.retained_obd2_history
+    }
+
+    fn current_obd2_diag_event(&self) -> Option<ecu_domain::diag::DiagEvent> {
+        let current_data_value_source =
+            crate::transport_service::obd2_current_data_from_board_inputs(
+                self.logical_sensor_capture(),
+                self.capture_sample(),
+            );
+        crate::transport_service::obd2_diag_event_from_runtime_fault(
+            self.fault_state(),
+            &current_data_value_source,
+        )
+    }
+
+    fn obd2_diag_log_events(&self) -> [Option<ecu_domain::diag::DiagEvent>; DIAG_LOG_ENTRY_COUNT] {
+        crate::transport_service::obd2_diag_log_events_array(self.diag_log())
+    }
+
+    fn recent_obd2_diag_events(
+        &self,
+    ) -> [Option<ecu_domain::diag::DiagEvent>;
+           crate::transport_service::OBD2_LIVE_DIAG_EVENT_INGRESS_CAP] {
+        let current_data_value_source =
+            crate::transport_service::obd2_current_data_from_board_inputs(
+                self.logical_sensor_capture(),
+                self.capture_sample(),
+            );
+        [
+            crate::transport_service::obd2_diag_event_from_fault_transition(
+                self.fault_transition_telemetry(),
+                &current_data_value_source,
+            ),
+            None,
+        ]
+    }
+
+    fn fallback_obd2_vehicle_identity(&self) -> crate::transport_service::Obd2VehicleIdentity {
+        crate::transport_service::Obd2VehicleIdentity::from_calibration_identity(
+            self.calibration_package_identity(),
+        )
+    }
+
+    fn provisioned_obd2_identity(&self) -> crate::transport_service::ProvisionedObd2Identity {
+        self.provisioned_obd2_identity
+    }
+
+    fn obd2_identity_key_lifecycle_status(
+        &self,
+    ) -> Option<ecu_transport::CanObd2IdentityKeyLifecycleStatus> {
+        self.obd2_identity_key_lifecycle_status
+    }
+
+    fn obd2_flash_write_fault_status(&self) -> Option<ecu_transport::CanObd2FlashWriteFaultStatus> {
+        self.obd2_flash_write_fault_status
+    }
+}
+
 impl<const N: usize> SchedulerObservabilitySource for ScheduledActionExecutor<N> {
     fn timing_metrics(&self) -> ScheduledTimingMetrics {
         self.timing_metrics()
@@ -1163,6 +2454,7 @@ impl<const N: usize> SchedulerObservabilitySource for ScheduledActionExecutor<N>
             heartbeat_deadline_us: frontier.heartbeat_deadline_us(),
             active_permit_mask: frontier.active_permit_mask(),
             active_stop_reason: frontier.active_stop_reason(),
+            fault: common_frontier_fault_telemetry(frontier.active_stop_reason()),
         }
     }
 
@@ -1214,11 +2506,53 @@ where
 {
     pub fn diagnostics_telemetry(&self) -> CommonDiagnosticsTelemetry {
         let timing_metrics = self.actions.timing_metrics();
+        let fault_state = self.fault_state();
+        let runtime_snapshot = self.runtime.snapshot();
+        let actions = self.action_telemetry;
+        let fault = common_runtime_fault_telemetry(fault_state);
+        let lambda = self.lambda_telemetry();
+        let lambda_correction = self.lambda_correction_telemetry();
+        let warmup = self.warmup_telemetry();
+        let startup = self.startup_telemetry();
+        let afterstart = self.afterstart_telemetry();
+        let transient_enrichment = self.transient_enrichment_telemetry();
+        let decision = CommonDecisionTelemetry {
+            control_mode: runtime_snapshot.engine.mode,
+            rev_soft_active: runtime_snapshot.rev_soft_active,
+            rev_hard_active: runtime_snapshot.rev_hard_active,
+            launch_active: runtime_snapshot.launch_active,
+            flat_shift_active: runtime_snapshot.flat_shift_active,
+            fuel_cut: runtime_snapshot.fuel_cut,
+            spark_cut: runtime_snapshot.spark_cut,
+            fuel_cut_reason: CommonCutReason::None,
+            spark_cut_reason: CommonCutReason::None,
+        };
+        let decision = CommonDecisionTelemetry {
+            fuel_cut_reason: common_fuel_cut_reason(&runtime_snapshot),
+            spark_cut_reason: common_spark_cut_reason(&runtime_snapshot),
+            ..decision
+        };
+        let protection =
+            common_protection_telemetry(decision, fault, self.actions.frontier_telemetry().fault);
+        let limp_action = common_limp_action_telemetry(
+            actions,
+            protection,
+            self.actions.frontier_telemetry().fault,
+        );
         CommonDiagnosticsTelemetry {
             sync_state: common_sync_telemetry_state(self.sync_state()),
-            fault_code: self.fault_state().fault,
-            fault_severity: self.fault_state().severity,
-            cancel_reason: self.fault_state().cancel_reason,
+            fault_code: fault_state.fault,
+            fault_severity: fault_state.severity,
+            cancel_reason: fault_state.cancel_reason,
+            fault,
+            lambda,
+            lambda_correction,
+            warmup,
+            startup,
+            afterstart,
+            transient_enrichment,
+            protection,
+            limp_action,
             late_event_count: timing_metrics.late_event_count,
             max_lateness_us: timing_metrics
                 .max_lateness_us
@@ -1233,19 +2567,55 @@ where
 
     pub fn observability_snapshot(&self) -> CommonObservabilitySnapshot {
         let runtime_snapshot = self.runtime.snapshot();
+        let diagnostics = self.diagnostics_telemetry();
+        let fault = common_runtime_fault_telemetry(self.fault_state());
+        let lambda = self.lambda_telemetry();
+        let lambda_correction = self.lambda_correction_telemetry();
+        let warmup = self.warmup_telemetry();
+        let startup = self.startup_telemetry();
+        let afterstart = self.afterstart_telemetry();
+        let transient_enrichment = self.transient_enrichment_telemetry();
+        let decision = CommonDecisionTelemetry {
+            control_mode: runtime_snapshot.engine.mode,
+            rev_soft_active: runtime_snapshot.rev_soft_active,
+            rev_hard_active: runtime_snapshot.rev_hard_active,
+            launch_active: runtime_snapshot.launch_active,
+            flat_shift_active: runtime_snapshot.flat_shift_active,
+            fuel_cut: runtime_snapshot.fuel_cut,
+            spark_cut: runtime_snapshot.spark_cut,
+            fuel_cut_reason: CommonCutReason::None,
+            spark_cut_reason: CommonCutReason::None,
+        };
+        let decision = CommonDecisionTelemetry {
+            fuel_cut_reason: common_fuel_cut_reason(&runtime_snapshot),
+            spark_cut_reason: common_spark_cut_reason(&runtime_snapshot),
+            ..decision
+        };
+        let frontier = self.actions.frontier_telemetry();
+        let protection = common_protection_telemetry(decision, fault, frontier.fault);
+        let limp_action =
+            common_limp_action_telemetry(self.action_telemetry, protection, frontier.fault);
         CommonObservabilitySnapshot {
-            diagnostics: self.diagnostics_telemetry(),
+            diagnostics,
             fault_state: self.fault_state(),
+            fault,
+            lambda,
+            lambda_correction,
+            warmup,
+            startup,
+            afterstart,
+            transient_enrichment,
+            protection,
+            limp_action,
+            high_rate_log: common_high_rate_log_telemetry(
+                decision,
+                fault,
+                frontier.fault,
+                diagnostics,
+                self.calibration_package_identity(),
+            ),
             sync_state: self.sync_state(),
-            decision: CommonDecisionTelemetry {
-                control_mode: runtime_snapshot.engine.mode,
-                rev_soft_active: runtime_snapshot.rev_soft_active,
-                rev_hard_active: runtime_snapshot.rev_hard_active,
-                launch_active: runtime_snapshot.launch_active,
-                flat_shift_active: runtime_snapshot.flat_shift_active,
-                fuel_cut: runtime_snapshot.fuel_cut,
-                spark_cut: runtime_snapshot.spark_cut,
-            },
+            decision,
             fuel_strategy_mode: self.fuel_strategy_mode(),
             shift_arming: self.shift_arming_telemetry(),
             pending_input: self.pending_input_telemetry(),
@@ -1270,7 +2640,7 @@ where
                 phase: runtime_snapshot.engine.phase,
             },
             validated: self.validated_input_telemetry(),
-            frontier: self.actions.frontier_telemetry(),
+            frontier,
             scheduler_ownership: self.actions.scheduler_ownership_telemetry(),
             scheduler_reservations: self.actions.scheduler_reservation_telemetry(),
             scheduler_state_summary: self.actions.scheduler_state_summary_telemetry(),
@@ -1515,7 +2885,7 @@ where
 
     pub fn decision_telemetry(&self) -> CommonDecisionTelemetry {
         let snapshot = self.runtime.snapshot();
-        CommonDecisionTelemetry {
+        let decision = CommonDecisionTelemetry {
             control_mode: snapshot.engine.mode,
             rev_soft_active: snapshot.rev_soft_active,
             rev_hard_active: snapshot.rev_hard_active,
@@ -1523,6 +2893,13 @@ where
             flat_shift_active: snapshot.flat_shift_active,
             fuel_cut: snapshot.fuel_cut,
             spark_cut: snapshot.spark_cut,
+            fuel_cut_reason: CommonCutReason::None,
+            spark_cut_reason: CommonCutReason::None,
+        };
+        CommonDecisionTelemetry {
+            fuel_cut_reason: common_fuel_cut_reason(&snapshot),
+            spark_cut_reason: common_spark_cut_reason(&snapshot),
+            ..decision
         }
     }
 
@@ -1547,6 +2924,37 @@ where
         }
     }
 
+    pub fn runtime_fault_telemetry(&self) -> CommonRuntimeFaultTelemetry {
+        common_runtime_fault_telemetry(self.fault_state())
+    }
+
+    pub fn protection_telemetry(&self) -> CommonProtectionTelemetry {
+        common_protection_telemetry(
+            self.decision_telemetry(),
+            self.runtime_fault_telemetry(),
+            self.frontier_telemetry().fault,
+        )
+    }
+
+    pub fn limp_action_telemetry(&self) -> CommonLimpActionTelemetry {
+        common_limp_action_telemetry(
+            self.action_telemetry(),
+            self.protection_telemetry(),
+            self.frontier_telemetry().fault,
+        )
+    }
+
+    pub fn high_rate_log_telemetry(&self) -> CommonHighRateLogTelemetry {
+        let diagnostics = self.diagnostics_telemetry();
+        common_high_rate_log_telemetry(
+            self.decision_telemetry(),
+            self.runtime_fault_telemetry(),
+            self.frontier_telemetry().fault,
+            diagnostics,
+            self.calibration_package_identity(),
+        )
+    }
+
     pub fn frontier_telemetry(&self) -> CommonFrontierTelemetry {
         let frontier = self.actions.frontier();
         CommonFrontierTelemetry {
@@ -1559,6 +2967,7 @@ where
             heartbeat_deadline_us: frontier.heartbeat_deadline_us(),
             active_permit_mask: frontier.active_permit_mask(),
             active_stop_reason: frontier.active_stop_reason(),
+            fault: common_frontier_fault_telemetry(frontier.active_stop_reason()),
         }
     }
 

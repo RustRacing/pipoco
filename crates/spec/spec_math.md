@@ -1690,7 +1690,9 @@ Proof obligations:
 Frozen diagnostic log ring shape:
 
 - capacity: `64` entries
-- per-entry fields: `timestamp_us (u32)`, `code (u16)`, `source (u8)`, `context (u16)`
+- per-entry fields match the current shared TS `diag_log` row encoding:
+  `code (u8)`, `severity (u8)`, `action (u8)`, `source (u8, high bit = context_present)`,
+  `start_us (u32)`, `end_us (u32)`, `context (u32)`
 
 Frozen ring-buffer invariants:
 

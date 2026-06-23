@@ -19,6 +19,8 @@ pub enum CommonSyncTelemetryState {
     CrankSynced,
     FullSequentialAuthorized,
     SyncLost,
+    CamSynced,
+    SyncSuspect,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -27,6 +29,15 @@ pub struct CommonDiagnosticsTelemetry {
     pub fault_code: FaultCode,
     pub fault_severity: FaultSeverity,
     pub cancel_reason: CancelReason,
+    pub fault: CommonRuntimeFaultTelemetry,
+    pub lambda: CommonLambdaTelemetry,
+    pub lambda_correction: CommonLambdaCorrectionTelemetry,
+    pub warmup: CommonWarmupTelemetry,
+    pub startup: CommonStartupTelemetry,
+    pub afterstart: CommonAfterstartTelemetry,
+    pub transient_enrichment: CommonTransientEnrichmentTelemetry,
+    pub protection: CommonProtectionTelemetry,
+    pub limp_action: CommonLimpActionTelemetry,
     pub late_event_count: u32,
     pub max_lateness_us: u32,
     pub queue_high_water_mark: u8,
@@ -34,6 +45,97 @@ pub struct CommonDiagnosticsTelemetry {
     pub active_queue_count: u8,
     pub free_queue_slots: u8,
     pub queue_capacity: u8,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct CommonHighRateLogTelemetry {
+    pub decision: CommonDecisionTelemetry,
+    pub fault: CommonRuntimeFaultTelemetry,
+    pub frontier_fault: CommonFrontierFaultTelemetry,
+    pub late_event_count: u32,
+    pub max_lateness_us: u32,
+    pub calibration_checksum: u32,
+}
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum CommonProtectionLevel {
+    #[default]
+    Inactive = 0,
+    Degraded = 1,
+    ShutdownDriving = 2,
+}
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum CommonProtectionSource {
+    #[default]
+    None = 0,
+    RuntimeFault = 1,
+    FrontierFault = 2,
+    ControlMode = 3,
+}
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum CommonProtectionAction {
+    #[default]
+    None = 0,
+    ObserveOnly = 1,
+    LimpHome = 2,
+    OutputSuppressed = 3,
+    SafeStateTransition = 4,
+    Shutdown = 5,
+}
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum CommonProtectionPersistence {
+    #[default]
+    Inactive = 0,
+    Reversible = 1,
+    LatchedUntilClear = 2,
+    LatchedUntilRecovery = 3,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct CommonProtectionTelemetry {
+    pub level: CommonProtectionLevel,
+    pub source: CommonProtectionSource,
+    pub action: CommonProtectionAction,
+    pub persistence: CommonProtectionPersistence,
+}
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum CommonLimpActionLevel {
+    #[default]
+    Inactive = 0,
+    AuxOnly = 1,
+    OutputSuppressed = 2,
+    ShutdownDriving = 3,
+}
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum CommonLimpActionSource {
+    #[default]
+    None = 0,
+    RuntimeFault = 1,
+    FrontierFault = 2,
+    ControlMode = 3,
+    SyncAuthority = 4,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct CommonLimpActionTelemetry {
+    pub level: CommonLimpActionLevel,
+    pub source: CommonLimpActionSource,
+    pub cancel_scheduler: bool,
+    pub cancel_reason: CancelReason,
+    pub apply_aux: bool,
+    pub aux_command_count: u8,
+    pub persistence: CommonProtectionPersistence,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -45,6 +147,25 @@ pub struct CommonDecisionTelemetry {
     pub flat_shift_active: bool,
     pub fuel_cut: bool,
     pub spark_cut: bool,
+    pub fuel_cut_reason: CommonCutReason,
+    pub spark_cut_reason: CommonCutReason,
+}
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum CommonCutReason {
+    #[default]
+    None = 0,
+    SafetyLatched = 1,
+    DirectRequest = 2,
+    Shutdown = 3,
+    HardRev = 4,
+    Launch = 5,
+    FlatShift = 6,
+    FuelOnly = 7,
+    SoftRev = 8,
+    SparkOnly = 9,
+    KnockRetard = 10,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -115,6 +236,44 @@ pub enum CommonLambdaMode {
     ClosedLoop,
 }
 
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum CommonLambdaActivity {
+    #[default]
+    Inactive = 0,
+    Frozen = 1,
+    Active = 2,
+}
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum CommonLambdaDisableReason {
+    #[default]
+    None = 0,
+    OpenLoop = 1,
+    RequestedOpenLoop = 2,
+    SensorInvalid = 3,
+    WarmupGate = 4,
+    LowLoadGate = 5,
+    StartupDelay = 6,
+    PowerReductionCut = 7,
+    AccelerationEnrichment = 8,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct CommonLambdaTelemetry {
+    pub activity: CommonLambdaActivity,
+    pub reason: CommonLambdaDisableReason,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct CommonLambdaCorrectionTelemetry {
+    pub measured_lambda: Lambda100,
+    pub target_lambda: Lambda100,
+    pub trim_x100: i16,
+    pub status: CommonLambdaTelemetry,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum CommonIgnitionLimitReason {
     #[default]
@@ -140,6 +299,7 @@ pub struct CommonControlReasonTelemetry {
     pub lambda_mode: CommonLambdaMode,
     pub lambda_active: bool,
     pub lambda_trim_x100: i16,
+    pub lambda_disable_reason: CommonLambdaDisableReason,
     pub ignition_limit_reason: CommonIgnitionLimitReason,
     pub torque_limit_reason: CommonTorqueLimitReason,
 }
@@ -166,6 +326,62 @@ pub struct CommonEnrichmentTelemetry {
     pub after_start_x100: u16,
     pub acceleration_x100: u16,
     pub total_x100: u16,
+}
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum CommonWarmupTemperatureMode {
+    #[default]
+    Inactive = 0,
+    ColdClamp = 1,
+    Interpolating = 2,
+    HotClamp = 3,
+    NeutralFallback = 4,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct CommonWarmupTelemetry {
+    pub active: bool,
+    pub correction_x100: u16,
+    pub temperature_mode: CommonWarmupTemperatureMode,
+}
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum CommonStartupWindowMode {
+    #[default]
+    Inactive = 0,
+    Milliseconds = 1,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct CommonStartupTelemetry {
+    pub active: bool,
+    pub remaining_window: u16,
+    pub window_mode: CommonStartupWindowMode,
+}
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum CommonAfterstartWindowMode {
+    #[default]
+    Inactive = 0,
+    Milliseconds = 1,
+    Cycles = 2,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct CommonAfterstartTelemetry {
+    pub active: bool,
+    pub remaining_window: u16,
+    pub window_mode: CommonAfterstartWindowMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct CommonTransientEnrichmentTelemetry {
+    pub acceleration_active: bool,
+    pub acceleration_pulse_us: u16,
+    pub acceleration_decay_steps_remaining: u16,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -198,6 +414,37 @@ pub struct CommonFrontierTelemetry {
     pub heartbeat_deadline_us: Option<Micros>,
     pub active_permit_mask: TimingIslandPermitMask,
     pub active_stop_reason: TimingIslandStopReason,
+    pub fault: CommonFrontierFaultTelemetry,
+}
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum CommonFrontierFaultEventId {
+    #[default]
+    None = 0,
+    SyncLost = 1,
+    HeartbeatExpired = 2,
+    HorizonExpired = 3,
+    PermitDenied = 4,
+    TimingFault = 5,
+    AdmittedEventRejected = 6,
+    BoardOutputFault = 7,
+}
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum CommonFrontierFaultAction {
+    #[default]
+    None = 0,
+    OutputSuppressed = 1,
+    SafeStateTransition = 2,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct CommonFrontierFaultTelemetry {
+    pub event_id: CommonFrontierFaultEventId,
+    pub severity: FaultSeverity,
+    pub action: CommonFrontierFaultAction,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -240,16 +487,54 @@ pub struct CommonValidatedInputTelemetry {
     pub clamped: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct CommonRuntimeFaultTelemetry {
+    pub active: bool,
+    pub fault_code: FaultCode,
+    pub severity: FaultSeverity,
+    pub cancel_reason: CancelReason,
+    pub action: CommonFaultTransitionAction,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct CommonFaultTransitionTelemetry {
     pub changed: bool,
     pub at_us: Micros,
+    pub event: CommonFaultTransitionEventTelemetry,
     pub previous_fault: FaultCode,
     pub previous_severity: FaultSeverity,
     pub previous_cancel_reason: CancelReason,
     pub current_fault: FaultCode,
     pub current_severity: FaultSeverity,
     pub current_cancel_reason: CancelReason,
+}
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum CommonFaultTransitionEventId {
+    #[default]
+    None = 0,
+    FaultEntered = 1,
+    FaultUpdated = 2,
+    FaultCleared = 3,
+}
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum CommonFaultTransitionAction {
+    #[default]
+    None = 0,
+    ObserveOnly = 1,
+    LimpHome = 2,
+    Shutdown = 3,
+    Cleared = 4,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct CommonFaultTransitionEventTelemetry {
+    pub event_id: CommonFaultTransitionEventId,
+    pub severity: FaultSeverity,
+    pub action: CommonFaultTransitionAction,
 }
 
 #[repr(C)]

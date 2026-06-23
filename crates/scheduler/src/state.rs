@@ -1,6 +1,7 @@
 use crate::{
     ChannelId, ExclusiveChannel, IgnitionPlan, InjectionPlan, Micros, OutputGroup, ScheduleError,
-    TimedIgnitionPlan, TimedInjectionPlan,
+    ScheduledLevel, ScheduledTransition, ScheduledTransitionKind, TimedIgnitionPlan,
+    TimedInjectionPlan,
 };
 use ecu_board_api::frontier::{
     TimingIslandHorizonSequenceId as FrontierHorizonSequenceId,
@@ -23,6 +24,7 @@ pub struct SchedulerState {
     mode: SchedulerMode,
     active_groups: u8,
     reserved_channels: [u128; 4],
+    scheduled_windows: [Option<ScheduledWindow>; MAX_SCHEDULED_WINDOWS],
     last_accepted_horizon_id: Option<FrontierHorizonSequenceId>,
     last_accepted_horizon_start_us: Option<Micros>,
     last_accepted_horizon_end_us: Option<Micros>,
@@ -46,6 +48,7 @@ impl SchedulerState {
             mode: SchedulerMode::Idle,
             active_groups: 0,
             reserved_channels: [0; 4],
+            scheduled_windows: [None; MAX_SCHEDULED_WINDOWS],
             last_accepted_horizon_id: None,
             last_accepted_horizon_start_us: None,
             last_accepted_horizon_end_us: None,
@@ -145,19 +148,49 @@ impl SchedulerState {
         self.mode = SchedulerMode::Armed;
     }
 
-    pub fn reserve_channel(&mut self, output: ExclusiveChannel) -> Result<(), ScheduleError> {
-        let idx = output.group().index();
-        let bit = channel_bit(output.channel())?;
-        if self.reserved_channels[idx] & bit != 0 {
-            return Err(ScheduleError::ConflictingChannel);
+    pub fn reserve_window(
+        &mut self,
+        output: ExclusiveChannel,
+        start_at: Micros,
+        end_at: Micros,
+    ) -> Result<(), ScheduleError> {
+        if end_at.get() <= start_at.get() {
+            return Err(ScheduleError::ImpossibleDeadline);
         }
-        self.reserved_channels[idx] |= bit;
+
+        channel_bit(output.channel())?;
+        for existing in self.scheduled_windows.iter().flatten() {
+            if existing.output == output
+                && windows_overlap(start_at, end_at, existing.start_at, existing.end_at)
+            {
+                return Err(ScheduleError::ConflictingChannel);
+            }
+        }
+
+        let Some(slot) = self
+            .scheduled_windows
+            .iter_mut()
+            .find(|slot| slot.is_none())
+        else {
+            return Err(ScheduleError::QueueFull);
+        };
+        *slot = Some(ScheduledWindow {
+            output,
+            start_at,
+            end_at,
+        });
         self.arm_group(output.group());
+        self.refresh_reserved_channels();
         self.refresh_counts();
         Ok(())
     }
 
     pub fn cancel_group(&mut self, group: OutputGroup) {
+        self.scheduled_windows.iter_mut().for_each(|slot| {
+            if slot.is_some_and(|window| window.output.group() == group) {
+                *slot = None;
+            }
+        });
         self.reserved_channels[group.index()] = 0;
         self.active_groups &= !group.mask();
         if self.active_groups == 0 && self.mode != SchedulerMode::Suspended {
@@ -167,18 +200,13 @@ impl SchedulerState {
     }
 
     pub fn cancel_all(&mut self) {
-        self.reserved_channels = [0; 4];
-        self.active_groups = 0;
-        self.mode = SchedulerMode::Idle;
+        self.clear_scheduled_ownership();
         self.clear_live_frontier_state(FrontierStopReason::PermitDenied);
-        self.refresh_counts();
     }
 
     pub fn suspend(&mut self) {
-        self.reserved_channels = [0; 4];
-        self.active_groups = 0;
+        self.clear_scheduled_ownership();
         self.mode = SchedulerMode::Suspended;
-        self.refresh_counts();
     }
 
     pub fn on_sync_loss(&mut self) {
@@ -298,7 +326,7 @@ impl SchedulerState {
     ) -> Result<TimedInjectionPlan, ScheduleError> {
         self.ensure_schedulable()?;
         let timed = Self::convert_deadline(now, start_at, end_at)?;
-        self.reserve_channel(plan.output)?;
+        self.reserve_window(plan.output, timed.0, timed.1)?;
         self.last_injection_start = Some(timed.0);
         self.last_injection_end = Some(timed.1);
         Ok(TimedInjectionPlan {
@@ -317,7 +345,7 @@ impl SchedulerState {
     ) -> Result<TimedIgnitionPlan, ScheduleError> {
         self.ensure_schedulable()?;
         let timed = Self::convert_deadline(now, start_at, end_at)?;
-        self.reserve_channel(plan.output)?;
+        self.reserve_window(plan.output, timed.0, timed.1)?;
         self.last_ignition_start = Some(timed.0);
         self.last_ignition_end = Some(timed.1);
         Ok(TimedIgnitionPlan {
@@ -351,6 +379,72 @@ impl SchedulerState {
         Ok((start_at, end_at))
     }
 
+    pub fn note_drained_transition(&mut self, transition: ScheduledTransition) {
+        if transition.level != ScheduledLevel::Low {
+            return;
+        }
+
+        let group = match transition.kind {
+            ScheduledTransitionKind::Injector => OutputGroup::Injector,
+            ScheduledTransitionKind::Ignition => OutputGroup::Ignition,
+        };
+        let output = ExclusiveChannel::new(group, transition.channel);
+        let mut released = false;
+        for slot in &mut self.scheduled_windows {
+            if slot
+                .is_some_and(|window| window.output == output && window.end_at == transition.at_us)
+            {
+                *slot = None;
+                released = true;
+                break;
+            }
+        }
+        if !released {
+            return;
+        }
+
+        self.refresh_reserved_channels();
+        self.sync_scheduled_group(OutputGroup::Injector);
+        self.sync_scheduled_group(OutputGroup::Ignition);
+        self.refresh_counts();
+        self.refresh_mode_from_groups();
+    }
+
+    pub fn clear_scheduled_ownership(&mut self) {
+        self.scheduled_windows = [None; MAX_SCHEDULED_WINDOWS];
+        self.reserved_channels = [0; 4];
+        self.active_groups = 0;
+        self.refresh_counts();
+        self.refresh_mode_from_groups();
+    }
+
+    fn refresh_reserved_channels(&mut self) {
+        self.reserved_channels = [0; 4];
+        for window in self.scheduled_windows.iter().flatten() {
+            let idx = window.output.group().index();
+            let Ok(bit) = channel_bit(window.output.channel()) else {
+                continue;
+            };
+            self.reserved_channels[idx] |= bit;
+        }
+    }
+
+    fn sync_scheduled_group(&mut self, group: OutputGroup) {
+        if self.reserved_channels[group.index()] == 0 {
+            self.active_groups &= !group.mask();
+        } else {
+            self.active_groups |= group.mask();
+        }
+    }
+
+    fn refresh_mode_from_groups(&mut self) {
+        if self.active_groups == 0 && self.mode != SchedulerMode::Suspended {
+            self.mode = SchedulerMode::Idle;
+        } else if self.active_groups != 0 && self.mode != SchedulerMode::Suspended {
+            self.mode = SchedulerMode::Armed;
+        }
+    }
+
     fn refresh_counts(&mut self) {
         self.injection_count =
             self.reserved_channels[OutputGroup::Injector.index()].count_ones() as u8;
@@ -380,10 +474,27 @@ impl OutputGroup {
 }
 
 const CHANNEL_BIT_WIDTH: u8 = u128::BITS as u8;
+const MAX_SCHEDULED_WINDOWS: usize = ecu_board_api::FULL_ECU_MAX_CYLINDERS * 2;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ScheduledWindow {
+    output: ExclusiveChannel,
+    start_at: Micros,
+    end_at: Micros,
+}
 
 const fn channel_bit(channel: ChannelId) -> Result<u128, ScheduleError> {
     if channel.get() >= CHANNEL_BIT_WIDTH {
         return Err(ScheduleError::InvalidChannel);
     }
     Ok(1u128 << (channel.get() as u32))
+}
+
+const fn windows_overlap(
+    candidate_start: Micros,
+    candidate_end: Micros,
+    existing_start: Micros,
+    existing_end: Micros,
+) -> bool {
+    candidate_start.get() < existing_end.get() && existing_start.get() < candidate_end.get()
 }

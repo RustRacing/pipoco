@@ -1,5 +1,8 @@
 use crate::{Degrees10, DwellUs, PulseWidthUs};
-pub use ecu_board_api::{FuelOutputMode, FuelOutputProfile, SparkOutputMode, SparkOutputProfile};
+pub use ecu_board_api::{
+    FuelOutputMode, FuelOutputProfile, IgnitionOutputProfile, InjectionOutputProfile,
+    SparkOutputMode, SparkOutputProfile,
+};
 
 /// Spark-only control intent without an already-selected coil output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

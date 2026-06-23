@@ -10,7 +10,8 @@ use ecu_calibration::configs::EcuConfig;
 use ecu_domain::diag::DiagLog;
 use ecu_domain::{Micros, Rpm, SyncState};
 use ecu_ts::pages::{
-    DiagnosticLogEntry, EcuPageStore, ExpertTriggerPageState, SystemSnapshot, DIAG_LOG_ENTRY_COUNT,
+    ts_diag_log_action_code, ts_diag_log_severity_code, ts_diag_source_code, DiagnosticLogEntry,
+    EcuPageStore, ExpertTriggerPageState, SystemSnapshot, DIAG_LOG_ENTRY_COUNT,
 };
 
 /// Runtime state needed to assemble the diagnostic and snapshot pages.
@@ -22,6 +23,12 @@ pub struct PageRuntime<'a> {
     pub snapshot: &'a SystemSnapshot,
     pub tooth_count: &'a u8,
     pub sync_loss_counter: u16,
+    pub current_fault_code: u8,
+    pub current_fault_severity: u8,
+    pub current_fault_action: u8,
+    pub current_cancel_reason: u8,
+    pub fault_flags: u8,
+    pub latest_diag_code: u8,
     pub emerg_trig_map: &'a mut bool,
     pub emerg_trig_tps: &'a mut bool,
     pub diag_log_entries: [Option<DiagnosticLogEntry>; DIAG_LOG_ENTRY_COUNT],
@@ -39,6 +46,11 @@ pub fn diag_log_entries_from<const N: usize>(
     for (entry, slot) in entries.iter_mut().zip(diag_log.events.iter()) {
         *entry = slot.as_ref().map(|ev| DiagnosticLogEntry {
             code: ev.code.to_u8(),
+            severity: ts_diag_log_severity_code(ev.code.to_u8()),
+            action: ts_diag_log_action_code(ev.code.to_u8(), ts_diag_source_code(ev.source)),
+            source: ts_diag_source_code(ev.source),
+            context_present: ev.context.is_some(),
+            context: ev.context.unwrap_or(0),
             start_us: ev.start_us,
             end_us: ev.end_us,
         });
@@ -63,13 +75,15 @@ pub fn last_fault_code_from<const N: usize>(diag_log: &DiagLog<N>) -> u8 {
 /// computation); the board computes it and passes a plain `bool`.
 pub struct SnapshotInputs {
     pub rpm: u16,
-    pub synced: bool,
+    pub sync: SyncState,
     pub base_pw_us: u32,
     pub enrich_mult_x100: u16,
     pub stft_x10: i16,
     pub fuel_mult_x100: u16,
     pub final_pw: Micros,
     pub last_fault_code: u8,
+    pub fault_severity: u8,
+    pub cancel_reason: u8,
     pub isr_count: u32,
     pub isr_max_us: u32,
     pub isr_avg_us: u32,
@@ -81,17 +95,15 @@ pub struct SnapshotInputs {
 pub fn build_system_snapshot(inputs: SnapshotInputs) -> SystemSnapshot {
     SystemSnapshot {
         rpm: Rpm::new(inputs.rpm),
-        sync: if inputs.synced {
-            SyncState::Locked { cam_ref: false }
-        } else {
-            SyncState::Unsynced
-        },
+        sync: inputs.sync,
         base_pw: Micros::new(inputs.base_pw_us),
         enrich_mult_x100: inputs.enrich_mult_x100,
         stft_x10: inputs.stft_x10,
         fuel_mult_x100: inputs.fuel_mult_x100,
         final_pw: inputs.final_pw,
         last_fault_code: inputs.last_fault_code,
+        fault_severity: inputs.fault_severity,
+        cancel_reason: inputs.cancel_reason,
         isr_count: inputs.isr_count,
         isr_max_us: inputs.isr_max_us,
         isr_avg_us: inputs.isr_avg_us,
@@ -132,6 +144,12 @@ pub fn build_ecu_page_store<'a>(
         snapshot: runtime.snapshot,
         tooth_count: runtime.tooth_count,
         sync_loss_counter: runtime.sync_loss_counter,
+        current_fault_code: runtime.current_fault_code,
+        current_fault_severity: runtime.current_fault_severity,
+        current_fault_action: runtime.current_fault_action,
+        current_cancel_reason: runtime.current_cancel_reason,
+        fault_flags: runtime.fault_flags,
+        latest_diag_code: runtime.latest_diag_code,
         angles_inj: &mut config.inj_angle_btdc_x10,
         angles_tdc: &mut config.tdc_per_cyl_x10,
         tooth0_angle_x10: &mut config.tooth0_angle_x10,
@@ -150,7 +168,10 @@ mod tests {
     };
     use ecu_calibration::sensors::SensorsCal;
     use ecu_domain::diag::{DiagCode, DiagEvent, DiagLog, DiagSource};
-    use ecu_ts::pages::{PAGE_FUEL, PAGE_SNAPSHOT};
+    use ecu_ts::pages::{
+        PAGE_FUEL, PAGE_SNAPSHOT, TS_CANCEL_REASON_NONE, TS_FAULT_ACTION_NONE,
+        TS_FAULT_FLAG_DIAG_LOG_PRESENT, TS_FAULT_SEVERITY_NONE,
+    };
     use ecu_ts::server::PageStore;
 
     fn test_config() -> EcuConfig {
@@ -190,13 +211,18 @@ mod tests {
             code: DiagCode::KnockDetected,
             timestamp: Micros::new(10),
             source: DiagSource::Safety,
-            context: None,
+            context: Some(7),
             start_us: 10,
             end_us: 20,
         });
         let entries = diag_log_entries_from(&diag_log);
         let first = entries[0].expect("first slot populated");
         assert_eq!(first.code, DiagCode::KnockDetected.to_u8());
+        assert_eq!(first.severity, ecu_ts::pages::TS_FAULT_SEVERITY_WARNING);
+        assert_eq!(first.action, ecu_ts::pages::TS_FAULT_ACTION_LIMP_HOME);
+        assert_eq!(first.source, ecu_ts::pages::TS_DIAG_SOURCE_SAFETY);
+        assert!(first.context_present);
+        assert_eq!(first.context, 7);
         assert_eq!(first.start_us, 10);
         assert_eq!(first.end_us, 20);
         assert_eq!(
@@ -210,13 +236,15 @@ mod tests {
         let mut config = test_config();
         let snapshot = build_system_snapshot(SnapshotInputs {
             rpm: 1500,
-            synced: true,
+            sync: SyncState::Locked { cam_ref: false },
             base_pw_us: 3000,
             enrich_mult_x100: 100,
             stft_x10: 0,
             fuel_mult_x100: 100,
             final_pw: Micros::new(3200),
             last_fault_code: 0,
+            fault_severity: TS_FAULT_SEVERITY_NONE,
+            cancel_reason: TS_CANCEL_REASON_NONE,
             isr_count: 7,
             isr_max_us: 12,
             isr_avg_us: 4,
@@ -229,6 +257,12 @@ mod tests {
             snapshot: &snapshot,
             tooth_count: &tooth_count,
             sync_loss_counter: 2,
+            current_fault_code: 0,
+            current_fault_severity: TS_FAULT_SEVERITY_NONE,
+            current_fault_action: TS_FAULT_ACTION_NONE,
+            current_cancel_reason: TS_CANCEL_REASON_NONE,
+            fault_flags: TS_FAULT_FLAG_DIAG_LOG_PRESENT,
+            latest_diag_code: 0,
             emerg_trig_map: &mut emerg_trig_map,
             emerg_trig_tps: &mut emerg_trig_tps,
             diag_log_entries: [None; DIAG_LOG_ENTRY_COUNT],

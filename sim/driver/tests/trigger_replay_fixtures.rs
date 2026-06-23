@@ -104,6 +104,32 @@ fn parse_trigger_level_csv(csv: &str) -> Vec<SyntheticTriggerEdge> {
     edges
 }
 
+fn representative_cycle_tooth_ticks(edges: &[SyntheticTriggerEdge]) -> Vec<u32> {
+    let mut ticks = Vec::new();
+
+    for (index, edge) in edges.iter().enumerate() {
+        if edge.channel != ReplayTriggerChannel::Cam {
+            continue;
+        }
+
+        let crank_edges: Vec<_> = edges[index + 1..]
+            .iter()
+            .filter(|candidate| candidate.channel == ReplayTriggerChannel::Crank)
+            .take(2)
+            .collect();
+        if crank_edges.len() == 2 {
+            ticks.push(
+                crank_edges[1]
+                    .at
+                    .get()
+                    .saturating_sub(crank_edges[0].at.get()),
+            );
+        }
+    }
+
+    ticks
+}
+
 #[test]
 fn sixty_minus_two_replay_is_deterministic_and_locks_primary() {
     let fixture = TriggerReplayFixture::sixty_minus_two_with_cam();
@@ -413,7 +439,7 @@ fn replay_authority_gates_x86_outputs_before_sync_loss_cancels() {
         &validated.scheduled_outputs,
     );
     assert!(board.diagnostics().engine_time.full_sequential_authorized);
-    assert_eq!(bridge.ecu_outputs.injection_events.len(), 6);
+    assert_eq!(bridge.ecu_outputs.injection_events.len(), 0);
     assert_eq!(bridge.ecu_outputs.spark_events.len(), 6);
 
     let sync_loss_replay = TriggerReplayFixture::sync_loss_after_primary_lock()
@@ -462,6 +488,49 @@ fn replay_authority_gates_x86_outputs_before_sync_loss_cancels() {
         .actions
         .iter()
         .any(|action| matches!(action, Action::CancelScheduler(CancelReason::SyncLoss))));
+}
+
+#[test]
+fn rapid_accel_decel_replay_retains_sequential_authority_without_sync_loss() {
+    let fixture = TriggerReplayFixture::rapid_accel_decel_with_cam();
+    let replay = fixture.replay().unwrap();
+    let cycle_ticks = representative_cycle_tooth_ticks(&fixture.edges);
+
+    assert_eq!(
+        cycle_ticks.len(),
+        5,
+        "fixture should expose five timed cycles"
+    );
+    assert!(
+        cycle_ticks[1] < cycle_ticks[0],
+        "accelerating cycle should shorten tooth cadence: {:?}",
+        cycle_ticks
+    );
+    assert!(
+        cycle_ticks[2] > cycle_ticks[1],
+        "decelerating cycle should lengthen tooth cadence: {:?}",
+        cycle_ticks
+    );
+    assert!(
+        cycle_ticks[3] < cycle_ticks[2],
+        "second acceleration should shorten cadence again: {:?}",
+        cycle_ticks
+    );
+    assert_eq!(
+        cycle_ticks[4], cycle_ticks[3],
+        "final settling cycle should hold the recovered high-speed cadence: {:?}",
+        cycle_ticks
+    );
+    assert!(replay.sync_loss_reasons().is_empty());
+    assert!(replay.reached_full_sequential_authority());
+    assert_eq!(
+        replay.final_authority().phase,
+        PhaseSyncState::CamValidated720
+    );
+    assert!(matches!(
+        replay.final_authority().compatibility_summary(),
+        SyncState::Locked { cam_ref: false }
+    ));
 }
 
 #[test]

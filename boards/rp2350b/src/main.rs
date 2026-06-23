@@ -4,10 +4,10 @@
 use cortex_m_rt::entry;
 use ecu_calibration::FuelRuntimeTune;
 use ecu_domain::{Kpa10, Micros, Rpm, SyncState};
+use ecu_runtime::semantic::runtime_semantic_evaluate_fuel;
 use ecu_runtime::{
-    runtime_semantic_calibration_from_fuel_tune, runtime_semantic_evaluate_fuel,
-    RuntimeSemanticAfrOverride, RuntimeSemanticEngineMode, RuntimeSemanticInputSnapshot,
-    RuntimeSemanticState,
+    runtime_semantic_calibration_from_fuel_tune, RuntimeSemanticAfrOverride,
+    RuntimeSemanticEngineMode, RuntimeSemanticInputSnapshot, RuntimeSemanticState,
 };
 use hal::{clocks::ClockSource, pac};
 use panic_halt as _;
@@ -29,10 +29,16 @@ fn semantic_input(
         iat_c10: 250,
         baro_kpa10: Kpa10::new(1013),
         vbatt_mv: 13_500,
+        lambda_valid: true,
+        lambda_measured: ecu_domain::Lambda100::new(100),
+        requested_open_loop: false,
         sync: SyncState::Locked { cam_ref: false },
         mode: RuntimeSemanticEngineMode::Running,
         fuel_cut: false,
         spark_cut: false,
+        direct_fuel_cut_request: false,
+        direct_spark_cut_request: false,
+        safety_latch_request: false,
         knock_intensity_x100: 0,
         launch_armed: false,
         flat_shift_armed: false,

@@ -7,6 +7,13 @@ use ecu_board_profiles::{
 
 #[cfg(test)]
 mod hal_impl;
+#[cfg(all(feature = "transport-can", any(test, feature = "flash-kv")))]
+pub mod identity_provisioning;
+#[cfg(all(test, feature = "transport-can"))]
+mod obd2_support;
+#[cfg(any(test, feature = "flash-kv"))]
+#[allow(dead_code)]
+pub mod store_support;
 #[cfg(test)]
 #[allow(dead_code)]
 mod ts_support;

@@ -133,6 +133,66 @@ fn test_diagnostic_and_safety_views_track_legacy_accessors() {
 }
 
 #[test]
+fn test_clear_diagnostics_resets_live_faults_and_log() {
+    let mut state = EcuState::new();
+    state.set_emergency_trigger_map_oob(true);
+    state.set_emergency_trigger_tps_oob(true);
+    state.set_emergency_mode(true);
+    state.diag_map.latch(Micros::new(10));
+    state.diag_tps.latch(Micros::new(20));
+    state.diag_cam.latch(Micros::new(30));
+    state.diag_log_mut().push(diag::DiagEvent {
+        code: diag::DiagCode::MapRange,
+        timestamp: Micros::new(100),
+        source: diag::DiagSource::Sensor,
+        context: Some(100),
+        start_us: 10,
+        end_us: 40,
+    });
+    state.diag_log_mut().push(diag::DiagEvent {
+        code: diag::DiagCode::CamMissing,
+        timestamp: Micros::new(200),
+        source: diag::DiagSource::Trigger,
+        context: None,
+        start_us: 30,
+        end_us: 60,
+    });
+
+    let summary = state.clear_diagnostics();
+
+    assert_eq!(
+        summary,
+        diag::DiagClearSummary {
+            cleared_active_count: 3,
+            cleared_log_entries: 2,
+            emergency_cleared: true,
+        }
+    );
+    assert!(!state.diag_map.is_active());
+    assert!(!state.diag_tps.is_active());
+    assert!(!state.diag_cam.is_active());
+    assert!(!state.emergency_mode());
+    assert!(state.diag_log().events.iter().all(|entry| entry.is_none()));
+    assert_eq!(state.diag_log().head, 0);
+    assert!(state.emergency_trigger_map_oob());
+    assert!(state.emergency_trigger_tps_oob());
+}
+
+#[test]
+fn test_clear_diagnostics_is_noop_for_clean_state() {
+    let mut state = EcuState::new();
+
+    let summary = state.clear_diagnostics();
+
+    assert_eq!(summary, diag::DiagClearSummary::default());
+    assert!(!state.diag_map.is_active());
+    assert!(!state.diag_tps.is_active());
+    assert!(!state.diag_cam.is_active());
+    assert!(!state.emergency_mode());
+    assert!(state.diag_log().events.iter().all(|entry| entry.is_none()));
+}
+
+#[test]
 fn test_fuel_calculation_normal() {
     let state = EcuState::new();
 

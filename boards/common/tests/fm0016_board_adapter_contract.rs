@@ -175,8 +175,6 @@ fn ts_page_numbers_match_contract() {
 #[test]
 fn burn_returns_ok_and_preserves_state() {
     let mut state = EcuState::new();
-    let original_fuel = state.config.ipw_table[0][0];
-    let original_ign = state.config.ignition_table[0][0];
     state.config.ipw_table[0][0] = 0xBEEF;
     state.config.ignition_table[0][0] = 42;
 
@@ -188,10 +186,6 @@ fn burn_returns_ok_and_preserves_state() {
     // Values in state must be preserved after burn
     assert_eq!(state.config.ipw_table[0][0], 0xBEEF);
     assert_eq!(state.config.ignition_table[0][0], 42);
-
-    // Restore original values
-    state.config.ipw_table[0][0] = original_fuel;
-    state.config.ignition_table[0][0] = original_ign;
 }
 
 /// Contract: save() writes page but does not persist until burn.
@@ -349,9 +343,6 @@ fn persist_wrong_size_write_rejected() {
 #[test]
 fn persist_factory_reset_overwrites_in_memory_tables() {
     let mut state = EcuState::new();
-    let orig_fuel = state.config.ipw_table[7][7];
-    let orig_ign = state.config.ignition_table[11][11];
-
     state.config.ipw_table[7][7] = 0x9999;
     state.config.ignition_table[11][11] = -77;
 
@@ -366,9 +357,6 @@ fn persist_factory_reset_overwrites_in_memory_tables() {
         state.config.ignition_table[11][11], -77,
         "factory_reset must overwrite ignition cell [11][11]"
     );
-
-    state.config.ipw_table[7][7] = orig_fuel;
-    state.config.ignition_table[11][11] = orig_ign;
 }
 
 #[test]

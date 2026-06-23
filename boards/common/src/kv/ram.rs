@@ -1,9 +1,9 @@
 use super::layout::{ANGLES_PAGE_LEN, EXPERT_TRIGGER_PAGE_LEN, FUEL_PAGE_LEN, IGN_PAGE_LEN};
-use ecu_calibration::{KvError, KvStore};
+use ecu_calibration::{KvError, KvStore, PersistedCalibrationPackage};
 
 pub use ecu_calibration::kv::{
-    PERSIST_KEY_ANGLES, PERSIST_KEY_EXPERT_TRIGGER, PERSIST_KEY_FUEL, PERSIST_KEY_IGN,
-    PERSIST_KNOWN_KEYS,
+    PERSIST_KEY_ANGLES, PERSIST_KEY_CAL_PACKAGE, PERSIST_KEY_EXPERT_TRIGGER, PERSIST_KEY_FUEL,
+    PERSIST_KEY_IGN, PERSIST_KNOWN_KEYS,
 };
 
 fn key_slot(key: &[u8]) -> Option<usize> {
@@ -19,6 +19,7 @@ pub struct RamKv512 {
     ign: Option<[u8; IGN_PAGE_LEN]>,
     angles: Option<[u8; ANGLES_PAGE_LEN]>,
     expert_trigger: Option<[u8; EXPERT_TRIGGER_PAGE_LEN]>,
+    cal_package: Option<[u8; PersistedCalibrationPackage::WIRE_LEN]>,
 }
 
 impl RamKv512 {
@@ -28,6 +29,7 @@ impl RamKv512 {
             ign: None,
             angles: None,
             expert_trigger: None,
+            cal_package: None,
         }
     }
 }
@@ -40,6 +42,16 @@ impl Default for RamKv512 {
 
 impl KvStore for RamKv512 {
     fn read(&mut self, key: &[u8], out: &mut [u8]) -> Result<usize, KvError> {
+        if key == PERSIST_KEY_CAL_PACKAGE {
+            if let Some(data) = &self.cal_package {
+                if out.len() < PersistedCalibrationPackage::WIRE_LEN {
+                    return Err(KvError::Io);
+                }
+                out[..PersistedCalibrationPackage::WIRE_LEN].copy_from_slice(&data[..]);
+                return Ok(PersistedCalibrationPackage::WIRE_LEN);
+            }
+            return Err(KvError::NotFound);
+        }
         match key_slot(key) {
             Some(0) => {
                 if let Some(data) = &self.fuel {
@@ -89,6 +101,15 @@ impl KvStore for RamKv512 {
         }
     }
     fn write(&mut self, key: &[u8], data: &[u8]) -> Result<(), KvError> {
+        if key == PERSIST_KEY_CAL_PACKAGE {
+            if data.len() != PersistedCalibrationPackage::WIRE_LEN {
+                return Err(KvError::Io);
+            }
+            let mut arr = [0u8; PersistedCalibrationPackage::WIRE_LEN];
+            arr.copy_from_slice(data);
+            self.cal_package = Some(arr);
+            return Ok(());
+        }
         match key_slot(key) {
             Some(0) => {
                 if data.len() != FUEL_PAGE_LEN {
@@ -147,6 +168,7 @@ mod tests {
         let payload_ign = [0x22u8; IGN_PAGE_LEN];
         let payload_angles = [0x33u8; ANGLES_PAGE_LEN];
         let payload_expert = [0x44u8; EXPERT_TRIGGER_PAGE_LEN];
+        let payload_package = [0x55u8; PersistedCalibrationPackage::WIRE_LEN];
 
         kv.write(PERSIST_KEY_FUEL, &payload_fuel)
             .expect("write fuel");
@@ -184,5 +206,15 @@ mod tests {
             EXPERT_TRIGGER_PAGE_LEN
         );
         assert_eq!(expert_out, payload_expert);
+
+        kv.write(PERSIST_KEY_CAL_PACKAGE, &payload_package)
+            .expect("write calibration package");
+        let mut package_out = [0u8; PersistedCalibrationPackage::WIRE_LEN];
+        assert_eq!(
+            kv.read(PERSIST_KEY_CAL_PACKAGE, &mut package_out)
+                .expect("read calibration package"),
+            PersistedCalibrationPackage::WIRE_LEN
+        );
+        assert_eq!(package_out, payload_package);
     }
 }

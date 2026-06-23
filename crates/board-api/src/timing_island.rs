@@ -86,6 +86,7 @@ pub struct TimingIslandMetricSnapshot {
 }
 
 impl TimingIslandMetricSnapshot {
+    #[allow(clippy::too_many_arguments)]
     pub const fn new(
         sync_state: SyncState,
         sync_loss_reason: TimingIslandSyncLossReason,

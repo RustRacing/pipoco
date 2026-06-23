@@ -436,12 +436,14 @@ impl VeTunePage {
 pub struct SnapshotPage {
     pub rpm: u16,
     pub sync_code: u8,
+    pub cancel_reason: u8,
     pub base_pw_us: u32,
     pub enrich_mult_x100: u16,
     pub stft_x10: i16,
     pub fuel_mult_x100: u16,
     pub final_pw_us: u32,
     pub fault_code: u8,
+    pub fault_severity: u8,
     pub isr_count: u32,
     pub isr_max_us: u32,
     pub isr_avg_us: u32,
@@ -463,6 +465,12 @@ pub struct DiagPage {
     pub board_pin_map_identity: u16,
     pub profile_identity: u32,
     pub profile_hash: u32,
+    pub current_fault_code: u8,
+    pub current_fault_severity: u8,
+    pub current_fault_action: u8,
+    pub current_cancel_reason: u8,
+    pub fault_flags: u8,
+    pub latest_diag_code: u8,
 }
 
 impl DiagPage {
@@ -482,6 +490,12 @@ impl DiagPage {
         board_pin_map_identity: u16,
         profile_identity: u32,
         profile_hash: u32,
+        current_fault_code: u8,
+        current_fault_severity: u8,
+        current_fault_action: u8,
+        current_cancel_reason: u8,
+        fault_flags: u8,
+        latest_diag_code: u8,
     ) -> Self {
         Self {
             current_tooth_count,
@@ -498,6 +512,12 @@ impl DiagPage {
             board_pin_map_identity,
             profile_identity,
             profile_hash,
+            current_fault_code,
+            current_fault_severity,
+            current_fault_action,
+            current_cancel_reason,
+            fault_flags,
+            latest_diag_code,
         }
     }
 
@@ -513,14 +533,34 @@ impl DiagPage {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DiagLogEntryPage {
     pub code: u8,
+    pub severity: u8,
+    pub action: u8,
+    pub source: u8,
+    pub context_present: bool,
+    pub context: u32,
     pub start_us: u32,
     pub end_us: u32,
 }
 
 impl DiagLogEntryPage {
-    pub const fn new(code: u8, start_us: u32, end_us: u32) -> Self {
+    #[allow(clippy::too_many_arguments)]
+    pub const fn new(
+        code: u8,
+        severity: u8,
+        action: u8,
+        source: u8,
+        context_present: bool,
+        context: u32,
+        start_us: u32,
+        end_us: u32,
+    ) -> Self {
         Self {
             code,
+            severity,
+            action,
+            source,
+            context_present,
+            context,
             start_us,
             end_us,
         }
@@ -529,6 +569,11 @@ impl DiagLogEntryPage {
     pub const fn empty() -> Self {
         Self {
             code: 0,
+            severity: 0,
+            action: 0,
+            source: 0,
+            context_present: false,
+            context: 0,
             start_us: 0,
             end_us: 0,
         }
@@ -622,12 +667,14 @@ impl SnapshotPage {
     pub const fn new(
         rpm: u16,
         sync_code: u8,
+        cancel_reason: u8,
         base_pw_us: u32,
         enrich_mult_x100: u16,
         stft_x10: i16,
         fuel_mult_x100: u16,
         final_pw_us: u32,
         fault_code: u8,
+        fault_severity: u8,
         isr_count: u32,
         isr_max_us: u32,
         isr_avg_us: u32,
@@ -635,12 +682,14 @@ impl SnapshotPage {
         Self {
             rpm,
             sync_code,
+            cancel_reason,
             base_pw_us,
             enrich_mult_x100,
             stft_x10,
             fuel_mult_x100,
             final_pw_us,
             fault_code,
+            fault_severity,
             isr_count,
             isr_max_us,
             isr_avg_us,

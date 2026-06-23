@@ -15,7 +15,7 @@ pub const VE_TUNE_PAGE_BYTES: usize = 16;
 pub const SNAPSHOT_PAGE_BYTES: usize = 32;
 pub const EXPERT_TRIGGER_PAGE_BYTES: usize = 48;
 pub const DIAG_PAGE_BYTES: usize = 32;
-pub const DIAG_LOG_ENTRY_BYTES: usize = 9;
+pub const DIAG_LOG_ENTRY_BYTES: usize = 16;
 pub const DIAG_LOG_ENTRY_COUNT: usize = 16;
 pub const DIAG_LOG_PAGE_BYTES: usize = DIAG_LOG_ENTRY_BYTES * DIAG_LOG_ENTRY_COUNT;
 
@@ -230,6 +230,14 @@ pub const TS_PAGE_DESCRIPTORS: [TsPageDescriptor; TS_PAGE_COUNT] = [
         codec_family: PageCodecFamily::AfrTable,
     },
 ];
+
+pub const fn ts_page_schema_version(page: u8) -> Option<u16> {
+    if ts_page_descriptor(page).is_some() {
+        Some(1)
+    } else {
+        None
+    }
+}
 
 pub const fn ts_page_descriptor(page: u8) -> Option<TsPageDescriptor> {
     let mut idx = 0;

@@ -283,6 +283,34 @@ fn replay_same_trace_twice_produces_identical_results() {
 }
 
 #[test]
+fn golden_trace_replay_matches_expected_runtime_snapshot() {
+    let golden_trace: &[TraceRecord] = &[
+        make_edge_record(
+            0,
+            100,
+            EdgeLine::Crank,
+            EdgePolarity::Rising,
+            1200,
+            0,
+            false,
+        ),
+        make_sensor_record(1, 150, 1800, 650, 120),
+        make_tick_record(2, 200, 1800),
+    ];
+    let mut sim: SimulationHarness<8, 4> = SimulationHarness::default();
+    let mut replay = TraceReplay::new(&mut sim);
+
+    replay.replay_all(golden_trace).unwrap();
+    sim.drain_until_idle();
+
+    let snapshot = sim.runtime().snapshot();
+    assert_eq!(snapshot.engine.rpm, Rpm::new(1800));
+    assert_eq!(snapshot.engine.load_kpa10, Kpa10::new(650));
+    assert_eq!(snapshot.engine.angle_x10, Degrees10::new(120));
+    assert!(sim.last_result().is_some());
+}
+
+#[test]
 fn unsupported_record_combinations_return_unsupported_record() {
     // Test: Edge input with None payload
     {

@@ -6,6 +6,7 @@ use ecu_spec::{
     Millivolts, OutpcFrame, PersistPage, PersistPageId, Rpm, StepResult, SyncState, TempC10,
     TsBurnSaveError, TsBurnSaveStore, TsCommandDecodeError, TsDiagLogEntry, TsDiagLogRing,
     TsDispatchError, TsEffect, TsPageId, ValidatedCalibration, TS_DIAG_LOG_CAPACITY,
+    TS_DIAG_LOG_ENTRY_BYTES,
 };
 
 #[allow(dead_code)]
@@ -2239,24 +2240,31 @@ pub fn assert_fixture_semantics(case: FixtureCase, result: &StepResult) {
                     ts_diag_log_push(
                         &mut ring,
                         TsDiagLogEntry {
-                            timestamp_us: idx as u32,
-                            code: idx,
-                            source: (idx & 0xFF) as u8,
-                            context: idx ^ 0x00FF,
+                            code: idx as u8,
+                            severity: 2,
+                            action: 1,
+                            source: (idx & 0x7F) as u8,
+                            context_present: true,
+                            start_us: idx as u32,
+                            end_us: idx as u32 + 10,
+                            context: (idx ^ 0x00FF) as u32,
                         },
                     );
                     idx += 1;
                 }
                 assert_eq!(ring.len as usize, TS_DIAG_LOG_CAPACITY);
                 let encoded = encode_ts_diag_log_oldest_first(&ring);
-                assert_eq!(encoded.len as usize, TS_DIAG_LOG_CAPACITY * 9);
                 assert_eq!(
-                    u32::from_le_bytes(encoded.bytes[0..4].try_into().unwrap()),
+                    encoded.len as usize,
+                    TS_DIAG_LOG_CAPACITY * TS_DIAG_LOG_ENTRY_BYTES
+                );
+                assert_eq!(
+                    u32::from_le_bytes(encoded.bytes[4..8].try_into().unwrap()),
                     2
                 );
-                let tail = encoded.len as usize - 9;
+                let tail = encoded.len as usize - TS_DIAG_LOG_ENTRY_BYTES;
                 assert_eq!(
-                    u32::from_le_bytes(encoded.bytes[tail..tail + 4].try_into().unwrap()),
+                    u32::from_le_bytes(encoded.bytes[tail + 4..tail + 8].try_into().unwrap()),
                     (TS_DIAG_LOG_CAPACITY + 1) as u32
                 );
             }

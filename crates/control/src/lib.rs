@@ -16,17 +16,18 @@ pub use cranking::{CrankingGate, CRANKING_EXIT_RPM, CRANKING_RPM_THRESHOLD};
 pub use decel::DecelFuelCutState;
 pub use enrichment::{
     AccelerationConfig, AccelerationState, AfterStartConfig, AfterStartState, EnrichmentController,
-    EnrichmentInputs, EnrichmentResult, StartupConfig, WarmupConfig,
+    EnrichmentInputs, EnrichmentResult, StartupConfig, StartupState, WarmupConfig,
 };
 pub use fuel::BaseFuelModel;
 pub use ignition::{
     DwellConfig, IgnitionInputs, IgnitionLimitReason, IgnitionPlan, IgnitionPlanner,
 };
 pub use lambda::{
-    LambdaMode, LambdaTrimConfig, LambdaTrimInputs, LambdaTrimPlanner, LambdaTrimResult,
+    LambdaDisableReason, LambdaMode, LambdaTrimConfig, LambdaTrimInputs, LambdaTrimPlanner,
+    LambdaTrimResult,
 };
 pub use torque::{AllowedTorque, TorqueArbiter, TorqueInputs, TorqueLimitReason};
 pub use types::{
-    FuelAfrOverride, FuelEngineMode, FuelInputSnapshot, FuelIntent, FuelLoadSource,
-    FuelObservations,
+    FuelAfrOverride, FuelAfterstartWindowMode, FuelEngineMode, FuelInputSnapshot, FuelIntent,
+    FuelLoadSource, FuelObservations, FuelStartupWindowMode, FuelWarmupTemperatureMode,
 };

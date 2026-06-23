@@ -90,6 +90,19 @@ pub(super) fn semantic_bilerp_u16(table: &RuntimeSemanticTable2dU16, rpm: u16, l
     semantic_lerp_u16(load_lo, load_hi, interp_lo as u16, interp_hi as u16, load)
 }
 
+fn semantic_deadtime_lookup_us(
+    table: &RuntimeSemanticDeadtimeTableU16,
+    vbat_mv: u16,
+    pressure_kpa10: u16,
+) -> u32 {
+    let generic = RuntimeSemanticTable2dU16 {
+        rpm_axis: table.vbat_mv_axis,
+        load_axis: table.pressure_kpa10_axis,
+        values: table.values,
+    };
+    semantic_bilerp_u16(&generic, vbat_mv, pressure_kpa10)
+}
+
 /// Curve lookup with clipping and left-closed/right-open semantics.
 fn semantic_curve_lookup(curve: &RuntimeSemanticCurve16U16, x: u16) -> u32 {
     let len = curve.axis.len as usize;
@@ -129,8 +142,8 @@ fn validate_calibration(cal: &RuntimeSemanticCalibration) -> Result<(), RuntimeS
     validate_axis(&cal.ve_table.load_axis)?;
     validate_axis(&cal.afr_target_table.rpm_axis)?;
     validate_axis(&cal.afr_target_table.load_axis)?;
-    validate_axis(&cal.deadtime_table_us.rpm_axis)?;
-    validate_axis(&cal.deadtime_table_us.load_axis)?;
+    validate_axis(&cal.deadtime_table_us.vbat_mv_axis)?;
+    validate_axis(&cal.deadtime_table_us.pressure_kpa10_axis)?;
     validate_axis(&cal.clt_corr_curve.axis)?;
     validate_axis(&cal.iat_corr_curve.axis)?;
     validate_axis(&cal.baro_corr_curve.axis)?;
@@ -442,13 +455,32 @@ fn semantic_mul_div_floor_i32(numer: i32, factor: i32, denom: i32) -> i32 {
 pub(crate) fn runtime_semantic_lambda_step(
     cal: &RuntimeSemanticCalibration,
     input: &RuntimeSemanticInputSnapshot,
+    target_afr_x100: u32,
     fuel_cut: bool,
     spark_cut: bool,
     lambda_integrator_acc: i32,
     ae_active_after_eval: bool,
 ) -> (u16, RuntimeSemanticPiIntegratorState) {
-    // Effective error is always 0 in v11 (frozen oracle path uses lambda_error_x1000=0)
-    let error = semantic_effective_lambda_error(RUNTIME_SEMANTIC_LAMBDA_ERROR_X1000);
+    if !input.lambda_valid || input.requested_open_loop {
+        return (
+            1000,
+            RuntimeSemanticPiIntegratorState {
+                acc: lambda_integrator_acc,
+                min_acc: RUNTIME_SEMANTIC_LAMBDA_MIN_ACC,
+                max_acc: RUNTIME_SEMANTIC_LAMBDA_MAX_ACC,
+                frozen: true,
+            },
+        );
+    }
+
+    let target_lambda_x1000 = if target_afr_x100 == 0 {
+        1000
+    } else {
+        mul_div_floor_u64(cal.stoich_afr_x100 as u64, 1000, target_afr_x100 as u64) as i32
+    };
+    let measured_lambda_x1000 = i32::from(input.lambda_measured.get()) * 10;
+    let raw_error = target_lambda_x1000 - measured_lambda_x1000;
+    let error = semantic_effective_lambda_error(raw_error);
 
     // P term: floor(error * kp / 1000)
     let p_term = semantic_mul_div_floor_i32(error, cal.lambda_kp_x1000 as i32, 1000);
@@ -599,7 +631,7 @@ pub(crate) fn runtime_semantic_evaluate_fuel_with_state(
     ) as u32;
 
     // Corrections
-    let deadtime_us: u32 = semantic_bilerp_u16(
+    let deadtime_us: u32 = semantic_deadtime_lookup_us(
         &cal.deadtime_table_us,
         input.vbatt_mv,
         input.baro_kpa10.get(),
@@ -616,9 +648,13 @@ pub(crate) fn runtime_semantic_evaluate_fuel_with_state(
         1000
     };
 
-    let afterstart_corr_x1000 = if matches!(input.mode, RuntimeSemanticEngineMode::Running)
-        && state.afterstart_cycle_count <= cal.afterstart_window_cycles as u32
-    {
+    let afterstart_window_cycles = u32::from(cal.afterstart_window_cycles);
+    let afterstart_running = matches!(input.mode, RuntimeSemanticEngineMode::Running);
+    let afterstart_active = afterstart_running
+        && afterstart_window_cycles != 0
+        && state.afterstart_cycle_count < afterstart_window_cycles;
+
+    let afterstart_corr_x1000 = if afterstart_active {
         let cycles = state.afterstart_cycle_count.min(u16::MAX as u32) as u16;
         semantic_bilerp_u16(&cal.afterstart_table, cycles, input.clt_c10.max(0) as u16)
     } else {
@@ -648,6 +684,7 @@ pub(crate) fn runtime_semantic_evaluate_fuel_with_state(
     let (lambda_correction_x1000, lambda_integrator_state) = runtime_semantic_lambda_step(
         cal,
         &input,
+        target_afr_x100,
         fuel_cut_post_arbiter,
         spark_cut_post_arbiter,
         state.lambda_integrator_acc,
@@ -709,6 +746,19 @@ pub(crate) fn runtime_semantic_evaluate_fuel_with_state(
         pw.min(cal.pw_max_us)
     };
 
+    if afterstart_running {
+        state.afterstart_cycle_count = if afterstart_window_cycles == 0 {
+            0
+        } else {
+            state
+                .afterstart_cycle_count
+                .saturating_add(1)
+                .min(afterstart_window_cycles)
+        };
+    } else {
+        state.afterstart_cycle_count = 0;
+    }
+
     state.lambda_integrator_acc = lambda_integrator_state.acc;
     state.idle_integrator_acc = idle_integrator_state.acc;
 
@@ -719,6 +769,7 @@ pub(crate) fn runtime_semantic_evaluate_fuel_with_state(
             pw_base_us,
             pw_air_us,
             pw_corr_us,
+            warmup_corr_x1000: warmup_corr_x1000.min(u32::from(u16::MAX)) as u16,
             fuel_cut,
             spark_cut,
             lambda_correction_x1000,

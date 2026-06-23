@@ -229,17 +229,26 @@ fn lambda_planner_stays_open_loop_when_disabled() {
     let mut planner = LambdaTrimPlanner::new();
     let result = planner.update(
         LambdaTrimInputs {
+            now_us: Micros::new(0),
             clt_c: 20,
+            just_started: false,
             lambda_valid: true,
             measured_lambda100: Lambda100::new(105),
             requested_open_loop: true,
         },
         &LambdaTrimConfig::DEFAULT,
+        Kpa10::new(500),
+        false,
+        false,
     );
 
     assert_eq!(result.mode, LambdaMode::OpenLoop);
     assert!(!result.active);
     assert_eq!(result.trim_x100, 100);
+    assert_eq!(
+        result.disable_reason,
+        LambdaDisableReason::RequestedOpenLoop
+    );
     assert_eq!(
         result.target_lambda100,
         LambdaTrimConfig::DEFAULT.open_loop_target
@@ -253,19 +262,72 @@ fn lambda_planner_enters_closed_loop_and_clamps_trim() {
 
     let result = planner.update(
         LambdaTrimInputs {
+            now_us: Micros::new(0),
             clt_c: 80,
+            just_started: false,
             lambda_valid: true,
             measured_lambda100: Lambda100::new(90),
             requested_open_loop: false,
         },
         &cfg,
+        Kpa10::new(500),
+        false,
+        false,
     );
 
     assert_eq!(result.mode, LambdaMode::ClosedLoop);
     assert!(result.active);
+    assert_eq!(result.disable_reason, LambdaDisableReason::None);
     assert_eq!(result.target_lambda100, cfg.closed_loop_target);
     assert!(result.trim_x100 >= cfg.min_trim_x100);
     assert!(result.trim_x100 <= cfg.max_trim_x100);
+}
+
+#[test]
+fn lambda_planner_holds_open_loop_during_startup_delay() {
+    let mut planner = LambdaTrimPlanner::new();
+    let cfg = LambdaTrimConfig {
+        startup_delay_us: Micros::new(2_000_000),
+        ..LambdaTrimConfig::DEFAULT
+    };
+
+    let delayed = planner.update(
+        LambdaTrimInputs {
+            now_us: Micros::new(1_000_000),
+            clt_c: 80,
+            just_started: true,
+            lambda_valid: true,
+            measured_lambda100: Lambda100::new(98),
+            requested_open_loop: false,
+        },
+        &cfg,
+        Kpa10::new(500),
+        false,
+        false,
+    );
+
+    assert_eq!(delayed.mode, LambdaMode::OpenLoop);
+    assert!(!delayed.active);
+    assert_eq!(delayed.disable_reason, LambdaDisableReason::StartupDelay);
+
+    let active = planner.update(
+        LambdaTrimInputs {
+            now_us: Micros::new(3_000_000),
+            clt_c: 80,
+            just_started: false,
+            lambda_valid: true,
+            measured_lambda100: Lambda100::new(98),
+            requested_open_loop: false,
+        },
+        &cfg,
+        Kpa10::new(500),
+        false,
+        false,
+    );
+
+    assert_eq!(active.mode, LambdaMode::ClosedLoop);
+    assert!(active.active);
+    assert_eq!(active.disable_reason, LambdaDisableReason::None);
 }
 
 #[test]
@@ -277,6 +339,177 @@ fn torque_arbiter_prefers_requested_torque_when_unlimited() {
     assert_eq!(result.allowed_x100, 90);
     assert_eq!(result.allowed_x1000, 900);
     assert_eq!(result.reason, TorqueLimitReason::None);
+}
+
+#[test]
+fn lambda_planner_marks_power_reduction_cut_as_frozen_closed_loop() {
+    let mut planner = LambdaTrimPlanner::new();
+    let cfg = LambdaTrimConfig::DEFAULT;
+
+    let frozen = planner.update(
+        LambdaTrimInputs {
+            now_us: Micros::new(0),
+            clt_c: 80,
+            just_started: false,
+            lambda_valid: true,
+            measured_lambda100: Lambda100::new(95),
+            requested_open_loop: false,
+        },
+        &cfg,
+        Kpa10::new(500),
+        false,
+        true,
+    );
+
+    assert_eq!(frozen.mode, LambdaMode::ClosedLoop);
+    assert!(!frozen.active);
+    assert_eq!(
+        frozen.disable_reason,
+        LambdaDisableReason::PowerReductionCut
+    );
+    assert_eq!(frozen.target_lambda100, cfg.closed_loop_target);
+    assert!(frozen.trim_x100 >= cfg.min_trim_x100);
+    assert!(frozen.trim_x100 <= cfg.max_trim_x100);
+}
+
+#[test]
+fn lambda_planner_marks_acceleration_enrichment_as_frozen_closed_loop() {
+    let mut planner = LambdaTrimPlanner::new();
+    let cfg = LambdaTrimConfig::DEFAULT;
+
+    let frozen = planner.update(
+        LambdaTrimInputs {
+            now_us: Micros::new(0),
+            clt_c: 80,
+            just_started: false,
+            lambda_valid: true,
+            measured_lambda100: Lambda100::new(95),
+            requested_open_loop: false,
+        },
+        &cfg,
+        Kpa10::new(500),
+        true,
+        false,
+    );
+
+    assert_eq!(frozen.mode, LambdaMode::ClosedLoop);
+    assert!(!frozen.active);
+    assert_eq!(
+        frozen.disable_reason,
+        LambdaDisableReason::AccelerationEnrichment
+    );
+    assert_eq!(frozen.target_lambda100, cfg.closed_loop_target);
+    assert!(frozen.trim_x100 >= cfg.min_trim_x100);
+    assert!(frozen.trim_x100 <= cfg.max_trim_x100);
+}
+
+#[test]
+fn lambda_planner_holds_last_trim_during_acceleration_enrichment_freeze() {
+    let mut planner = LambdaTrimPlanner::new();
+    let cfg = LambdaTrimConfig::DEFAULT;
+
+    let active = planner.update(
+        LambdaTrimInputs {
+            now_us: Micros::new(0),
+            clt_c: 80,
+            just_started: false,
+            lambda_valid: true,
+            measured_lambda100: Lambda100::new(90),
+            requested_open_loop: false,
+        },
+        &cfg,
+        Kpa10::new(500),
+        false,
+        false,
+    );
+    let frozen = planner.update(
+        LambdaTrimInputs {
+            now_us: Micros::new(10_000),
+            clt_c: 80,
+            just_started: false,
+            lambda_valid: true,
+            measured_lambda100: Lambda100::new(50),
+            requested_open_loop: false,
+        },
+        &cfg,
+        Kpa10::new(500),
+        true,
+        false,
+    );
+
+    assert!(active.active);
+    assert_eq!(
+        frozen.disable_reason,
+        LambdaDisableReason::AccelerationEnrichment
+    );
+    assert_eq!(frozen.trim_x100, active.trim_x100);
+}
+
+#[test]
+fn lambda_planner_holds_open_loop_at_low_load_with_hysteresis() {
+    let mut planner = LambdaTrimPlanner::new();
+    let cfg = LambdaTrimConfig {
+        enable_load_kpa10: Kpa10::new(300),
+        disable_load_kpa10: Kpa10::new(250),
+        ..LambdaTrimConfig::DEFAULT
+    };
+
+    let low = planner.update(
+        LambdaTrimInputs {
+            now_us: Micros::new(0),
+            clt_c: 80,
+            just_started: false,
+            lambda_valid: true,
+            measured_lambda100: Lambda100::new(98),
+            requested_open_loop: false,
+        },
+        &cfg,
+        Kpa10::new(200),
+        false,
+        false,
+    );
+
+    assert_eq!(low.mode, LambdaMode::OpenLoop);
+    assert!(!low.active);
+    assert_eq!(low.disable_reason, LambdaDisableReason::LowLoadGate);
+
+    let active = planner.update(
+        LambdaTrimInputs {
+            now_us: Micros::new(1),
+            clt_c: 80,
+            just_started: false,
+            lambda_valid: true,
+            measured_lambda100: Lambda100::new(98),
+            requested_open_loop: false,
+        },
+        &cfg,
+        Kpa10::new(350),
+        false,
+        false,
+    );
+
+    assert_eq!(active.mode, LambdaMode::ClosedLoop);
+    assert!(active.active);
+    assert_eq!(active.disable_reason, LambdaDisableReason::None);
+
+    let hysteresis = planner.update(
+        LambdaTrimInputs {
+            now_us: Micros::new(2),
+            clt_c: 80,
+            just_started: false,
+            lambda_valid: true,
+            measured_lambda100: Lambda100::new(98),
+            requested_open_loop: false,
+        },
+        &cfg,
+        Kpa10::new(260),
+        false,
+        false,
+    );
+
+    assert_eq!(hysteresis.mode, LambdaMode::ClosedLoop);
+    assert!(hysteresis.active);
+    assert_eq!(hysteresis.disable_reason, LambdaDisableReason::None);
 }
 
 #[test]
@@ -369,12 +602,17 @@ fn control_planners_compose_purely() {
     let mut lambda = LambdaTrimPlanner::new();
     let lambda_result = lambda.update(
         LambdaTrimInputs {
+            now_us: Micros::new(0),
             clt_c: 80,
+            just_started: false,
             lambda_valid: true,
             measured_lambda100: Lambda100::new(96),
             requested_open_loop: false,
         },
         &LambdaTrimConfig::DEFAULT,
+        Kpa10::new(500),
+        false,
+        false,
     );
 
     let torque = TorqueArbiter::new().evaluate(TorqueInputs::new(92, 80, 120, 118, 110));

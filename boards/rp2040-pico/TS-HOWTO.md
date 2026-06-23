@@ -74,3 +74,46 @@ Adjust macros/constants if your wiring differs.
 - Edit sensors calibration (page 3) to match your MAP/TPS and thermistor curves.
 - Use AE/DFCO pages to tune transient enrichment and decel fuel cut.
 - For more robustness, add a proper VBATT channel or enable `vbatt-vsys`.
+
+## 10) Bench Timing Acceptance
+
+Use this RP2040-first procedure before treating the board as a timing-valid
+bench target.
+
+Recommended bench setup:
+
+- trigger stimulus source capable of 60-2 crank plus optional cam
+- oscilloscope or logic analyzer with at least four channels
+- one channel on GPIO4 trigger input
+- one channel on an injector output GPIO
+- one channel on an ignition output GPIO
+- one channel on a sync marker or stimulus cam output when available
+
+Procedure:
+
+1. Build and flash `ts-ecu` with `capture-pio`.
+2. Start with a steady trigger input and confirm TS shows stable RPM.
+3. Sweep the trigger source through several steady points, for example 1000,
+   2000, 3000, and 4000 RPM equivalent.
+4. Run one rapid accel and one rapid decel sweep from the trigger source.
+5. Force one hot restart or sync drop and confirm the firmware resynchronizes
+   cleanly.
+6. Hold a steady midrange RPM point for an extended bench run and watch for
+   lost sync or wedged outputs.
+
+Pass criteria:
+
+- TS RPM follows the stimulus without sticking or jumping backwards
+- injector pulse widths remain finite and repeatable at each steady point
+- ignition transitions remain present and repeatable at each steady point
+- no output remains energized after a forced sync loss
+- after restart or resync, outputs resume only after sync is restored
+
+Measured checks:
+
+- injector pulse width: measure the high-time on the injector GPIO and compare
+  repeated pulses at the same RPM/load point
+- spark timing: measure ignition-edge timing relative to the trigger source at
+  the same repeated point
+- record the measured pulse-width and spark-timing values for each steady RPM
+  point you accept

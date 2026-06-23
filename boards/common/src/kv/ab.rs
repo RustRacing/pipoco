@@ -82,6 +82,26 @@ pub enum BootScan {
     },
 }
 
+/// Shared store-integrity meaning above board-local flash implementations.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum StoreIntegrityStatus {
+    Blank,
+    Valid,
+    ValidWithCorruptSibling,
+    Corrupt,
+}
+
+pub const fn store_integrity_from_boot_scan(scan: BootScan) -> StoreIntegrityStatus {
+    match scan {
+        BootScan::Blank => StoreIntegrityStatus::Blank,
+        BootScan::Corrupt => StoreIntegrityStatus::Corrupt,
+        BootScan::Valid {
+            saw_corrupt: true, ..
+        } => StoreIntegrityStatus::ValidWithCorruptSibling,
+        BootScan::Valid { .. } => StoreIntegrityStatus::Valid,
+    }
+}
+
 pub fn crc16_ccitt(mut crc: u16, data: &[u8]) -> u16 {
     for &b in data {
         crc ^= (b as u16) << 8;

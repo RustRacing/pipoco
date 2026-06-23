@@ -39,7 +39,9 @@ fn runtime_step_input() -> (EngineRuntime, StepInputs, ControlInputs) {
             mapdot_kpa_s: 0,
         },
         lambda: LambdaTrimInputs {
+            now_us: Micros::new(100_000),
             clt_c: TempC10::new(800).get(),
+            just_started: false,
             lambda_valid: true,
             measured_lambda100: ecu_domain::Lambda100::new(100),
             requested_open_loop: false,
@@ -59,6 +61,8 @@ fn runtime_step_input() -> (EngineRuntime, StepInputs, ControlInputs) {
             false,               // rev_limit_active
             Rpm::new(3000),
         ),
+        fuel_sensors: ecu_runtime::FuelSensorInputs::default(),
+        knock_intensity_x100: 0,
     };
     (runtime, step_inputs, control_inputs)
 }

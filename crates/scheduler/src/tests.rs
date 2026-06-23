@@ -492,7 +492,60 @@ fn suspended_state_rejects_scheduling() {
 }
 
 #[test]
-fn schedule_rejects_conflicting_channels() {
+fn schedule_allows_same_channel_reuse_for_non_overlapping_windows() {
+    let mut state = SchedulerState::new();
+    let first = InjectionPlan {
+        output: ExclusiveChannel::new(OutputGroup::Injector, ChannelId::new(1)),
+        pulse_width: PulseWidthUs::new(1200),
+    };
+    let second = InjectionPlan {
+        output: ExclusiveChannel::new(OutputGroup::Injector, ChannelId::new(1)),
+        pulse_width: PulseWidthUs::new(900),
+    };
+
+    let first = state
+        .schedule_injection(Micros::new(100), Micros::new(150), Micros::new(350), first)
+        .expect("first schedule should succeed");
+    let second = state
+        .schedule_injection(Micros::new(120), Micros::new(400), Micros::new(500), second)
+        .expect("non-overlapping same-channel reuse should succeed");
+
+    assert_eq!(state.injection_count(), 1);
+    assert_eq!(state.last_injection_start(), Some(second.start_at));
+    assert_eq!(state.last_injection_end(), Some(second.end_at));
+
+    state.note_drained_transition(
+        first
+            .export_transitions::<MODEL_MAX_PENDING>()
+            .expect("first export")
+            .transitions[0]
+            .expect("first transition"),
+    );
+    assert_eq!(state.injection_count(), 1);
+
+    state.note_drained_transition(
+        first
+            .export_transitions::<MODEL_MAX_PENDING>()
+            .expect("first export")
+            .transitions[1]
+            .expect("second transition"),
+    );
+    assert_eq!(state.injection_count(), 1);
+
+    state.note_drained_transition(
+        second
+            .export_transitions::<MODEL_MAX_PENDING>()
+            .expect("second export")
+            .transitions[1]
+            .expect("second low transition"),
+    );
+    assert_eq!(state.injection_count(), 0);
+    assert_eq!(state.reserved_channels()[0], 0);
+    assert_eq!(state.mode(), SchedulerMode::Idle);
+}
+
+#[test]
+fn schedule_rejects_true_same_channel_overlap() {
     let mut state = SchedulerState::new();
     let first = InjectionPlan {
         output: ExclusiveChannel::new(OutputGroup::Injector, ChannelId::new(1)),
@@ -508,7 +561,7 @@ fn schedule_rejects_conflicting_channels() {
         .expect("first schedule should succeed");
 
     assert_eq!(
-        state.schedule_injection(Micros::new(200), Micros::new(250), Micros::new(450), second),
+        state.schedule_injection(Micros::new(120), Micros::new(250), Micros::new(450), second),
         Err(ScheduleError::ConflictingChannel)
     );
 }

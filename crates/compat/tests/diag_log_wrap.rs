@@ -1,6 +1,7 @@
 use ecu_compat::compat::EcuState;
 use ecu_compat::ts::pages::PAGE_DIAG_LOG;
 use ecu_compat::{Kpa10, Micros};
+use ecu_ts::pages::{DIAG_LOG_ENTRY_BYTES, DIAG_LOG_ENTRY_COUNT};
 use ecu_ts::server::PageStore;
 
 #[test]
@@ -25,9 +26,12 @@ fn diag_log_wraps_and_retains_recent() {
 
     let pages = state.page_store();
 
-    let mut out = [0u8; 16 * 9];
+    let mut out = [0u8; DIAG_LOG_ENTRY_BYTES * DIAG_LOG_ENTRY_COUNT];
     let _ = pages.read_page(PAGE_DIAG_LOG, &mut out).expect("read log");
     // Count non-empty entries (code != 0)
-    let count = out.chunks_exact(9).filter(|e| e[0] != 0).count();
+    let count = out
+        .chunks_exact(DIAG_LOG_ENTRY_BYTES)
+        .filter(|e| e[0] != 0)
+        .count();
     assert_eq!(count, 16, "ring buffer should contain 16 recent events");
 }

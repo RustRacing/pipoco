@@ -5,5 +5,7 @@
 //! `EcuState`.
 
 pub mod pages;
+pub mod session;
 
 pub use pages::{PAGE_AFR_TABLE, PAGE_FUEL, PAGE_IGN, PAGE_VE_TABLE, PAGE_VE_TUNE};
+pub use session::CompatCalibrationSession;

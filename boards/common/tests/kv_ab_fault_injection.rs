@@ -163,7 +163,7 @@ fn torn_second_write_never_yields_torn_state() {
                     // scans Corrupt, so the rollback must be signalled; while the
                     // magic is not yet programmed B reads Blank and no signal is
                     // expected.
-                    let b_has_magic = truncate_at >= 4 && truncate_at < SLOT_USED_LEN;
+                    let b_has_magic = (4..SLOT_USED_LEN).contains(&truncate_at);
                     assert_eq!(
                         saw_corrupt, b_has_magic,
                         "offset {truncate_at}: corrupt-sibling flag must match a torn B carrying our magic"
@@ -196,7 +196,7 @@ fn torn_first_write_is_blank_until_header_then_corrupt() {
             // once the magic is present but the slot is incomplete it must read
             // corrupt; once complete it is valid.
             BootScan::Valid { .. } => assert_eq!(truncate_at, SLOT_USED_LEN),
-            BootScan::Corrupt => assert!(truncate_at >= 4 && truncate_at < SLOT_USED_LEN),
+            BootScan::Corrupt => assert!((4..SLOT_USED_LEN).contains(&truncate_at)),
             BootScan::Blank => assert!(truncate_at < 4),
         }
     }
@@ -275,5 +275,5 @@ fn key_lengths_match_layout_constants() {
     assert_eq!(LEN_FUEL, 512);
     assert_eq!(LEN_IGN, 512);
     assert_eq!(LEN_ANGLES, 68);
-    assert!(SLOT_USED_LEN <= SECTOR);
+    const _: () = assert!(SLOT_USED_LEN <= SECTOR);
 }

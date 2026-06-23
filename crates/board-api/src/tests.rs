@@ -1,5 +1,8 @@
 use super::*;
-use crate::frontier::{TimingIslandPermitMask, TimingIslandStopReason};
+use crate::frontier::{
+    TimingIslandMetricSnapshot, TimingIslandPermitMask, TimingIslandStopReason,
+    TimingIslandSyncLossReason, HEARTBEAT_EXPIRY_US, HORIZON_SEQUENCE_BITS, MAX_HORIZON_US,
+};
 use crate::safety::{SafetyGateInput, SafetyGateReason, SafetyGateStatus, SafetyPermitMask};
 use crate::timing_island::{
     EdgeBatch, TimingIslandCommand, TimingIslandEvent, TimingIslandFaultStatus,
@@ -14,10 +17,18 @@ use crate::wire::{
     TIMING_ISLAND_EVENT_TAG_REJECTED, TIMING_ISLAND_EVENT_WIRE_LEN, TIMING_ISLAND_WIRE_VERSION,
 };
 use crate::{
-    CommonFrontierTelemetry, CommonFuelStrategyMode, CommonPendingInputTelemetry,
-    CommonSchedulerMode, CommonSchedulerOwnershipTelemetry, CommonSchedulerReservationTelemetry,
-    CommonSchedulerStateSummaryTelemetry, CommonSchedulerWindowTelemetry,
-    CommonShiftArmingTelemetry,
+    CommonAfterstartTelemetry, CommonAfterstartWindowMode, CommonFaultTransitionAction,
+    CommonFaultTransitionEventId, CommonFaultTransitionEventTelemetry, CommonFrontierFaultAction,
+    CommonFrontierFaultEventId, CommonFrontierFaultTelemetry, CommonFrontierTelemetry,
+    CommonFuelStrategyMode, CommonHighRateLogTelemetry, CommonLambdaActivity,
+    CommonLambdaCorrectionTelemetry, CommonLambdaDisableReason, CommonLambdaTelemetry,
+    CommonLimpActionLevel, CommonLimpActionSource, CommonLimpActionTelemetry,
+    CommonPendingInputTelemetry, CommonProtectionAction, CommonProtectionLevel,
+    CommonProtectionPersistence, CommonProtectionSource, CommonProtectionTelemetry,
+    CommonRuntimeFaultTelemetry, CommonSchedulerMode, CommonSchedulerOwnershipTelemetry,
+    CommonSchedulerReservationTelemetry, CommonSchedulerStateSummaryTelemetry,
+    CommonSchedulerWindowTelemetry, CommonShiftArmingTelemetry, CommonStartupTelemetry,
+    CommonStartupWindowMode, CommonTransientEnrichmentTelemetry,
 };
 use core::mem::needs_drop;
 use ecu_domain::{
@@ -97,6 +108,27 @@ fn core_types_are_copy_and_do_not_need_drop() {
     assert_copy::<AuxCommand>();
     assert_copy::<CommonSyncTelemetryState>();
     assert_copy::<CommonDiagnosticsTelemetry>();
+    assert_copy::<CommonHighRateLogTelemetry>();
+    assert_copy::<CommonAfterstartTelemetry>();
+    assert_copy::<CommonAfterstartWindowMode>();
+    assert_copy::<CommonWarmupTelemetry>();
+    assert_copy::<CommonWarmupTemperatureMode>();
+    assert_copy::<CommonStartupTelemetry>();
+    assert_copy::<CommonStartupWindowMode>();
+    assert_copy::<CommonLambdaActivity>();
+    assert_copy::<CommonLambdaCorrectionTelemetry>();
+    assert_copy::<CommonLambdaDisableReason>();
+    assert_copy::<CommonLambdaTelemetry>();
+    assert_copy::<CommonLimpActionLevel>();
+    assert_copy::<CommonLimpActionSource>();
+    assert_copy::<CommonLimpActionTelemetry>();
+    assert_copy::<CommonTransientEnrichmentTelemetry>();
+    assert_copy::<CommonProtectionLevel>();
+    assert_copy::<CommonProtectionSource>();
+    assert_copy::<CommonProtectionAction>();
+    assert_copy::<CommonProtectionPersistence>();
+    assert_copy::<CommonProtectionTelemetry>();
+    assert_copy::<CommonCutReason>();
     assert_copy::<CommonDecisionTelemetry>();
     assert_copy::<CommonShiftArmingTelemetry>();
     assert_copy::<CommonSchedulerMode>();
@@ -119,6 +151,7 @@ fn core_types_are_copy_and_do_not_need_drop() {
     assert_copy::<CommonTriggerEdgeTelemetry>();
     assert_copy::<CommonCamEdgeTelemetry>();
     assert_copy::<CommonValidatedInputTelemetry>();
+    assert_copy::<CommonRuntimeFaultTelemetry>();
     assert_copy::<CommonFaultTransitionTelemetry>();
     assert_copy::<EngineTimeAuthorityTelemetry>();
     assert_copy::<SensorSnapshot>();
@@ -132,6 +165,27 @@ fn core_types_are_copy_and_do_not_need_drop() {
     assert!(!needs_drop::<AuxCommand>());
     assert!(!needs_drop::<CommonSyncTelemetryState>());
     assert!(!needs_drop::<CommonDiagnosticsTelemetry>());
+    assert!(!needs_drop::<CommonHighRateLogTelemetry>());
+    assert!(!needs_drop::<CommonAfterstartTelemetry>());
+    assert!(!needs_drop::<CommonAfterstartWindowMode>());
+    assert!(!needs_drop::<CommonWarmupTelemetry>());
+    assert!(!needs_drop::<CommonWarmupTemperatureMode>());
+    assert!(!needs_drop::<CommonStartupTelemetry>());
+    assert!(!needs_drop::<CommonStartupWindowMode>());
+    assert!(!needs_drop::<CommonLambdaActivity>());
+    assert!(!needs_drop::<CommonLambdaCorrectionTelemetry>());
+    assert!(!needs_drop::<CommonLambdaDisableReason>());
+    assert!(!needs_drop::<CommonLambdaTelemetry>());
+    assert!(!needs_drop::<CommonLimpActionLevel>());
+    assert!(!needs_drop::<CommonLimpActionSource>());
+    assert!(!needs_drop::<CommonLimpActionTelemetry>());
+    assert!(!needs_drop::<CommonTransientEnrichmentTelemetry>());
+    assert!(!needs_drop::<CommonProtectionLevel>());
+    assert!(!needs_drop::<CommonProtectionSource>());
+    assert!(!needs_drop::<CommonProtectionAction>());
+    assert!(!needs_drop::<CommonProtectionPersistence>());
+    assert!(!needs_drop::<CommonProtectionTelemetry>());
+    assert!(!needs_drop::<CommonCutReason>());
     assert!(!needs_drop::<CommonDecisionTelemetry>());
     assert!(!needs_drop::<CommonShiftArmingTelemetry>());
     assert!(!needs_drop::<CommonSchedulerMode>());
@@ -154,6 +208,7 @@ fn core_types_are_copy_and_do_not_need_drop() {
     assert!(!needs_drop::<CommonTriggerEdgeTelemetry>());
     assert!(!needs_drop::<CommonCamEdgeTelemetry>());
     assert!(!needs_drop::<CommonValidatedInputTelemetry>());
+    assert!(!needs_drop::<CommonRuntimeFaultTelemetry>());
     assert!(!needs_drop::<CommonFaultTransitionTelemetry>());
     assert!(!needs_drop::<EngineTimeAuthorityTelemetry>());
     assert!(!needs_drop::<SensorSnapshot>());
@@ -177,6 +232,15 @@ fn common_diagnostics_telemetry_defaults_cleanly() {
             fault_code: FaultCode::None,
             fault_severity: FaultSeverity::Info,
             cancel_reason: CancelReason::Manual,
+            fault: CommonRuntimeFaultTelemetry::default(),
+            lambda: CommonLambdaTelemetry::default(),
+            lambda_correction: CommonLambdaCorrectionTelemetry::default(),
+            warmup: CommonWarmupTelemetry::default(),
+            startup: CommonStartupTelemetry::default(),
+            afterstart: CommonAfterstartTelemetry::default(),
+            transient_enrichment: CommonTransientEnrichmentTelemetry::default(),
+            protection: CommonProtectionTelemetry::default(),
+            limp_action: CommonLimpActionTelemetry::default(),
             late_event_count: 0,
             max_lateness_us: 0,
             queue_high_water_mark: 0,
@@ -184,6 +248,136 @@ fn common_diagnostics_telemetry_defaults_cleanly() {
             active_queue_count: 0,
             free_queue_slots: 0,
             queue_capacity: 0,
+        }
+    );
+}
+
+#[test]
+fn common_warmup_telemetry_defaults_cleanly() {
+    assert_eq!(
+        CommonWarmupTelemetry::default(),
+        CommonWarmupTelemetry {
+            active: false,
+            correction_x100: 0,
+            temperature_mode: CommonWarmupTemperatureMode::Inactive,
+        }
+    );
+}
+
+#[test]
+fn common_startup_telemetry_defaults_cleanly() {
+    assert_eq!(
+        CommonStartupTelemetry::default(),
+        CommonStartupTelemetry {
+            active: false,
+            remaining_window: 0,
+            window_mode: CommonStartupWindowMode::Inactive,
+        }
+    );
+}
+
+#[test]
+fn common_afterstart_telemetry_defaults_cleanly() {
+    assert_eq!(
+        CommonAfterstartTelemetry::default(),
+        CommonAfterstartTelemetry {
+            active: false,
+            remaining_window: 0,
+            window_mode: CommonAfterstartWindowMode::Inactive,
+        }
+    );
+}
+
+#[test]
+fn common_transient_enrichment_telemetry_defaults_cleanly() {
+    assert_eq!(
+        CommonTransientEnrichmentTelemetry::default(),
+        CommonTransientEnrichmentTelemetry {
+            acceleration_active: false,
+            acceleration_pulse_us: 0,
+            acceleration_decay_steps_remaining: 0,
+        }
+    );
+}
+
+#[test]
+fn common_lambda_telemetry_defaults_cleanly() {
+    assert_eq!(
+        CommonLambdaTelemetry::default(),
+        CommonLambdaTelemetry {
+            activity: CommonLambdaActivity::Inactive,
+            reason: CommonLambdaDisableReason::None,
+        }
+    );
+}
+
+#[test]
+fn common_lambda_correction_telemetry_defaults_cleanly() {
+    assert_eq!(
+        CommonLambdaCorrectionTelemetry::default(),
+        CommonLambdaCorrectionTelemetry {
+            measured_lambda: Lambda100::default(),
+            target_lambda: Lambda100::default(),
+            trim_x100: 0,
+            status: CommonLambdaTelemetry::default(),
+        }
+    );
+}
+
+#[test]
+fn common_limp_action_telemetry_defaults_cleanly() {
+    assert_eq!(
+        CommonLimpActionTelemetry::default(),
+        CommonLimpActionTelemetry {
+            level: CommonLimpActionLevel::Inactive,
+            source: CommonLimpActionSource::None,
+            cancel_scheduler: false,
+            cancel_reason: CancelReason::Manual,
+            apply_aux: false,
+            aux_command_count: 0,
+            persistence: CommonProtectionPersistence::Inactive,
+        }
+    );
+}
+
+#[test]
+fn common_protection_telemetry_defaults_cleanly() {
+    assert_eq!(
+        CommonProtectionTelemetry::default(),
+        CommonProtectionTelemetry {
+            level: CommonProtectionLevel::Inactive,
+            source: CommonProtectionSource::None,
+            action: CommonProtectionAction::None,
+            persistence: CommonProtectionPersistence::Inactive,
+        }
+    );
+}
+
+#[test]
+fn common_runtime_fault_telemetry_defaults_cleanly() {
+    assert_eq!(
+        CommonRuntimeFaultTelemetry::default(),
+        CommonRuntimeFaultTelemetry {
+            active: false,
+            fault_code: FaultCode::None,
+            severity: FaultSeverity::Info,
+            cancel_reason: CancelReason::Manual,
+            action: CommonFaultTransitionAction::None,
+        }
+    );
+}
+
+#[test]
+fn common_high_rate_log_telemetry_defaults_cleanly() {
+    assert_eq!(
+        CommonHighRateLogTelemetry::default(),
+        CommonHighRateLogTelemetry {
+            decision: CommonDecisionTelemetry::default(),
+            fault: CommonRuntimeFaultTelemetry::default(),
+            frontier_fault: CommonFrontierFaultTelemetry::default(),
+            late_event_count: 0,
+            max_lateness_us: 0,
+            calibration_checksum: 0,
         }
     );
 }
@@ -200,6 +394,8 @@ fn common_decision_telemetry_defaults_cleanly() {
             flat_shift_active: false,
             fuel_cut: false,
             spark_cut: false,
+            fuel_cut_reason: CommonCutReason::None,
+            spark_cut_reason: CommonCutReason::None,
         }
     );
 }
@@ -317,6 +513,95 @@ fn common_frontier_telemetry_defaults_cleanly() {
             heartbeat_deadline_us: None,
             active_permit_mask: TimingIslandPermitMask::NONE,
             active_stop_reason: TimingIslandStopReason::None,
+            fault: CommonFrontierFaultTelemetry::default(),
+        }
+    );
+}
+
+#[test]
+fn timing_island_frontier_contract_constants_are_stable() {
+    assert_eq!(HEARTBEAT_EXPIRY_US, Micros::new(20_000));
+    assert_eq!(MAX_HORIZON_US, Micros::new(10_000));
+    assert_eq!(HORIZON_SEQUENCE_BITS, 32);
+    assert_eq!(TimingIslandStopReason::None as u8, 0);
+    assert_eq!(TimingIslandStopReason::SyncLost as u8, 1);
+    assert_eq!(TimingIslandStopReason::HeartbeatExpired as u8, 2);
+    assert_eq!(TimingIslandStopReason::HorizonExpired as u8, 3);
+    assert_eq!(TimingIslandStopReason::PermitDenied as u8, 4);
+    assert_eq!(TimingIslandStopReason::TimingFault as u8, 5);
+    assert_eq!(TimingIslandStopReason::AdmittedEventRejected as u8, 6);
+    assert_eq!(TimingIslandStopReason::BoardOutputFault as u8, 7);
+}
+
+#[test]
+fn timing_island_permit_mask_filters_unknown_bits_and_defaults_to_deny() {
+    assert_eq!(TimingIslandPermitMask::NONE.bits(), 0);
+    assert!(TimingIslandPermitMask::NONE.is_empty());
+    assert_eq!(TimingIslandPermitMask::IGNITION, 1 << 0);
+    assert_eq!(TimingIslandPermitMask::INJECTOR, 1 << 1);
+    assert_eq!(TimingIslandPermitMask::BOUNDED_AUX, 1 << 2);
+    assert_eq!(
+        TimingIslandPermitMask::KNOWN_BITS,
+        TimingIslandPermitMask::IGNITION
+            | TimingIslandPermitMask::INJECTOR
+            | TimingIslandPermitMask::BOUNDED_AUX
+    );
+    assert_eq!(TimingIslandPermitMask::KNOWN_BITS & (1 << 3), 0);
+    assert_eq!(TimingIslandPermitMask::new(1 << 3).bits(), 0);
+    assert_eq!(
+        TimingIslandPermitMask::new(u32::MAX).bits(),
+        TimingIslandPermitMask::KNOWN_BITS
+    );
+    assert_eq!(
+        TimingIslandPermitMask::new(TimingIslandPermitMask::KNOWN_BITS | (1 << 31)).bits(),
+        TimingIslandPermitMask::KNOWN_BITS
+    );
+}
+
+#[test]
+fn timing_island_metric_snapshot_exposes_minimum_frontier_fields() {
+    let snapshot = TimingIslandMetricSnapshot::new(
+        SyncState::Locked { cam_ref: true },
+        TimingIslandSyncLossReason::DecoderFault,
+        true,
+        Some(42),
+        Some(Micros::new(1_000)),
+        Some(Micros::new(500)),
+        TimingIslandPermitMask::ALL,
+        TimingIslandStopReason::AdmittedEventRejected,
+        3,
+        7,
+    );
+
+    assert_eq!(snapshot.sync_state, SyncState::Locked { cam_ref: true });
+    assert_eq!(
+        snapshot.sync_loss_reason,
+        TimingIslandSyncLossReason::DecoderFault
+    );
+    assert!(snapshot.phase_freshness);
+    assert_eq!(snapshot.last_accepted_horizon_id, Some(42));
+    assert_eq!(
+        snapshot.last_accepted_horizon_age_us,
+        Some(Micros::new(1_000))
+    );
+    assert_eq!(snapshot.heartbeat_age_us, Some(Micros::new(500)));
+    assert_eq!(snapshot.active_permit_mask, TimingIslandPermitMask::ALL);
+    assert_eq!(
+        snapshot.active_stop_reason,
+        TimingIslandStopReason::AdmittedEventRejected
+    );
+    assert_eq!(snapshot.dropped_or_rejected_event_count, 3);
+    assert_eq!(snapshot.late_event_count, 7);
+}
+
+#[test]
+fn common_frontier_fault_telemetry_defaults_cleanly() {
+    assert_eq!(
+        CommonFrontierFaultTelemetry::default(),
+        CommonFrontierFaultTelemetry {
+            event_id: CommonFrontierFaultEventId::None,
+            severity: FaultSeverity::Info,
+            action: CommonFrontierFaultAction::None,
         }
     );
 }
@@ -324,6 +609,14 @@ fn common_frontier_telemetry_defaults_cleanly() {
 #[test]
 fn common_control_reason_enums_default_cleanly() {
     assert_eq!(CommonLambdaMode::default(), CommonLambdaMode::OpenLoop);
+    assert_eq!(
+        CommonLambdaActivity::default(),
+        CommonLambdaActivity::Inactive
+    );
+    assert_eq!(
+        CommonLambdaDisableReason::default(),
+        CommonLambdaDisableReason::None
+    );
     assert_eq!(
         CommonIgnitionLimitReason::default(),
         CommonIgnitionLimitReason::None
@@ -342,6 +635,7 @@ fn common_control_reason_telemetry_defaults_cleanly() {
             lambda_mode: CommonLambdaMode::OpenLoop,
             lambda_active: false,
             lambda_trim_x100: 0,
+            lambda_disable_reason: CommonLambdaDisableReason::None,
             ignition_limit_reason: CommonIgnitionLimitReason::None,
             torque_limit_reason: CommonTorqueLimitReason::None,
         }
@@ -485,6 +779,7 @@ fn common_fault_transition_telemetry_defaults_cleanly() {
         CommonFaultTransitionTelemetry {
             changed: false,
             at_us: Micros::new(0),
+            event: CommonFaultTransitionEventTelemetry::default(),
             previous_fault: FaultCode::None,
             previous_severity: FaultSeverity::Info,
             previous_cancel_reason: CancelReason::Manual,
@@ -496,12 +791,26 @@ fn common_fault_transition_telemetry_defaults_cleanly() {
 }
 
 #[test]
+fn common_fault_transition_event_telemetry_defaults_cleanly() {
+    assert_eq!(
+        CommonFaultTransitionEventTelemetry::default(),
+        CommonFaultTransitionEventTelemetry {
+            event_id: CommonFaultTransitionEventId::None,
+            severity: FaultSeverity::Info,
+            action: CommonFaultTransitionAction::None,
+        }
+    );
+}
+
+#[test]
 fn common_sync_telemetry_state_is_explicit_and_stable() {
     assert_eq!(CommonSyncTelemetryState::NoSignal as u8, 0);
     assert_eq!(CommonSyncTelemetryState::Unsynced as u8, 1);
     assert_eq!(CommonSyncTelemetryState::CrankSynced as u8, 2);
     assert_eq!(CommonSyncTelemetryState::FullSequentialAuthorized as u8, 3);
     assert_eq!(CommonSyncTelemetryState::SyncLost as u8, 4);
+    assert_eq!(CommonSyncTelemetryState::CamSynced as u8, 5);
+    assert_eq!(CommonSyncTelemetryState::SyncSuspect as u8, 6);
 }
 
 #[test]

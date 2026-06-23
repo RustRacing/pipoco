@@ -31,9 +31,12 @@ pub const MODEL_MAX_PENDING: usize = 4;
 /// drift check in `tools/verify_formal.sh`.
 pub const MODEL_MAX_OUTPUTS: usize = 4;
 
-pub use planner::{IgnitionScheduler, InjectionScheduler};
+pub use planner::{
+    FullEcuIgnitionScheduler, FullEcuInjectionScheduler, IgnitionScheduler, InjectionScheduler,
+};
 pub use profiles::{
-    FuelOutputMode, FuelOutputProfile, FuelPlan, SparkOutputMode, SparkOutputProfile, SparkPlan,
+    FuelOutputMode, FuelOutputProfile, FuelPlan, IgnitionOutputProfile, InjectionOutputProfile,
+    SparkOutputMode, SparkOutputProfile, SparkPlan,
 };
 pub use queue::{
     ScheduleExport, ScheduledLevel, ScheduledTimingMetrics, ScheduledTransition,

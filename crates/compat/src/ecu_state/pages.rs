@@ -1,7 +1,60 @@
 use super::EcuState;
 use crate::units::{Kpa10, Micros, Rpm};
 use crate::{trigger, ts};
-use ecu_ts::pages::{DiagnosticLogEntry, DIAG_LOG_ENTRY_COUNT};
+use ecu_ts::pages::{
+    ts_diag_log_action_code, ts_diag_log_severity_code, ts_diag_source_code,
+    ts_fault_code_from_diag_code, DiagnosticLogEntry, DIAG_LOG_ENTRY_COUNT, TS_CANCEL_REASON_NONE,
+    TS_CURRENT_FAULT_CAM_MISSING, TS_CURRENT_FAULT_NONE, TS_FAULT_ACTION_LIMP_HOME,
+    TS_FAULT_ACTION_NONE, TS_FAULT_ACTION_OBSERVE_ONLY, TS_FAULT_FLAG_ACTIVE,
+    TS_FAULT_FLAG_DIAG_LOG_PRESENT, TS_FAULT_FLAG_EMERGENCY_MODE, TS_FAULT_FLAG_SNAPSHOT_PRESENT,
+    TS_FAULT_SEVERITY_NONE, TS_FAULT_SEVERITY_WARNING,
+};
+
+fn latest_diag_code(state: &EcuState) -> u8 {
+    state
+        .diag_log()
+        .events
+        .iter()
+        .rev()
+        .find_map(|ev| ev.as_ref().map(|ev| ev.code.to_u8()))
+        .unwrap_or(0)
+}
+
+fn current_fault_surface(state: &EcuState) -> (u8, u8, u8, u8, u8) {
+    let mut code = TS_CURRENT_FAULT_NONE;
+    if state.diag_map.is_active() {
+        code = ts_fault_code_from_diag_code(crate::diag::DiagCode::MapRange);
+    } else if state.diag_tps.is_active() {
+        code = ts_fault_code_from_diag_code(crate::diag::DiagCode::TpsRange);
+    } else if state.diag_cam.is_active() {
+        code = TS_CURRENT_FAULT_CAM_MISSING;
+    }
+
+    let active = code != TS_CURRENT_FAULT_NONE;
+    let severity = if active {
+        TS_FAULT_SEVERITY_WARNING
+    } else {
+        TS_FAULT_SEVERITY_NONE
+    };
+    let action = if !active {
+        TS_FAULT_ACTION_NONE
+    } else if state.emergency_mode() {
+        TS_FAULT_ACTION_LIMP_HOME
+    } else {
+        TS_FAULT_ACTION_OBSERVE_ONLY
+    };
+    let mut flags = 0u8;
+    if active {
+        flags |= TS_FAULT_FLAG_ACTIVE | TS_FAULT_FLAG_SNAPSHOT_PRESENT;
+    }
+    if state.emergency_mode() {
+        flags |= TS_FAULT_FLAG_EMERGENCY_MODE;
+    }
+    if latest_diag_code(state) != 0 {
+        flags |= TS_FAULT_FLAG_DIAG_LOG_PRESENT;
+    }
+    (code, severity, action, TS_CANCEL_REASON_NONE, flags)
+}
 
 impl EcuState {
     pub fn page_store(&mut self) -> crate::ts::pages::EcuPageStore<'_> {
@@ -12,11 +65,24 @@ impl EcuState {
         {
             *entry = slot.as_ref().map(|ev| DiagnosticLogEntry {
                 code: ev.code.to_u8(),
+                severity: ts_diag_log_severity_code(ev.code.to_u8()),
+                action: ts_diag_log_action_code(ev.code.to_u8(), ts_diag_source_code(ev.source)),
+                source: ts_diag_source_code(ev.source),
+                context_present: ev.context.is_some(),
+                context: ev.context.unwrap_or(0),
                 start_us: ev.start_us,
                 end_us: ev.end_us,
             });
         }
         let sync_loss_counter = self.sync_loss_tracker.total_losses;
+        let latest_diag_code = latest_diag_code(self);
+        let (
+            current_fault_code,
+            current_fault_severity,
+            current_fault_action,
+            current_cancel_reason,
+            fault_flags,
+        ) = current_fault_surface(self);
         crate::ts::pages::EcuPageStore {
             fuel: &mut self.config.ipw_table,
             ve: &mut self.config.ve_table,
@@ -40,6 +106,12 @@ impl EcuState {
             snapshot: &self.snapshot,
             tooth_count: &self.tooth_count,
             sync_loss_counter,
+            current_fault_code,
+            current_fault_severity,
+            current_fault_action,
+            current_cancel_reason,
+            fault_flags,
+            latest_diag_code,
             angles_inj: &mut self.config.inj_angle_btdc_x10,
             angles_tdc: &mut self.config.tdc_per_cyl_x10,
             tooth0_angle_x10: &mut self.config.tooth0_angle_x10,
@@ -65,13 +137,8 @@ impl EcuState {
         .fold(100u32, |acc, pct| {
             acc.saturating_mul(100 + pct as u32) / 100
         }) as u16;
-        let last_fault_code = self
-            .diag_log()
-            .events
-            .iter()
-            .rev()
-            .find_map(|ev| ev.as_ref().map(|ev| ev.code.to_u8()))
-            .unwrap_or(0);
+        let (current_fault_code, current_fault_severity, _, current_cancel_reason, _) =
+            current_fault_surface(self);
         self.snapshot = ts::pages::SystemSnapshot {
             rpm: Rpm::new(trigger_inputs.rpm),
             sync: if trigger_inputs.synced {
@@ -84,7 +151,9 @@ impl EcuState {
             stft_x10: self.stft_x10(),
             fuel_mult_x100: self.fuel_mult_x100(),
             final_pw,
-            last_fault_code,
+            last_fault_code: current_fault_code,
+            fault_severity: current_fault_severity,
+            cancel_reason: current_cancel_reason,
             isr_count: self.isr_stats.count,
             isr_max_us: self.isr_stats.max_us,
             isr_avg_us: self.isr_stats.avg_us,

@@ -23,9 +23,9 @@ use ecu_domain::{
     PhaseSyncState, PulseWidthUs, Rpm, SyncState,
 };
 use ecu_scheduler::{
-    CrankSnapshot, ExclusiveChannel, FuelOutputProfile, FuelPlan, IgnitionScheduler, InjectionPlan,
-    InjectionScheduler, OutputGroup, SchedulerState, SparkOutputProfile, SparkPlan,
-    TimedIgnitionPlan, TimedInjectionPlan,
+    CrankSnapshot, ExclusiveChannel, FuelOutputProfile, FuelPlan, FullEcuIgnitionScheduler,
+    FullEcuInjectionScheduler, IgnitionScheduler, InjectionPlan, InjectionScheduler, OutputGroup,
+    SchedulerState, SparkOutputProfile, SparkPlan, TimedIgnitionPlan, TimedInjectionPlan,
 };
 
 use crate::{semantic::runtime_semantic_evaluate_fuel_with_state, FullEcuOutputProfile};

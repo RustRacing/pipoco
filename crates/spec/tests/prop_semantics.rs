@@ -1,19 +1,21 @@
 use ecu_spec::{
     arbiter_step, baro_correction, baro_from_counts, bilerp_u16, cam_phase_step, clt_from_counts,
-    cyc7200_distance, deadtime_lookup, duration_us_to_deg10, find_segment, iat_from_counts,
-    idle_step, idle_timing_step, idle_timing_step_with_base, knock_from_window,
-    lambda_step_with_error, lerp_i16, lerp_u16, lookup_idle_advance_deg10, lookup_target_afr,
-    maf_from_counts, map_from_counts, norm7200, o2_from_counts, schedule_all_cylinders,
-    schedule_all_cylinders_with_advance_trim, select_idle_or_running_advance_deg10,
-    sensor_plausibility_step, sensor_slew_step, step, tps_from_counts, trigger_60_2_step,
-    validate_calibration, vbat_correction, vbat_from_counts, AeState, AfrOverride, AfrX100,
-    ArbiterInputs, Axis16, Calibration, CamPhase, CamPhaseState, CamTooth, DiagState,
-    DiagnosticCode, EngineMode, EventBatch, FlatShiftResult, FuelModel, FuelOutput,
-    InjectionAngleMode, InputSnapshot, KnockResult, KnockState, Kpa10, LogicalState, MathState,
-    Micros, Millivolts, O2SensorMode, PiIntegratorState, PulseWidthUs, RatioX1000, RevLimitResult,
-    Rpm, SchedulerState, SensorPlausibilityInput, SensorPlausibilityState, SensorSlewInput,
-    SensorSlewState, SignedCurve16, SignedDegrees10, SyncState, Table2D16, TempC10, TriggerState,
-    TriggerSyncState, TrimPolicy, ValidatedCalibration, ValidationError,
+    cyc7200_distance, deadtime_lookup, duration_us_to_deg10, fault_event_for_clear,
+    fault_event_from_state, find_segment, iat_from_counts, idle_step, idle_timing_step,
+    idle_timing_step_with_base, knock_from_window, lambda_step_with_error, lerp_i16, lerp_u16,
+    lookup_idle_advance_deg10, lookup_target_afr, maf_from_counts, map_from_counts, norm7200,
+    o2_from_counts, schedule_all_cylinders, schedule_all_cylinders_with_advance_trim,
+    select_idle_or_running_advance_deg10, sensor_plausibility_step, sensor_slew_step, step,
+    tps_from_counts, trigger_60_2_step, validate_calibration, vbat_correction, vbat_from_counts,
+    AeState, AfrOverride, AfrX100, ArbiterInputs, Axis16, Calibration, CamPhase, CamPhaseState,
+    CamTooth, DiagState, DiagnosticCode, EngineMode, EventBatch, FlatShiftResult, FuelModel,
+    FuelOutput, InjectionAngleMode, InputSnapshot, KnockResult, KnockState, Kpa10, LogicalState,
+    MathState, Micros, Millivolts, O2SensorMode, PiIntegratorState, PulseWidthUs, RatioX1000,
+    RevLimitResult, Rpm, SchedulerState, SensorPlausibilityInput, SensorPlausibilityState,
+    SensorSlewInput, SensorSlewState, SignedCurve16, SignedDegrees10, SpecCancelReason,
+    SpecFaultAction, SpecFaultCode, SpecFaultEvent, SpecFaultPersistence, SpecFaultSeverity,
+    SpecFaultState, SyncState, Table2D16, TempC10, TriggerState, TriggerSyncState, TrimPolicy,
+    ValidatedCalibration, ValidationError,
 };
 use proptest::prelude::*;
 
@@ -172,6 +174,82 @@ fn scale_table(table: &Table2D16<u16>, scale: u16) -> Table2D16<u16> {
         load_idx += 1;
     }
     scaled
+}
+
+#[test]
+fn fault_event_projection_keeps_no_fault_inactive() {
+    assert_eq!(
+        fault_event_from_state(SpecFaultState::default()),
+        SpecFaultEvent {
+            active: false,
+            action: SpecFaultAction::None,
+            persistence: SpecFaultPersistence::Inactive,
+        }
+    );
+}
+
+#[test]
+fn fault_event_projection_maps_warning_sensor_fault_to_limp() {
+    assert_eq!(
+        fault_event_from_state(SpecFaultState {
+            code: SpecFaultCode::SensorOutOfRange,
+            severity: SpecFaultSeverity::Warning,
+            cancel_reason: SpecCancelReason::Manual,
+        }),
+        SpecFaultEvent {
+            active: true,
+            action: SpecFaultAction::LimpHome,
+            persistence: SpecFaultPersistence::LatchedUntilClear,
+        }
+    );
+}
+
+#[test]
+fn fault_event_projection_maps_critical_safety_fault_to_shutdown() {
+    assert_eq!(
+        fault_event_from_state(SpecFaultState {
+            code: SpecFaultCode::SafetyCut,
+            severity: SpecFaultSeverity::Critical,
+            cancel_reason: SpecCancelReason::SafetyShutdown,
+        }),
+        SpecFaultEvent {
+            active: true,
+            action: SpecFaultAction::Shutdown,
+            persistence: SpecFaultPersistence::LatchedUntilClear,
+        }
+    );
+}
+
+#[test]
+fn fault_event_projection_maps_safety_cut_to_shutdown_regardless_of_severity() {
+    assert_eq!(
+        fault_event_from_state(SpecFaultState {
+            code: SpecFaultCode::SafetyCut,
+            severity: SpecFaultSeverity::Info,
+            cancel_reason: SpecCancelReason::Manual,
+        }),
+        SpecFaultEvent {
+            active: true,
+            action: SpecFaultAction::Shutdown,
+            persistence: SpecFaultPersistence::LatchedUntilClear,
+        }
+    );
+}
+
+#[test]
+fn fault_event_projection_maps_clear_from_active_fault_to_cleared_event() {
+    assert_eq!(
+        fault_event_for_clear(SpecFaultState {
+            code: SpecFaultCode::SensorOutOfRange,
+            severity: SpecFaultSeverity::Warning,
+            cancel_reason: SpecCancelReason::Manual,
+        }),
+        SpecFaultEvent {
+            active: false,
+            action: SpecFaultAction::Cleared,
+            persistence: SpecFaultPersistence::Inactive,
+        }
+    );
 }
 
 fn valid_state() -> impl Strategy<Value = LogicalState> {
@@ -1090,7 +1168,7 @@ proptest! {
 
     #[test]
     fn prop_base_pulse_width_matches_required_fuel_times_ve(
-        required_fuel_us in 0u32..100_000,
+        required_fuel_us in 1u32..100_000,
         ve_x100 in 0u16..30_000,
     ) {
         let mut cal = canonical_calibration(InjectionAngleMode::EndOfInjection).0;

@@ -33,8 +33,25 @@ pub mod compat {
 }
 pub mod support {
     pub use crate::observations::{
-        extract_fuel_observations, extract_torque_observations, DifferentialInputSnapshot,
-        RuntimeAdapterContract, RuntimeLegacyCutFlags, RuntimeObservedSurface,
+        extract_action_observations, extract_authority_observations,
+        extract_calibration_identity_observations, extract_calibration_observations,
+        extract_control_observations, extract_cut_observations, extract_engine_observations,
+        extract_fault_observations, extract_fuel_core_observations, extract_fuel_observations,
+        extract_fuel_strategy_observations, extract_idle_observations,
+        extract_ignition_observations, extract_ignition_trim_observations,
+        extract_knock_observations, extract_lambda_correction_observations,
+        extract_lambda_observations, extract_output_profile_observations,
+        extract_protection_observations, extract_runtime_observed_surface,
+        extract_scheduler_observations, extract_torque_observations,
+        extract_transition_observations, extract_validated_observations, CalibrationState,
+        DifferentialInputSnapshot, RuntimeActionObservations, RuntimeAdapterContract,
+        RuntimeAuthorityObservations, RuntimeCalibrationIdentityObservations,
+        RuntimeCutObservations, RuntimeCutReason, RuntimeFaultAction, RuntimeFaultObservations,
+        RuntimeFuelCoreObservations, RuntimeFuelStrategyMode, RuntimeIdleObservations,
+        RuntimeIgnitionTrimObservations, RuntimeKnockObservations,
+        RuntimeLambdaCorrectionObservations, RuntimeLegacyCutFlags, RuntimeObservedSurface,
+        RuntimeProtectionAction, RuntimeProtectionLevel, RuntimeProtectionObservations,
+        RuntimeProtectionPersistence, RuntimeProtectionSource, RuntimeTransitionObservations,
     };
 }
 
@@ -55,10 +72,25 @@ pub use lowering::{
     ActionLoweringStatus, ActionOutputBatchAdapter, BoardApiBatchExecutor,
 };
 pub use observations::{
-    AuthorityStepInputs, CalibrationState, CamObservation, ControlInputs, ControlPlan,
-    ControlState, DecoderObservation, EngineState, FaultState, RuntimeAfrOverride,
-    RuntimeEngineMode, RuntimeFuelObservations, RuntimeLegacyCutFlags, RuntimeSnapshot, StepResult,
-    TorqueObservations, TriggerObservation, ValidatedInputs,
+    extract_action_observations, extract_authority_observations, extract_calibration_observations,
+    extract_control_observations, extract_cut_observations, extract_engine_observations,
+    extract_fault_observations, extract_fuel_core_observations, extract_fuel_strategy_observations,
+    extract_idle_observations, extract_ignition_observations, extract_ignition_trim_observations,
+    extract_knock_observations, extract_lambda_correction_observations,
+    extract_lambda_observations, extract_output_profile_observations,
+    extract_protection_observations, extract_runtime_observed_surface,
+    extract_scheduler_observations, extract_transition_observations,
+    extract_validated_observations, AuthorityStepInputs, CalibrationState, CamObservation,
+    ControlInputs, ControlPlan, ControlState, DecoderObservation, EngineState, FaultState,
+    RuntimeActionObservations, RuntimeAfrOverride, RuntimeAuthorityObservations,
+    RuntimeCutObservations, RuntimeCutReason, RuntimeEngineMode, RuntimeFaultAction,
+    RuntimeFaultObservations, RuntimeFuelCoreObservations, RuntimeFuelObservations,
+    RuntimeFuelStrategyMode, RuntimeIdleObservations, RuntimeIgnitionTrimObservations,
+    RuntimeKnockObservations, RuntimeLambdaCorrectionObservations, RuntimeLambdaObservations,
+    RuntimeLegacyCutFlags, RuntimeProtectionAction, RuntimeProtectionLevel,
+    RuntimeProtectionObservations, RuntimeProtectionPersistence, RuntimeProtectionSource,
+    RuntimeSnapshot, RuntimeTransitionObservations, StepResult, TorqueObservations,
+    TriggerObservation, ValidatedInputs,
 };
 pub use outputs::runtime_full_sequential_authorized;
 #[cfg(test)]
@@ -75,11 +107,11 @@ pub(crate) use semantic::{
 pub use semantic::{
     runtime_fuel_strategy_from_fuel_tune, runtime_semantic_calibration_from_fuel_tune,
     RuntimeSemanticAfrOverride, RuntimeSemanticAxis16, RuntimeSemanticCalibration,
-    RuntimeSemanticCurve16U16, RuntimeSemanticCylinderArrayU16, RuntimeSemanticEngineMode,
-    RuntimeSemanticFuelError, RuntimeSemanticFuelObservations, RuntimeSemanticInjectionAngleMode,
-    RuntimeSemanticInputSnapshot, RuntimeSemanticPiIntegratorState, RuntimeSemanticState,
-    RuntimeSemanticTable2dI16, RuntimeSemanticTable2dU16, RuntimeSemanticTable2dU32,
-    RUNTIME_SEMANTIC_TABLE_LEN,
+    RuntimeSemanticCurve16U16, RuntimeSemanticCylinderArrayU16, RuntimeSemanticDeadtimeTableU16,
+    RuntimeSemanticEngineMode, RuntimeSemanticFuelError, RuntimeSemanticFuelObservations,
+    RuntimeSemanticInjectionAngleMode, RuntimeSemanticInputSnapshot,
+    RuntimeSemanticPiIntegratorState, RuntimeSemanticState, RuntimeSemanticTable2dI16,
+    RuntimeSemanticTable2dU16, RuntimeSemanticTable2dU32, RUNTIME_SEMANTIC_TABLE_LEN,
 };
 
 pub use ecu_calibration::{CalibrationSnapshot, PersistedCalibrationBlob};
@@ -88,8 +120,9 @@ use ecu_calibration::{FuelRuntimeTune, FUEL_RUNTIME_LOAD_BINS, FUEL_RUNTIME_RPM_
 pub use ecu_control::{
     AccelerationConfig, AccelerationState, AfterStartConfig, AfterStartState, AllowedTorque,
     BaseFuelModel, DwellConfig, EnrichmentController, EnrichmentInputs, EnrichmentResult,
-    FuelAfrOverride, FuelEngineMode, FuelInputSnapshot, FuelIntent, FuelLoadSource,
-    FuelObservations, IgnitionInputs, IgnitionLimitReason, IgnitionPlan, IgnitionPlanner,
+    FuelAfrOverride, FuelAfterstartWindowMode, FuelEngineMode, FuelInputSnapshot, FuelIntent,
+    FuelLoadSource, FuelObservations, FuelStartupWindowMode, FuelWarmupTemperatureMode,
+    IgnitionInputs, IgnitionLimitReason, IgnitionPlan, IgnitionPlanner, LambdaDisableReason,
     LambdaMode, LambdaTrimConfig, LambdaTrimInputs, LambdaTrimPlanner, LambdaTrimResult,
     StartupConfig, TorqueArbiter, TorqueInputs, TorqueLimitReason, WarmupConfig,
 };
@@ -111,6 +144,8 @@ use ecu_scheduler::{
 
 pub const RUNTIME_AUX_COMMAND_CAP: usize = 16;
 pub const RUNTIME_ACTION_CAP: usize = 20;
+
+pub use observations::FuelSensorInputs;
 
 // ---------------------------------------------------------------------------
 // Unit conversion helpers

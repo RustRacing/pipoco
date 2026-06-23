@@ -35,11 +35,11 @@ use ecu_runtime::{
     semantic::{
         conformance::runtime_semantic_evaluate_schedule, runtime_semantic_evaluate_fuel,
         RuntimeSemanticAxis16, RuntimeSemanticCalibration, RuntimeSemanticCurve16U16,
-        RuntimeSemanticCylinderArrayU16, RuntimeSemanticEngineMode,
-        RuntimeSemanticFuelObservations, RuntimeSemanticInjectionAngleMode,
-        RuntimeSemanticInputSnapshot, RuntimeSemanticScheduleCalibration,
-        RuntimeSemanticScheduleEventKind, RuntimeSemanticState, RuntimeSemanticTable2dI16,
-        RuntimeSemanticTable2dU16, RuntimeSemanticTable2dU32,
+        RuntimeSemanticCylinderArrayU16, RuntimeSemanticDeadtimeTableU16,
+        RuntimeSemanticEngineMode, RuntimeSemanticFuelObservations,
+        RuntimeSemanticInjectionAngleMode, RuntimeSemanticInputSnapshot,
+        RuntimeSemanticScheduleCalibration, RuntimeSemanticScheduleEventKind, RuntimeSemanticState,
+        RuntimeSemanticTable2dI16, RuntimeSemanticTable2dU16, RuntimeSemanticTable2dU32,
     },
     RuntimeSemanticAfrOverride,
 };
@@ -112,11 +112,20 @@ fn build_semantic_calibration(cal: &ecu_spec::ValidatedCalibration) -> RuntimeSe
         RuntimeSemanticCurve16U16 { axis, values }
     }
 
+    fn copy_deadtime_table(src: &ecu_spec::Table2D16<u16>) -> RuntimeSemanticDeadtimeTableU16 {
+        let generic = copy_table_2d(src);
+        RuntimeSemanticDeadtimeTableU16 {
+            vbat_mv_axis: generic.rpm_axis,
+            pressure_kpa10_axis: generic.load_axis,
+            values: generic.values,
+        }
+    }
+
     let c = &cal.0;
     RuntimeSemanticCalibration {
         ve_table: copy_table_2d(&c.ve_table),
         afr_target_table: copy_table_2d(&c.afr_target_table),
-        deadtime_table_us: copy_table_2d(&c.deadtime_table_us),
+        deadtime_table_us: copy_deadtime_table(&c.deadtime_table_us),
         clt_corr_curve: copy_curve(&c.clt_corr_curve),
         iat_corr_curve: copy_curve(&c.iat_corr_curve),
         baro_corr_curve: copy_curve(&c.baro_corr_curve),
@@ -338,6 +347,9 @@ fn to_semantic_input(input: &ecu_spec::InputSnapshot) -> RuntimeSemanticInputSna
         iat_c10: input.iat_c10.0,
         baro_kpa10: Kpa10::new(input.baro_kpa10.0),
         vbatt_mv: input.vbatt_mv.0,
+        lambda_valid: true,
+        lambda_measured: ecu_domain::Lambda100::new(100),
+        requested_open_loop: false,
         knock_intensity_x100: input.knock_intensity_x100,
         launch_armed: input.launch_armed,
         flat_shift_armed: input.flat_shift_armed,

@@ -79,12 +79,49 @@ fn ini_page_sizes_match_firmware() {
         ("m50PinMapIdentity_offset", 14),
         ("m50ProfileIdentity_offset", 16),
         ("m50ProfileHash_offset", 20),
+        ("currentFaultCode_offset", 24),
+        ("currentFaultSeverity_offset", 25),
+        ("currentFaultAction_offset", 26),
+        ("currentCancelReason_offset", 27),
+        ("faultFlags_offset", 28),
+        ("latestDiagCode_offset", 29),
     ];
     for (key, expected) in expected_diag_offsets {
         assert_eq!(
             diag.get(key).and_then(|value| value.parse::<usize>().ok()),
             Some(expected),
             "diag key {key}"
+        );
+    }
+
+    let diag_log = sections.get("DiagLog").expect("diag log section");
+    assert_eq!(
+        diag_log
+            .get("page")
+            .and_then(|value| value.parse::<u8>().ok()),
+        Some(PAGE_DIAG_LOG)
+    );
+    assert_eq!(
+        diag_log.get("writable").map(|value| value.as_str()),
+        Some("false")
+    );
+    let expected_diag_log_offsets = [
+        ("entryCode_offset", 0usize),
+        ("entrySeverity_offset", 1),
+        ("entryAction_offset", 2),
+        ("entrySource_offset", 3),
+        ("entryStartUs_offset", 4),
+        ("entryEndUs_offset", 8),
+        ("entryContext_offset", 12),
+        ("entryStride", 16),
+    ];
+    for (key, expected) in expected_diag_log_offsets {
+        assert_eq!(
+            diag_log
+                .get(key)
+                .and_then(|value| value.parse::<usize>().ok()),
+            Some(expected),
+            "diag log key {key}"
         );
     }
 

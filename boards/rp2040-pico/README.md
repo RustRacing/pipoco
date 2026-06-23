@@ -33,6 +33,9 @@ probe-rs run --chip RP2040 target/thumbv6m-none-eabi/release/ts-ecu
 - Open `crates/compat/tests/assets/IPW-ECU.ini` from the repo in TunerStudio
 - Select serial port for Pico (USB CDC)
 - You should see live gauges (RPM, MAP, TPS, CLT, IAT, VBATT, etc.) from the board runtime
+- For RP2040-first trigger-stim timing acceptance, use the bench procedure in
+  [`TS-HOWTO.md`](TS-HOWTO.md), especially the measured injector pulse-width and
+  spark-timing checks.
 
 ## Notes
 - Example implements a simple USB CDC loop and a live Outpc provider backed by board state

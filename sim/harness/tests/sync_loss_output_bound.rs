@@ -177,13 +177,16 @@ fn control_inputs(now_us: Micros) -> ControlInputs {
             mapdot_kpa_s: 0,
         },
         lambda: LambdaTrimInputs {
+            now_us,
             clt_c: 80,
+            just_started: false,
             lambda_valid: true,
             measured_lambda100: Lambda100::new(100),
             requested_open_loop: false,
         },
         torque: TorqueInputs::new(90, 90, 90, 90, 90),
         ignition: IgnitionInputs::new(Degrees10::new(100), 0, 0, 0, false, Rpm::new(3000)),
+        fuel_sensors: ecu_runtime::FuelSensorInputs::default(),
         knock_intensity_x100: 0,
     }
 }

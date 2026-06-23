@@ -52,13 +52,31 @@ impl SplitControlSignalsSource for Rp2040ControlSignals {
     type Error = Infallible;
 
     fn signals(&mut self, ignition_rpm: Rpm) -> Result<SplitControlSignals, Self::Error> {
-        let (clt_c, lambda_valid, lambda_x100, mapdot_kpa_s, tpsdot_pct_s) = with_main_state(|s| {
+        let (
+            clt_c,
+            lambda_valid,
+            lambda_x100,
+            mapdot_kpa_s,
+            tpsdot_pct_s,
+            maf_valid,
+            maf_x100,
+            iat_c,
+            vbatt_mv,
+            baro_valid,
+            baro_kpa_x10,
+        ) = with_main_state(|s| {
             (
                 s.sens.clt_c,
                 s.sens.lambda_valid,
                 s.sens.lambda_x100,
                 s.sens.mapdot_kpa_s,
                 s.sens.tpsdot_pct_s,
+                s.sens.maf_valid,
+                s.sens.maf_x100,
+                s.sens.iat_c,
+                s.sens.vbatt_mv,
+                s.sens.baro_valid,
+                s.sens.baro_kpa_x10,
             )
         });
         Ok(SplitControlSignals {
@@ -70,6 +88,12 @@ impl SplitControlSignalsSource for Rp2040ControlSignals {
             requested_open_loop: false,
             tpsdot_pct_s,
             mapdot_kpa_s,
+            maf_valid,
+            maf_x100,
+            iat_c10: iat_c.saturating_mul(10),
+            vbatt_mv,
+            baro_valid,
+            baro_kpa10: Kpa10::new(baro_kpa_x10),
             spark_advance_x10: Degrees10::new(100),
             ignition_rpm,
         })
@@ -108,6 +132,10 @@ pub(crate) struct Sensors {
     pub(crate) clt_c: i16,
     pub(crate) iat_c: i16,
     pub(crate) vbatt_mv: u16,
+    pub(crate) maf_valid: bool,
+    pub(crate) maf_x100: u16,
+    pub(crate) baro_valid: bool,
+    pub(crate) baro_kpa_x10: u16,
     pub(crate) lambda_valid: bool,
     pub(crate) lambda_x100: u16,
     pub(crate) mapdot_kpa_s: i16,
@@ -125,6 +153,10 @@ impl Sensors {
             clt_c: 20,
             iat_c: 25,
             vbatt_mv: 12000,
+            maf_valid: false,
+            maf_x100: 0,
+            baro_valid: false,
+            baro_kpa_x10: 1010,
             lambda_valid: false,
             lambda_x100: 100,
             mapdot_kpa_s: 0,
@@ -212,8 +244,16 @@ impl Sensors {
         {
             self.vbatt_mv = out.vbatt_mv;
         }
+        self.maf_valid = out.maf_valid;
+        self.maf_x100 = out.maf_x100;
         self.lambda_valid = out.lambda_valid;
         self.lambda_x100 = out.lambda_x100;
+        self.baro_valid = out.baro_valid;
+        self.baro_kpa_x10 = if out.baro_valid {
+            out.baro_kpa_x10
+        } else {
+            1010
+        };
 
         // Derivatives based on time delta
         let rp = RpTime;
@@ -328,13 +368,15 @@ impl BoardEcuState {
             diag_log: DiagLog::new(),
             snapshot: build_system_snapshot(SnapshotInputs {
                 rpm: 0,
-                synced: false,
+                sync: ecu_domain::SyncState::Unsynced,
                 base_pw_us: 0,
                 enrich_mult_x100: 100,
                 stft_x10: 0,
                 fuel_mult_x100: 100,
                 final_pw: Micros::new(0),
                 last_fault_code: 0,
+                fault_severity: ecu_ts::pages::TS_FAULT_SEVERITY_NONE,
+                cancel_reason: ecu_ts::pages::TS_CANCEL_REASON_NONE,
                 isr_count: 0,
                 isr_max_us: 0,
                 isr_avg_us: 0,
@@ -353,6 +395,29 @@ impl BoardEcuState {
 
     pub(crate) fn emergency_mode(&self) -> bool {
         self.emergency_mode
+    }
+
+    /// Test-only helper to clear request-owned diagnostic state without mutating trigger configuration.
+    #[cfg(test)]
+    pub(crate) fn clear_diagnostics(&mut self) -> diag::DiagClearSummary {
+        let mut summary = diag::DiagClearSummary::default();
+
+        summary.cleared_active_count += u8::from(self.diag_map.is_active());
+        summary.cleared_active_count += u8::from(self.diag_tps.is_active());
+        summary.cleared_log_entries = self
+            .diag_log
+            .events
+            .iter()
+            .filter(|entry| entry.is_some())
+            .count() as u8;
+        summary.emergency_cleared = self.emergency_mode;
+
+        self.diag_map = DiagState::new();
+        self.diag_tps = DiagState::new();
+        self.diag_log = DiagLog::new();
+        self.emergency_mode = false;
+
+        summary
     }
 
     /// Clamp sensor values, update diag states, and set/clear emergency mode.

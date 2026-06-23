@@ -38,6 +38,12 @@ use ecu_target_common::{
         apply_trigger_timestamp_to_runtime_adapter_and_push_to_trace_pair, SplitTriggerAdapter,
     },
 };
+
+// Current RP2350B bring-up exposes exactly two injector and two ignition
+// channels through `ScheduledOutputs4`. Worst-case pending work before the next
+// drain is therefore two combined injection+ignition windows, or eight queued
+// transitions total.
+const BOARD_SPLIT_SCHEDULER_QUEUE_CAP: usize = 8;
 use embedded_hal::digital::OutputPin as _;
 #[cfg(feature = "capture-gpio")]
 use irq::setup_trigger_irq;
@@ -239,7 +245,7 @@ fn main() -> ! {
         Hal1ScheduledOut::new(ign1),
         Hal1ScheduledOut::new(ign2),
     );
-    let mut drain = TransitionDrainBuffer::<8>::new();
+    let mut drain = TransitionDrainBuffer::<BOARD_SPLIT_SCHEDULER_QUEUE_CAP>::new();
     let mut observability_traces: FixedCommonObservabilityTracePair<16, 16> =
         FixedCommonObservabilityTracePair::new();
     let mut observability_sample_scratch = [CommonObservabilitySample::default(); 16];
@@ -248,7 +254,7 @@ fn main() -> ! {
     let mut adapter = BoardAdapter::new(
         BoardSensorSnapshotSampleSource::new(FixedLoadSensor::new(Rp2350Time, Kpa10::new(700))),
         NoopCapture,
-        ScheduledActionExecutor::<8>::new(),
+        ScheduledActionExecutor::<BOARD_SPLIT_SCHEDULER_QUEUE_CAP>::new(),
         wd,
         NoopTransport,
         NoopStore,

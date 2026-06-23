@@ -1,5 +1,5 @@
 use ecu_ts::serial::{FrameAssembler, SerialPort};
-use ecu_ts::server::{OutpcProvider, PageStore, TsServer};
+use ecu_ts::server::{BenchToolingOwner, OutpcProvider, PageStore, TsServer};
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct TsServiceStats {
@@ -55,6 +55,19 @@ impl<P: OutpcProvider, S: PageStore> TsService<P, S> {
     /// Handle a single frame already present in `frame`, writing response into `out`
     pub fn handle_frame(&mut self, frame: &[u8], out: &mut [u8]) -> Option<usize> {
         self.server.handle(frame, out)
+    }
+
+    /// Handle a single frame already present in `frame`, writing response into
+    /// `out`, while routing bounded bench-tooling commands through the supplied
+    /// owner.
+    pub fn handle_frame_with_bench_tooling<B: BenchToolingOwner>(
+        &mut self,
+        frame: &[u8],
+        out: &mut [u8],
+        bench_tooling: &mut B,
+    ) -> Option<usize> {
+        self.server
+            .handle_with_bench_tooling(frame, out, bench_tooling)
     }
 
     pub fn stats(&self) -> TsServiceStats {

@@ -127,6 +127,8 @@ impl EcuState {
                 fuel_mult_x100: 100,
                 final_pw: Micros::new(0),
                 last_fault_code: 0,
+                fault_severity: 0,
+                cancel_reason: 0,
                 isr_count: 0,
                 isr_max_us: 0,
                 isr_avg_us: 0,

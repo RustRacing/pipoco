@@ -95,7 +95,12 @@ impl<const N: usize> ScheduledQueueAdapter<N> {
         self.cancel_all_with_reason(TimingIslandStopReason::PermitDenied);
     }
 
+    fn has_live_frontier(&self) -> bool {
+        self.frontier.active_horizon_id().is_some()
+    }
+
     fn cancel_all_with_reason(&mut self, reason: TimingIslandStopReason) {
+        self.frontier.clear_scheduled_ownership();
         self.frontier.clear_live_frontier_state(reason);
         self.queue.cancel_all();
     }
@@ -105,7 +110,9 @@ impl<const N: usize> ScheduledQueueAdapter<N> {
         now: ecu_scheduler::Micros,
         out: &mut TransitionDrainBuffer<M>,
     ) -> usize {
-        self.queue.drain_due(now, out)
+        let drained = self.queue.drain_due(now, out);
+        self.note_drained_ownership(out);
+        drained
     }
 
     pub fn drain_due_with_frontier<const M: usize>(
@@ -113,8 +120,17 @@ impl<const N: usize> ScheduledQueueAdapter<N> {
         now: ecu_scheduler::Micros,
         out: &mut TransitionDrainBuffer<M>,
     ) -> usize {
-        self.queue
-            .drain_due_with_frontier(now, &mut self.frontier, out)
+        let drained = self
+            .queue
+            .drain_due_with_frontier(now, &mut self.frontier, out);
+        if drained == 0
+            && (self.frontier.active_horizon_id().is_none()
+                || self.frontier.active_permit_mask().is_empty())
+        {
+            self.frontier.clear_scheduled_ownership();
+        }
+        self.note_drained_ownership(out);
+        drained
     }
 
     pub fn schedule_output_batch<const M: usize>(
@@ -122,15 +138,29 @@ impl<const N: usize> ScheduledQueueAdapter<N> {
         batch: &OutputTransitionBatch<M>,
     ) -> Result<(), ScheduleError> {
         if self.queue.free_slots() < batch.len() {
+            if self.has_live_frontier() {
+                self.cancel_all_with_reason(TimingIslandStopReason::AdmittedEventRejected);
+            }
             return Err(ScheduleError::QueueFull);
         }
 
         let mut scratch = *self;
+        if let Err(error) = scratch.note_output_batch_ownership(batch) {
+            if self.has_live_frontier() {
+                self.cancel_all_with_reason(TimingIslandStopReason::AdmittedEventRejected);
+            }
+            return Err(error);
+        }
         for transition in batch.iter() {
-            scratch.note_output_ownership(*transition)?;
-            scratch
+            if let Err(error) = scratch
                 .queue
-                .enqueue_transition(scheduled_transition(*transition))?;
+                .enqueue_transition(scheduled_transition(*transition))
+            {
+                if self.has_live_frontier() {
+                    self.cancel_all_with_reason(TimingIslandStopReason::AdmittedEventRejected);
+                }
+                return Err(error);
+            }
         }
         *self = scratch;
         Ok(())
@@ -144,27 +174,80 @@ impl<const N: usize> ScheduledQueueAdapter<N> {
         if let Some(reason) = lowered.status().cancel_scheduler {
             scratch.cancel_all_with_reason(map_cancel_reason(reason));
         }
-        scratch.schedule_output_batch(lowered.output_transitions())?;
+        if let Err(error) = scratch.schedule_output_batch(lowered.output_transitions()) {
+            if self.has_live_frontier() {
+                self.cancel_all_with_reason(TimingIslandStopReason::AdmittedEventRejected);
+            }
+            return Err(error);
+        }
         *self = scratch;
         Ok(())
     }
 }
 
 impl<const N: usize> ScheduledQueueAdapter<N> {
-    fn note_output_ownership(&mut self, transition: OutputTransition) -> Result<(), ScheduleError> {
-        if transition.level != BoardOutputLevel::High {
-            return Ok(());
+    fn note_output_batch_ownership<const M: usize>(
+        &mut self,
+        batch: &OutputTransitionBatch<M>,
+    ) -> Result<(), ScheduleError> {
+        let mut unique_outputs = [None; M];
+        let mut unique_count = 0usize;
+
+        for transition in batch.iter() {
+            if unique_outputs[..unique_count]
+                .iter()
+                .flatten()
+                .any(|output| *output == transition.output)
+            {
+                continue;
+            }
+            unique_outputs[unique_count] = Some(transition.output);
+            unique_count += 1;
         }
 
-        let output = match transition.output {
-            EcuOutput::Injector(channel) => {
-                ExclusiveChannel::new(ecu_scheduler::OutputGroup::Injector, channel)
+        for output in unique_outputs[..unique_count].iter().flatten().copied() {
+            let mut starts = [ecu_scheduler::Micros::new(0); M];
+            let mut ends = [ecu_scheduler::Micros::new(0); M];
+            let mut start_count = 0usize;
+            let mut end_count = 0usize;
+
+            for transition in batch
+                .iter()
+                .filter(|transition| transition.output == output)
+            {
+                match transition.level {
+                    BoardOutputLevel::High => {
+                        starts[start_count] = ecu_scheduler::Micros::new(transition.at.get());
+                        start_count += 1;
+                    }
+                    BoardOutputLevel::Low => {
+                        ends[end_count] = ecu_scheduler::Micros::new(transition.at.get());
+                        end_count += 1;
+                    }
+                }
             }
-            EcuOutput::Ignition(channel) => {
-                ExclusiveChannel::new(ecu_scheduler::OutputGroup::Ignition, channel)
+
+            if start_count != end_count {
+                return Err(ScheduleError::ImpossibleDeadline);
             }
-        };
-        self.frontier.reserve_channel(output)
+
+            starts[..start_count].sort_unstable_by_key(|at| at.get());
+            ends[..end_count].sort_unstable_by_key(|at| at.get());
+
+            let output = scheduled_output(output);
+            for idx in 0..start_count {
+                self.frontier
+                    .reserve_window(output, starts[idx], ends[idx])?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn note_drained_ownership<const M: usize>(&mut self, out: &TransitionDrainBuffer<M>) {
+        for transition in out.as_slice().iter().flatten().copied() {
+            self.frontier.note_drained_transition(transition);
+        }
     }
 }
 
@@ -281,6 +364,7 @@ impl<const N: usize> ScheduledActionExecutor<N> {
         injectors: &mut [&mut dyn RawScheduledOutputPin],
         ignition: &mut [&mut dyn RawScheduledOutputPin],
     ) -> Result<usize, TransitionApplyError> {
+        let had_live_frontier = self.scheduler.frontier().active_horizon_id().is_some();
         if self
             .scheduler
             .frontier()
@@ -291,7 +375,16 @@ impl<const N: usize> ScheduledActionExecutor<N> {
         } else {
             self.drain_due(now, out);
         }
-        apply_drained_transitions(out, injectors, ignition)
+        match apply_drained_transitions(out, injectors, ignition) {
+            Ok(applied) => Ok(applied),
+            Err(error) => {
+                if had_live_frontier {
+                    self.scheduler
+                        .cancel_all_with_reason(TimingIslandStopReason::BoardOutputFault);
+                }
+                Err(error)
+            }
+        }
     }
 }
 
@@ -321,16 +414,29 @@ fn scheduled_level(level: BoardOutputLevel) -> ScheduledLevel {
 }
 
 fn scheduled_transition(transition: OutputTransition) -> ScheduledTransition {
-    let (kind, channel) = match transition.output {
-        EcuOutput::Injector(channel) => (ScheduledTransitionKind::Injector, channel),
-        EcuOutput::Ignition(channel) => (ScheduledTransitionKind::Ignition, channel),
+    let output = scheduled_output(transition.output);
+    let kind = match output.group() {
+        ecu_scheduler::OutputGroup::Injector => ScheduledTransitionKind::Injector,
+        ecu_scheduler::OutputGroup::Ignition => ScheduledTransitionKind::Ignition,
+        ecu_scheduler::OutputGroup::Idle | ecu_scheduler::OutputGroup::Fan => unreachable!(),
     };
 
     ScheduledTransition {
         at_us: ecu_scheduler::Micros::new(transition.at.get()),
         kind,
-        channel,
+        channel: output.channel(),
         level: scheduled_level(transition.level),
+    }
+}
+
+fn scheduled_output(output: EcuOutput) -> ExclusiveChannel {
+    match output {
+        EcuOutput::Injector(channel) => {
+            ExclusiveChannel::new(ecu_scheduler::OutputGroup::Injector, channel)
+        }
+        EcuOutput::Ignition(channel) => {
+            ExclusiveChannel::new(ecu_scheduler::OutputGroup::Ignition, channel)
+        }
     }
 }
 

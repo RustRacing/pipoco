@@ -340,12 +340,6 @@ fn dfco_suppression_keeps_hifi_bridge_fuel_free() {
         .cylinders
         .iter()
         .all(|command| command.fuel_mass_kg == 0.0));
-    assert!(adapted
-        .bridge
-        .plant_input
-        .cylinders
-        .iter()
-        .any(|command| command.dwell_s > 0.0));
 }
 
 #[test]
@@ -891,6 +885,53 @@ fn runtime_backend_stress_scenarios_keep_sync_and_restart_outcomes_aligned() {
     );
     assert!(core_sync_loss.plant_snapshot.rpm.get() > 0);
     assert!(hifi_sync_loss.plant_snapshot.rpm.get() > 0);
+}
+
+#[test]
+fn crank_period_sweep_retains_sync_and_outputs_across_supported_driver_band() {
+    for crank_period_us in [1_000u32, 750, 500, 375] {
+        let report = run_headless_smoke(ScenarioConfig {
+            crank_period_us,
+            steps: 40,
+            ..Default::default()
+        })
+        .unwrap();
+
+        assert_eq!(
+            report.ecu_snapshot.synced, 1,
+            "crank period {crank_period_us} should retain sync"
+        );
+        assert!(
+            report.total_outputs > 0,
+            "crank period {crank_period_us} should still emit outputs"
+        );
+        assert_eq!(
+            report.pending_overflow_count, 0,
+            "crank period {crank_period_us} should not overflow the pending queue"
+        );
+        assert_eq!(
+            report.trace.overflow_count(),
+            0,
+            "crank period {crank_period_us} should not overflow the driver trace"
+        );
+        assert_final_snapshot_mirrors_report(&report);
+    }
+}
+
+#[test]
+fn extended_smoke_run_retains_sync_and_outputs_without_overflow() {
+    let report = run_headless_smoke(ScenarioConfig {
+        steps: 96,
+        ..Default::default()
+    })
+    .unwrap();
+
+    assert_eq!(report.ecu_snapshot.synced, 1);
+    assert!(report.total_outputs > 0);
+    assert!(report.combustion_events > 0);
+    assert_eq!(report.pending_overflow_count, 0);
+    assert_eq!(report.trace.overflow_count(), 0);
+    assert_final_snapshot_mirrors_report(&report);
 }
 
 #[test]

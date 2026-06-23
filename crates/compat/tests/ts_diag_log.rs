@@ -1,6 +1,11 @@
 use ecu_compat::compat::EcuState;
 use ecu_compat::ts::pages::PAGE_DIAG_LOG;
 use ecu_compat::{Kpa10, Micros};
+use ecu_ts::pages::{
+    DIAG_LOG_ENTRY_BYTES, DIAG_LOG_ENTRY_COUNT, TS_DIAG_SOURCE_CONTEXT_PRESENT,
+    TS_DIAG_SOURCE_SENSOR, TS_DIAG_SOURCE_USER, TS_FAULT_ACTION_OBSERVE_ONLY,
+    TS_FAULT_SEVERITY_WARNING,
+};
 use ecu_ts::server::PageStore;
 
 #[test]
@@ -18,13 +23,24 @@ fn diag_log_contains_events_after_fault() {
 
     let pages = state.page_store();
 
-    let mut out = [0u8; 16 * 9];
+    let mut out = [0u8; DIAG_LOG_ENTRY_BYTES * DIAG_LOG_ENTRY_COUNT];
     let n = pages
         .read_page(PAGE_DIAG_LOG, &mut out)
         .expect("read diag log");
-    assert_eq!(n, 16 * 9);
+    assert_eq!(n, DIAG_LOG_ENTRY_BYTES * DIAG_LOG_ENTRY_COUNT);
     // First entry should be non-zero code
     assert!(out[0] != 0, "expected at least one diag event present");
+    assert_eq!(out[1], TS_FAULT_SEVERITY_WARNING);
+    assert_eq!(out[2], TS_FAULT_ACTION_OBSERVE_ONLY);
+    assert_eq!(
+        out[3],
+        TS_DIAG_SOURCE_SENSOR | TS_DIAG_SOURCE_CONTEXT_PRESENT
+    );
+    let context = u32::from_le_bytes([out[12], out[13], out[14], out[15]]);
+    assert_eq!(
+        context, 1000,
+        "MAP-range clear event should preserve the in-range sample that closed the fault"
+    );
 }
 
 #[test]
@@ -42,14 +58,19 @@ fn diag_log_encodes_cam_missing_event() {
 
     let pages = state.page_store();
 
-    let mut out = [0u8; 16 * 9];
+    let mut out = [0u8; DIAG_LOG_ENTRY_BYTES * DIAG_LOG_ENTRY_COUNT];
     let n = pages
         .read_page(PAGE_DIAG_LOG, &mut out)
         .expect("read diag log");
-    assert_eq!(n, 16 * 9);
+    assert_eq!(n, DIAG_LOG_ENTRY_BYTES * DIAG_LOG_ENTRY_COUNT);
     assert_eq!(out[0], 3, "cam missing code should encode as 3");
-    let start = u32::from_le_bytes([out[1], out[2], out[3], out[4]]);
-    let end = u32::from_le_bytes([out[5], out[6], out[7], out[8]]);
+    assert_eq!(out[1], TS_FAULT_SEVERITY_WARNING);
+    assert_eq!(out[2], TS_FAULT_ACTION_OBSERVE_ONLY);
+    assert_eq!(out[3], TS_DIAG_SOURCE_USER | TS_DIAG_SOURCE_CONTEXT_PRESENT);
+    let start = u32::from_le_bytes([out[4], out[5], out[6], out[7]]);
+    let end = u32::from_le_bytes([out[8], out[9], out[10], out[11]]);
+    let context = u32::from_le_bytes([out[12], out[13], out[14], out[15]]);
     assert_eq!(start, 100);
     assert_eq!(end, 200);
+    assert_eq!(context, 42);
 }

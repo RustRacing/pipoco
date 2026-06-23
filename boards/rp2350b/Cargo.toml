@@ -36,8 +36,17 @@ ve-demo = []
 capture-gpio = []
 # Standalone example binaries.
 example-bins = []
-transport-can = ["ecu-transport/transport-can"]
-transport-can-fd = ["transport-can", "ecu-transport/transport-can-fd"]
+transport-can = [
+    "ecu-compat/transport-can",
+    "ecu-target-common/transport-can",
+    "ecu-transport/transport-can",
+]
+transport-can-fd = [
+    "transport-can",
+    "ecu-compat/transport-can-fd",
+    "ecu-target-common/transport-can-fd",
+    "ecu-transport/transport-can-fd",
+]
 
 [build-dependencies]
 

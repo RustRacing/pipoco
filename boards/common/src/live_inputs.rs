@@ -7,7 +7,9 @@ pub enum SplitSyncState {
     NoSignal,
     Unsynced,
     CrankSynced,
+    CamSynced,
     FullSequentialAuthorized,
+    SyncSuspect,
     SyncLost,
 }
 
@@ -17,13 +19,12 @@ impl SplitSyncState {
             CrankSyncState::NoSignal => Self::NoSignal,
             CrankSyncState::PrimarySearching => Self::Unsynced,
             CrankSyncState::SyncLost => Self::SyncLost,
-            CrankSyncState::PrimaryLocked => {
-                if matches!(authority.phase, PhaseSyncState::CamValidated720) {
-                    Self::FullSequentialAuthorized
-                } else {
-                    Self::CrankSynced
-                }
-            }
+            CrankSyncState::PrimaryLocked => match authority.phase {
+                PhaseSyncState::Unknown => Self::SyncSuspect,
+                PhaseSyncState::CrankOnly360 => Self::CrankSynced,
+                PhaseSyncState::CamObserved720 => Self::CamSynced,
+                PhaseSyncState::CamValidated720 => Self::FullSequentialAuthorized,
+            },
         }
     }
 
@@ -36,7 +37,10 @@ impl SplitSyncState {
         } else {
             match previous {
                 Self::NoSignal | Self::Unsynced => Self::Unsynced,
-                Self::CrankSynced | Self::FullSequentialAuthorized => Self::SyncLost,
+                Self::CrankSynced
+                | Self::CamSynced
+                | Self::FullSequentialAuthorized
+                | Self::SyncSuspect => Self::SyncLost,
                 Self::SyncLost => Self::SyncLost,
             }
         }
@@ -181,12 +185,32 @@ mod tests {
         assert_eq!(
             SplitSyncState::from_authority(EngineTimeAuthority::new(
                 CrankSyncState::PrimaryLocked,
+                PhaseSyncState::Unknown,
+                ecu_domain::AbsoluteTimeAuthority::GeometryOnly,
+                900,
+                0,
+            )),
+            SplitSyncState::SyncSuspect
+        );
+        assert_eq!(
+            SplitSyncState::from_authority(EngineTimeAuthority::new(
+                CrankSyncState::PrimaryLocked,
                 PhaseSyncState::CrankOnly360,
                 ecu_domain::AbsoluteTimeAuthority::GeometryOnly,
                 900,
                 0,
             )),
             SplitSyncState::CrankSynced
+        );
+        assert_eq!(
+            SplitSyncState::from_authority(EngineTimeAuthority::new(
+                CrankSyncState::PrimaryLocked,
+                PhaseSyncState::CamObserved720,
+                ecu_domain::AbsoluteTimeAuthority::GeometryOnly,
+                900,
+                0,
+            )),
+            SplitSyncState::CamSynced
         );
         assert_eq!(
             SplitSyncState::from_authority(EngineTimeAuthority::new(

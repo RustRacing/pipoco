@@ -89,6 +89,8 @@ impl BoardSensorValidityFlags {
     pub const KNOCK: u8 = 1 << 1;
     pub const VEHICLE_SPEED: u8 = 1 << 2;
     pub const LAMBDA: u8 = 1 << 3;
+    pub const OIL_PRESSURE: u8 = 1 << 4;
+    pub const FUEL_PRESSURE: u8 = 1 << 5;
 
     pub const fn new(bits: u8) -> Self {
         Self(bits)

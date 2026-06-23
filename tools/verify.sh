@@ -5,16 +5,64 @@ set -euo pipefail
 bash tools/check_repo_hygiene.sh
 
 # M50 first-run evidence tooling must stay runnable even before hardware artifacts exist.
-python3 -m unittest tests/test_check_m50_batch8_evidence.py tests/test_init_m50_batch8_evidence.py
-python3 -m unittest tests/test_check_software_readiness.py
+python3 -m unittest discover -s tools/tests -p 'test_*.py'
 python3 tools/check_software_readiness.py
 
 # Warning denial is ACTIVE for all embedded board/product targets.
 echo "[verify.sh] WARNING DENIAL IS ACTIVE — embedded build warnings will fail the gate"
 
-# Green checks for the currently verified slices of the workspace.
-cargo clippy -p ecu-core --all-targets --all-features -- -D warnings
-cargo clippy -p ecu-sim-hifi --all-targets -- -D warnings
+require_workspace_packages() {
+    python3 - "$@" <<'PY'
+import json
+import subprocess
+import sys
+
+expected = sys.argv[1:]
+metadata = json.loads(
+    subprocess.check_output(
+        ["cargo", "metadata", "--no-deps", "--format-version", "1"],
+        text=True,
+    )
+)
+packages = {pkg["name"] for pkg in metadata["packages"]}
+missing = [name for name in expected if name not in packages]
+if missing:
+    print(
+        "[verify.sh] FAIL: missing workspace packages referenced by verify.sh: "
+        + ", ".join(missing),
+        file=sys.stderr,
+    )
+    sys.exit(1)
+PY
+}
+
+core_packages=(
+    ecu-board-api
+    ecu-calibration
+    ecu-compat
+    ecu-control
+    ecu-domain
+    ecu-io
+    ecu-runtime
+    ecu-scheduler
+    ecu-transport
+    ecu-trigger
+    ecu-ts
+    ecu-sim-hifi
+)
+
+board_packages=(
+    stm32f4-ecu
+    ecu-rp2040-pico
+    ecu-rp2350b
+)
+
+require_workspace_packages "${core_packages[@]}" "${board_packages[@]}"
+
+# Green checks for the currently verified host/core slices of the workspace.
+for package in "${core_packages[@]}"; do
+    cargo clippy -p "$package" --all-targets --all-features -- -D warnings
+done
 cargo test -p ecu-sim-hifi
 
 # STM32F4 checks (US-FM0287) — clippy with -D warnings on bins

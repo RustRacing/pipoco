@@ -7,11 +7,77 @@ use crate::pages::{
     ANGLES_PAGE_BYTES, EXPERT_TRIGGER_PAGE_BYTES, PAGE_ANGLES, PAGE_EXPERT_TRIGGER, PAGE_FUEL,
     PAGE_IGN, TABLE_PAGE_BYTES,
 };
-use crate::server::{PageError, PageStore, PersistError as ServerPersistError};
-use ecu_calibration::kv::{
-    PERSIST_KEY_ANGLES, PERSIST_KEY_EXPERT_TRIGGER, PERSIST_KEY_FUEL, PERSIST_KEY_IGN,
+use crate::server::{
+    CompatibilityInfoReport, CompatibilityMigrationCode, CompatibilityStatusCode, PageError,
+    PageStore, PersistError as ServerPersistError,
 };
-use ecu_calibration::{ExpertTriggerCalibration, FuelRuntimeTune, KvError, KvStore, PersistError};
+#[cfg(feature = "runtime")]
+use crate::{CalibrationEditSurface, CalibrationPackageApplyResult};
+use ecu_calibration::kv::{
+    PERSIST_KEY_ANGLES, PERSIST_KEY_CAL_PACKAGE, PERSIST_KEY_EXPERT_TRIGGER, PERSIST_KEY_FUEL,
+    PERSIST_KEY_IGN,
+};
+use ecu_calibration::{
+    CalibrationHardwareTargetId, CalibrationPackageCompatibility,
+    CalibrationPackageMigrationStatus, CalibrationPackageReview, CalibrationPackageWireError,
+    CalibrationRuntimeBuildId, CalibrationSchemaVersion, ExpertTriggerCalibration, FuelRuntimeTune,
+    KvError, KvStore, PersistError, PersistedCalibrationPackage,
+};
+
+#[cfg(feature = "runtime")]
+pub trait CalibrationPackageSession {
+    fn export_current_package(
+        &self,
+        runtime_build_id: CalibrationRuntimeBuildId,
+        hardware_target_id: CalibrationHardwareTargetId,
+    ) -> PersistedCalibrationPackage;
+
+    fn import_candidate_package(
+        &mut self,
+        candidate: PersistedCalibrationPackage,
+        runtime_build_id: CalibrationRuntimeBuildId,
+        hardware_target_id: CalibrationHardwareTargetId,
+    ) -> CalibrationPackageApplyResult;
+
+    fn apply_expert_trigger_page(&mut self, data: &[u8]) -> Result<(), PageError>;
+
+    fn expert_trigger_calibration(&self) -> ExpertTriggerCalibration;
+}
+
+#[cfg(feature = "runtime")]
+impl CalibrationPackageSession for CalibrationEditSurface {
+    fn export_current_package(
+        &self,
+        runtime_build_id: CalibrationRuntimeBuildId,
+        hardware_target_id: CalibrationHardwareTargetId,
+    ) -> PersistedCalibrationPackage {
+        CalibrationEditSurface::export_current_package(self, runtime_build_id, hardware_target_id)
+    }
+
+    fn import_candidate_package(
+        &mut self,
+        candidate: PersistedCalibrationPackage,
+        runtime_build_id: CalibrationRuntimeBuildId,
+        hardware_target_id: CalibrationHardwareTargetId,
+    ) -> CalibrationPackageApplyResult {
+        CalibrationEditSurface::import_candidate_package(
+            self,
+            candidate,
+            runtime_build_id,
+            hardware_target_id,
+        )
+    }
+
+    fn apply_expert_trigger_page(&mut self, data: &[u8]) -> Result<(), PageError> {
+        CalibrationEditSurface::apply_expert_trigger_page(self, data)
+            .map(|_| ())
+            .map_err(|_| PageError::Invalid)
+    }
+
+    fn expert_trigger_calibration(&self) -> ExpertTriggerCalibration {
+        CalibrationEditSurface::expert_trigger_calibration(self)
+    }
+}
 
 /// One persisted TunerStudio page binding.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -206,6 +272,31 @@ pub fn burn_expert_trigger_calibration<KV: KvStore>(
         .map_err(kv_error_to_persist_error)
 }
 
+/// Best-effort load of a canonical persisted calibration package from KV.
+pub fn try_load_calibration_package<KV: KvStore>(
+    kv: &mut KV,
+) -> Option<PersistedCalibrationPackage> {
+    let mut buf = [0u8; PersistedCalibrationPackage::WIRE_LEN];
+    let n = kv.read(PERSIST_KEY_CAL_PACKAGE, &mut buf).ok()?;
+    if n != PersistedCalibrationPackage::WIRE_LEN {
+        return None;
+    }
+    PersistedCalibrationPackage::decode_wire(&buf).ok()
+}
+
+/// Burn a canonical persisted calibration package wire record into KV.
+pub fn burn_calibration_package<KV: KvStore>(
+    kv: &mut KV,
+    package: PersistedCalibrationPackage,
+) -> Result<(), PersistError> {
+    let mut buf = [0u8; PersistedCalibrationPackage::WIRE_LEN];
+    package
+        .encode_wire(&mut buf)
+        .map_err(|_| PersistError::Fail)?;
+    kv.write(PERSIST_KEY_CAL_PACKAGE, &buf)
+        .map_err(kv_error_to_persist_error)
+}
+
 fn kv_error_to_persist_error(err: KvError) -> PersistError {
     match err {
         KvError::EngineRunning => PersistError::EngineRunning,
@@ -279,6 +370,11 @@ impl<P: PageStoreProvider, KV: KvStore> PersistedTsPageStore<P, KV> {
         self.page_writes.clear();
     }
 
+    /// Attempt to load one persisted calibration package wire record.
+    pub fn try_load_package(&mut self) -> Option<PersistedCalibrationPackage> {
+        try_load_calibration_package(&mut self.kv)
+    }
+
     /// Reset persisted pages in memory to safe defaults (does not write KV until burn).
     pub fn factory_reset(&mut self) {
         self.provider.with_pages_mut(|inner| {
@@ -296,8 +392,98 @@ impl<P: PageStoreProvider, KV: KvStore> PersistedTsPageStore<P, KV> {
         self.provider.runtime_fuel_tune()
     }
 
+    pub fn expert_trigger_calibration(&self) -> ExpertTriggerCalibration {
+        self.expert_trigger
+    }
+
+    pub fn kv(&self) -> &KV {
+        &self.kv
+    }
+
+    pub fn kv_mut(&mut self) -> &mut KV {
+        &mut self.kv
+    }
+
+    pub fn set_expert_trigger_calibration(&mut self, calibration: ExpertTriggerCalibration) {
+        self.expert_trigger = calibration;
+    }
+
     pub fn take_written_pages(&mut self) -> Option<WrittenPageSet> {
         self.page_writes.take_written_pages()
+    }
+
+    /// Burn one persisted calibration package wire record through the owned KV seam.
+    pub fn burn_package(
+        &mut self,
+        package: PersistedCalibrationPackage,
+    ) -> Result<(), ServerPersistError> {
+        burn_calibration_package(&mut self.kv, package)
+            .map_err(calibration_persist_error_to_server_persist_error)
+    }
+
+    /// Export the current TS calibration state as a target-bound package and
+    /// persist it through the owned KV seam.
+    #[cfg(feature = "runtime")]
+    pub fn export_and_burn_current_package(
+        &mut self,
+        session: &impl CalibrationPackageSession,
+        runtime_build_id: CalibrationRuntimeBuildId,
+        hardware_target_id: CalibrationHardwareTargetId,
+    ) -> Result<PersistedCalibrationPackage, ServerPersistError> {
+        let package = session.export_current_package(runtime_build_id, hardware_target_id);
+        self.burn_package(package)?;
+        Ok(package)
+    }
+
+    /// Export the current TS calibration state as canonical package wire bytes.
+    #[cfg(feature = "runtime")]
+    pub fn export_current_package_wire(
+        &self,
+        session: &impl CalibrationPackageSession,
+        runtime_build_id: CalibrationRuntimeBuildId,
+        hardware_target_id: CalibrationHardwareTargetId,
+        out: &mut [u8],
+    ) -> Result<usize, CalibrationPackageWireError> {
+        session
+            .export_current_package(runtime_build_id, hardware_target_id)
+            .encode_wire(out)
+    }
+
+    /// Attempt to load one persisted package wire record and route it through
+    /// the TS-side import/apply workflow.
+    #[cfg(feature = "runtime")]
+    pub fn try_load_and_import_package(
+        &mut self,
+        session: &mut impl CalibrationPackageSession,
+        runtime_build_id: CalibrationRuntimeBuildId,
+        hardware_target_id: CalibrationHardwareTargetId,
+    ) -> Option<CalibrationPackageApplyResult> {
+        let package = self.try_load_package()?;
+        let result =
+            session.import_candidate_package(package, runtime_build_id, hardware_target_id);
+        if !matches!(result, CalibrationPackageApplyResult::Rejected { .. }) {
+            self.set_expert_trigger_calibration(session.expert_trigger_calibration());
+        }
+        Some(result)
+    }
+
+    /// Decode one canonical package wire record and route it through the TS-side
+    /// import/apply workflow.
+    #[cfg(feature = "runtime")]
+    pub fn import_candidate_package_wire(
+        &mut self,
+        session: &mut impl CalibrationPackageSession,
+        data: &[u8],
+        runtime_build_id: CalibrationRuntimeBuildId,
+        hardware_target_id: CalibrationHardwareTargetId,
+    ) -> Result<CalibrationPackageApplyResult, CalibrationPackageWireError> {
+        let package = PersistedCalibrationPackage::decode_wire(data)?;
+        let result =
+            session.import_candidate_package(package, runtime_build_id, hardware_target_id);
+        if !matches!(result, CalibrationPackageApplyResult::Rejected { .. }) {
+            self.set_expert_trigger_calibration(session.expert_trigger_calibration());
+        }
+        Ok(result)
     }
 
     fn read_expert_trigger(&self, out: &mut [u8]) -> Option<usize> {
@@ -315,6 +501,148 @@ impl<P: PageStoreProvider, KV: KvStore> PersistedTsPageStore<P, KV> {
             .map_err(|_| PageError::Invalid)?;
         self.expert_trigger = proposed;
         Ok(())
+    }
+}
+
+/// TS server-facing wrapper that binds the persisted TS page store, the staged
+/// calibration edit surface, and the target-bound package identity into one
+/// command-capable store owner.
+#[cfg(feature = "runtime")]
+pub struct TsPackageCommandStore<S, C> {
+    store: S,
+    session: C,
+    runtime_build_id: CalibrationRuntimeBuildId,
+    hardware_target_id: CalibrationHardwareTargetId,
+}
+
+#[cfg(feature = "runtime")]
+impl<S, C> TsPackageCommandStore<S, C> {
+    pub fn new(
+        store: S,
+        session: C,
+        runtime_build_id: CalibrationRuntimeBuildId,
+        hardware_target_id: CalibrationHardwareTargetId,
+    ) -> Self {
+        Self {
+            store,
+            session,
+            runtime_build_id,
+            hardware_target_id,
+        }
+    }
+
+    pub fn store(&self) -> &S {
+        &self.store
+    }
+
+    pub fn store_mut(&mut self) -> &mut S {
+        &mut self.store
+    }
+
+    pub fn session(&self) -> &C {
+        &self.session
+    }
+
+    pub fn session_mut(&mut self) -> &mut C {
+        &mut self.session
+    }
+}
+
+impl<P: PageStoreProvider, KV: KvStore, C> TsPackageCommandStore<PersistedTsPageStore<P, KV>, C> {
+    pub fn runtime_fuel_tune(&self) -> FuelRuntimeTune {
+        self.store.runtime_fuel_tune()
+    }
+
+    pub fn take_written_pages(&mut self) -> Option<WrittenPageSet> {
+        self.store.take_written_pages()
+    }
+
+    pub fn runtime_build_id(&self) -> CalibrationRuntimeBuildId {
+        self.runtime_build_id
+    }
+
+    pub fn hardware_target_id(&self) -> CalibrationHardwareTargetId {
+        self.hardware_target_id
+    }
+}
+
+#[cfg(feature = "runtime")]
+fn compatibility_status_code(
+    compatibility: CalibrationPackageCompatibility,
+) -> CompatibilityStatusCode {
+    match compatibility {
+        CalibrationPackageCompatibility::Compatible => CompatibilityStatusCode::Compatible,
+        CalibrationPackageCompatibility::SchemaVersionMismatch { .. } => {
+            CompatibilityStatusCode::SchemaVersionMismatch
+        }
+        CalibrationPackageCompatibility::RuntimeBuildMismatch { .. } => {
+            CompatibilityStatusCode::RuntimeBuildMismatch
+        }
+        CalibrationPackageCompatibility::HardwareTargetMismatch { .. } => {
+            CompatibilityStatusCode::HardwareTargetMismatch
+        }
+    }
+}
+
+#[cfg(feature = "runtime")]
+fn compatibility_report_from_review(review: CalibrationPackageReview) -> CompatibilityInfoReport {
+    let (expected_schema_version, actual_schema_version) = match review.compatibility {
+        CalibrationPackageCompatibility::SchemaVersionMismatch { expected, actual } => {
+            (expected.get(), actual.get())
+        }
+        _ => (
+            CalibrationSchemaVersion::CURRENT.get(),
+            review.package.package.schema_version.get(),
+        ),
+    };
+    let (expected_runtime_build_id, actual_runtime_build_id) = match review.compatibility {
+        CalibrationPackageCompatibility::RuntimeBuildMismatch { expected, actual } => {
+            (expected.get(), actual.get())
+        }
+        _ => (
+            review.package.runtime_build_id.get(),
+            review.package.runtime_build_id.get(),
+        ),
+    };
+    let (expected_hardware_target_id, actual_hardware_target_id) = match review.compatibility {
+        CalibrationPackageCompatibility::HardwareTargetMismatch { expected, actual } => {
+            (expected.get(), actual.get())
+        }
+        _ => (
+            review.package.hardware_target_id.get(),
+            review.package.hardware_target_id.get(),
+        ),
+    };
+    CompatibilityInfoReport {
+        status: compatibility_status_code(review.compatibility),
+        migration: match review.migration {
+            CalibrationPackageMigrationStatus::NoMigrationRequired => {
+                CompatibilityMigrationCode::None
+            }
+            CalibrationPackageMigrationStatus::MigrationRequired { .. } => {
+                CompatibilityMigrationCode::MigrationRequired
+            }
+        },
+        expected_schema_version,
+        actual_schema_version,
+        expected_runtime_build_id,
+        actual_runtime_build_id,
+        expected_hardware_target_id,
+        actual_hardware_target_id,
+    }
+}
+
+#[cfg(feature = "runtime")]
+impl<P: PageStoreProvider, KV: KvStore, C: CalibrationPackageSession>
+    TsPackageCommandStore<PersistedTsPageStore<P, KV>, C>
+{
+    pub fn compatibility_report(&self) -> CompatibilityInfoReport {
+        let current_package = self
+            .session
+            .export_current_package(self.runtime_build_id, self.hardware_target_id);
+        compatibility_report_from_review(
+            current_package.review_against(self.runtime_build_id, self.hardware_target_id),
+        )
     }
 }
 
@@ -364,6 +692,61 @@ impl<P: PageStoreProvider, KV: KvStore> PageStore for PersistedTsPageStore<P, KV
         burn_expert_trigger_calibration(kv, expert_trigger)
             .map_err(calibration_persist_error_to_server_persist_error)?;
         Ok(())
+    }
+}
+
+#[cfg(feature = "runtime")]
+impl<P: PageStoreProvider, KV: KvStore, C: CalibrationPackageSession> PageStore
+    for TsPackageCommandStore<PersistedTsPageStore<P, KV>, C>
+{
+    fn page_len(&self, page: u8) -> Option<usize> {
+        self.store.page_len(page)
+    }
+
+    fn read_page(&self, page: u8, out: &mut [u8]) -> Option<usize> {
+        self.store.read_page(page, out)
+    }
+
+    fn write_page(&mut self, page: u8, data: &[u8]) -> Result<(), PageError> {
+        self.store.write_page(page, data)?;
+        if page == PAGE_EXPERT_TRIGGER {
+            self.session.apply_expert_trigger_page(data)?;
+        }
+        Ok(())
+    }
+
+    fn burn(&mut self) -> Result<(), ServerPersistError> {
+        self.store.burn()?;
+        self.store.export_and_burn_current_package(
+            &self.session,
+            self.runtime_build_id,
+            self.hardware_target_id,
+        )?;
+        Ok(())
+    }
+
+    fn export_package_wire(&self, out: &mut [u8]) -> Result<usize, PageError> {
+        self.store
+            .export_current_package_wire(
+                &self.session,
+                self.runtime_build_id,
+                self.hardware_target_id,
+                out,
+            )
+            .map_err(|_| PageError::Invalid)
+    }
+
+    fn import_package_wire(&mut self, data: &[u8]) -> Result<(), PageError> {
+        match self.store.import_candidate_package_wire(
+            &mut self.session,
+            data,
+            self.runtime_build_id,
+            self.hardware_target_id,
+        ) {
+            Ok(CalibrationPackageApplyResult::Rejected { .. }) => Err(PageError::Invalid),
+            Ok(_) => Ok(()),
+            Err(_) => Err(PageError::Invalid),
+        }
     }
 }
 

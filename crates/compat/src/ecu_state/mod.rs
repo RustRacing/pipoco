@@ -1,6 +1,7 @@
 mod accessors;
 mod adaptive_control;
 mod control;
+mod diagnostic_control;
 mod ignition_control;
 mod model;
 mod pages;

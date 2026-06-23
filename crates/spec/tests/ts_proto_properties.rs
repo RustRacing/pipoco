@@ -2,16 +2,21 @@ use ecu_spec::{
     burn_page, committed_page_record, decode_outpc, encode_outpc, encode_ts_diag_log_oldest_first,
     page_meta, save_all, ts_diag_log_push, ts_dispatch_step, write_page, OutpcFrame, PersistPageId,
     TsBurnSaveStore, TsDiagLogEntry, TsDiagLogRing, TsDispatchState, TsPageId, TsPageMeta,
-    TsPageMetaError, TS_DIAG_LOG_CAPACITY, TS_DIAG_LOG_ENTRY_BYTES,
+    TsPageMetaError, TS_DIAG_LOG_CAPACITY, TS_DIAG_LOG_ENTRY_BYTES, TS_DIAG_SOURCE_CONTEXT_PRESENT,
 };
 use proptest::prelude::*;
 
 fn decode_diag_entry(bytes: &[u8]) -> TsDiagLogEntry {
+    let source = bytes[3];
     TsDiagLogEntry {
-        timestamp_us: u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
-        code: u16::from_le_bytes([bytes[4], bytes[5]]),
-        source: bytes[6],
-        context: u16::from_le_bytes([bytes[7], bytes[8]]),
+        code: bytes[0],
+        severity: bytes[1],
+        action: bytes[2],
+        source: source & !TS_DIAG_SOURCE_CONTEXT_PRESENT,
+        context_present: (source & TS_DIAG_SOURCE_CONTEXT_PRESENT) != 0,
+        start_us: u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]),
+        end_us: u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]),
+        context: u32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]),
     }
 }
 
@@ -78,14 +83,30 @@ fn outpc_frame_strategy() -> impl Strategy<Value = OutpcFrame> {
 }
 
 fn diag_entry_strategy() -> impl Strategy<Value = TsDiagLogEntry> {
-    (any::<u32>(), any::<u16>(), any::<u8>(), any::<u16>()).prop_map(
-        |(timestamp_us, code, source, context)| TsDiagLogEntry {
-            timestamp_us,
-            code,
-            source,
-            context,
-        },
+    (
+        any::<u8>(),
+        any::<u8>(),
+        any::<u8>(),
+        0u8..=0x7f,
+        any::<bool>(),
+        any::<u32>(),
+        any::<u32>(),
+        any::<u32>(),
     )
+        .prop_map(
+            |(code, severity, action, source, context_present, start_us, end_us, context)| {
+                TsDiagLogEntry {
+                    code,
+                    severity,
+                    action,
+                    source,
+                    context_present,
+                    start_us,
+                    end_us,
+                    context,
+                }
+            },
+        )
 }
 
 proptest! {

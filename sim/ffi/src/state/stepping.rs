@@ -1,5 +1,5 @@
 use ecu_board_api::{AuxCommand, AuxCommandBatch, AuxOutput, AuxValue, OutputLevel};
-use ecu_domain::{Degrees10, Lambda100, Micros, Rpm};
+use ecu_domain::{Degrees10, Kpa10, Lambda100, Micros, Rpm};
 use ecu_runtime::{
     Action, ControlInputs, EnrichmentInputs, IgnitionInputs, LambdaTrimInputs,
     RuntimeScheduledLevel, RuntimeScheduledOutputKind, RuntimeScheduledTransition, StepResult,
@@ -142,13 +142,23 @@ impl EcuSimHandle {
                 mapdot_kpa_s: 0,
             },
             lambda: LambdaTrimInputs {
+                now_us: Micros::new(now_us),
                 clt_c,
+                just_started: false,
                 lambda_valid: self.sensors.lambda_valid != 0,
                 measured_lambda100: Lambda100::new(measured_lambda),
                 requested_open_loop: self.sensors.lambda_valid == 0,
             },
             torque: TorqueInputs::new(driver_request, 30, 100, 100, 100),
             ignition: IgnitionInputs::new(Degrees10::new(100), 0, 0, 0, false, Rpm::new(self.rpm)),
+            fuel_sensors: ecu_runtime::FuelSensorInputs {
+                maf_valid: self.sensors.maf_x100 != 0,
+                maf_x100: self.sensors.maf_x100,
+                iat_c10: self.sensors.iat_c10,
+                vbatt_mv: self.sensors.vbatt_mv,
+                baro_valid: true,
+                baro_kpa10: Kpa10::new(self.sensors.baro_kpa10),
+            },
             knock_intensity_x100: 0,
         }
     }
