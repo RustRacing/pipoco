@@ -28,3 +28,11 @@ debug = true
 [profile.dev]
 opt-level = 1
 panic = "abort"
+
+[workspace.lints.clippy]
+# Constructors with >7 arguments must be refactored to struct literals (review 015).
+too_many_arguments = "deny"
+
+[workspace.lints.rust]
+# Spec proof harnesses use kani/verus cfg attributes.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)', 'cfg(verus)'] }

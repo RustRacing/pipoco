@@ -5,6 +5,7 @@ use ecu_board_api::{
     EcuOutput, OutputLevel as BoardOutputLevel, OutputScheduler, OutputTransition,
     OutputTransitionBatch,
 };
+use ecu_io::{OutputAssemblyCounters, OutputStage, StageOutcome, TraceId};
 use ecu_runtime::{
     Action, ActionBatch, ActionExecutor, ActionLoweringError, ActionOutputBatchAdapter,
     RUNTIME_AUX_COMMAND_CAP,
@@ -279,12 +280,16 @@ impl<const Q: usize, const N: usize> OutputScheduler<N> for ScheduledQueueAdapte
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScheduledActionExecutor<const N: usize> {
     scheduler: ScheduledQueueAdapter<N>,
+    output_assembly_counters: OutputAssemblyCounters,
+    output_command_id: u32,
 }
 
 impl<const N: usize> ScheduledActionExecutor<N> {
     pub const fn new() -> Self {
         Self {
             scheduler: ScheduledQueueAdapter::new(),
+            output_assembly_counters: OutputAssemblyCounters::new(),
+            output_command_id: 0,
         }
     }
 
@@ -294,6 +299,10 @@ impl<const N: usize> ScheduledActionExecutor<N> {
 
     pub const fn timing_metrics(&self) -> ScheduledTimingMetrics {
         self.scheduler.timing_metrics()
+    }
+
+    pub const fn output_assembly_counters(&self) -> OutputAssemblyCounters {
+        self.output_assembly_counters
     }
 
     pub fn queue_mut(&mut self) -> &mut ScheduledTransitionQueue<N> {
@@ -376,7 +385,10 @@ impl<const N: usize> ScheduledActionExecutor<N> {
             self.drain_due(now, out);
         }
         match apply_drained_transitions(out, injectors, ignition) {
-            Ok(applied) => Ok(applied),
+            Ok(applied) => {
+                self.record_applied_outputs(applied, now);
+                Ok(applied)
+            }
             Err(error) => {
                 if had_live_frontier {
                     self.scheduler
@@ -384,6 +396,29 @@ impl<const N: usize> ScheduledActionExecutor<N> {
                 }
                 Err(error)
             }
+        }
+    }
+
+    fn record_applied_outputs(&mut self, applied: usize, now: ecu_scheduler::Micros) {
+        let timestamp = ecu_domain::Micros::new(now.get());
+        for _ in 0..applied {
+            self.output_command_id = self.output_command_id.saturating_add(1);
+            self.output_assembly_counters.record(
+                OutputStage::OutputExecutor,
+                StageOutcome::Executed,
+                TraceId::new(0),
+                self.output_command_id,
+                timestamp,
+                0,
+            );
+            self.output_assembly_counters.record(
+                OutputStage::OutputObserver,
+                StageOutcome::Completed,
+                TraceId::new(0),
+                self.output_command_id,
+                timestamp,
+                0,
+            );
         }
     }
 }

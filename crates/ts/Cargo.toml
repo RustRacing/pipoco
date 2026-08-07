@@ -6,13 +6,16 @@ edition = "2021"
 [dependencies]
 ecu-runtime = { path = "../runtime", optional = true }
 ecu-domain = { path = "../domain", optional = true }
-ecu-calibration = { path = "../calibration", optional = true }
+ecu-calibration = { path = "../calibration" }
 
 [features]
 default = []
 # Runtime/calibration-facing TS surfaces (snapshot adapter, calibration edit
 # surface, expert-trigger page). Enable explicitly; the default is the
 # protocol/server shell only.
-calibration = ["dep:ecu-calibration"]
+calibration = []
 runtime = ["dep:ecu-runtime", "dep:ecu-domain", "calibration"]
 persistence = ["calibration"]
+
+[lints]
+workspace = true

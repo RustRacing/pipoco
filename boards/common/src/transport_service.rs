@@ -3,7 +3,6 @@ use ecu_board_api::{
     CommonFaultTransitionEventId, CommonFaultTransitionTelemetry,
 };
 use ecu_calibration::CalibrationPackageIdentity;
-use ecu_compat::compat::EcuState;
 use ecu_domain::{
     diag::{DiagClearSummary, DiagCode, DiagEvent, DiagSource},
     FaultCode, Micros,
@@ -1367,12 +1366,6 @@ pub trait LiveObd2RequestOwner: DiagnosticClearOwner {
     }
 }
 
-impl DiagnosticClearOwner for EcuState {
-    fn clear_diagnostics(&mut self) -> DiagClearSummary {
-        EcuState::clear_diagnostics(self)
-    }
-}
-
 fn dtc_clear_inputs_from_summary(summary: DiagClearSummary) -> CanObd2DtcClearInputs {
     CanObd2DtcClearInputs {
         cleared_dtc_count: summary
@@ -1723,8 +1716,6 @@ mod tests {
     extern crate std;
 
     use super::*;
-    use ecu_compat::diag::{DiagCode, DiagEvent, DiagSource};
-    use ecu_compat::Micros;
     use ecu_domain::{diag::DiagClearSummary, CancelReason, FaultSeverity, Kpa10, Rpm};
     use ecu_transport::{CanObd2DtcClearVerdict, TransportStats};
     use std::collections::VecDeque;
@@ -3695,18 +3686,14 @@ mod tests {
             payload: [0; 6],
         });
         let mut service = Obd2TransportService::new(transport);
-        let mut state = EcuState::new();
-        state.set_emergency_trigger_map_oob(true);
-        state.set_emergency_mode(true);
-        state.diag_map.latch(Micros::new(10));
-        state.diag_log_mut().push(DiagEvent {
-            code: DiagCode::MapRange,
-            timestamp: Micros::new(100),
-            source: DiagSource::Sensor,
-            context: Some(100),
-            start_us: 10,
-            end_us: 40,
-        });
+        let mut state = MockClearOwner {
+            clear_summary: DiagClearSummary {
+                cleared_active_count: 1,
+                cleared_log_entries: 1,
+                emergency_cleared: true,
+            },
+            clear_count: 0,
+        };
 
         let outcome = service
             .pump_once(&mut state)
@@ -3730,9 +3717,7 @@ mod tests {
             other => panic!("unexpected outcome: {other:?}"),
         }
 
-        assert!(!state.diag_map.is_active());
-        assert!(!state.emergency_mode());
-        assert!(state.diag_log().events.iter().all(|entry| entry.is_none()));
+        assert_eq!(state.clear_count, 1);
         assert_eq!(service.transport().tx.len(), 1);
         assert_eq!(
             service.transport().tx[0],
@@ -3757,18 +3742,14 @@ mod tests {
             payload: [0; 6],
         });
         let mut service = Obd2TransportService::new(transport);
-        let mut state = EcuState::new();
-        state.set_emergency_trigger_map_oob(true);
-        state.set_emergency_mode(true);
-        state.diag_map.latch(Micros::new(10));
-        state.diag_log_mut().push(DiagEvent {
-            code: DiagCode::MapRange,
-            timestamp: Micros::new(100),
-            source: DiagSource::Sensor,
-            context: Some(100),
-            start_us: 10,
-            end_us: 40,
-        });
+        let mut state = MockClearOwner {
+            clear_summary: DiagClearSummary {
+                cleared_active_count: 1,
+                cleared_log_entries: 1,
+                emergency_cleared: true,
+            },
+            clear_count: 0,
+        };
 
         let error = service
             .pump_once(&mut state)
@@ -3780,17 +3761,7 @@ mod tests {
                 CanObd2DtcClearResponseError::UnexpectedParameterId { parameter_id: 0x01 }
             )
         );
-        assert!(state.diag_map.is_active());
-        assert!(state.emergency_mode());
-        assert_eq!(
-            state
-                .diag_log()
-                .events
-                .iter()
-                .filter(|entry| entry.is_some())
-                .count(),
-            1
-        );
+        assert_eq!(state.clear_count, 0);
         assert!(service.transport().tx.is_empty());
     }
 
@@ -3848,7 +3819,7 @@ mod tests {
             cpu_usage: 10,
         });
         let mut service = Obd2TransportService::new(transport);
-        let mut state = EcuState::new();
+        let mut state = MockClearOwner::default();
 
         let outcome = service
             .pump_once(&mut state)
@@ -3865,10 +3836,7 @@ mod tests {
                 cpu_usage: 10,
             })
         );
-        assert!(!state.diag_map.is_active());
-        assert!(!state.diag_tps.is_active());
-        assert!(!state.diag_cam.is_active());
-        assert!(!state.emergency_mode());
+        assert_eq!(state.clear_count, 0);
         assert!(service.transport().tx.is_empty());
     }
 }

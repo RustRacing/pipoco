@@ -39,3 +39,51 @@ impl FuelRuntimeTune {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fuel_runtime_tune_carries_runtime_boundary_fields() {
+        let mut ve_table = [[100; FUEL_RUNTIME_TABLE_DIM]; FUEL_RUNTIME_TABLE_DIM];
+        let mut afr_table = [[147; FUEL_RUNTIME_TABLE_DIM]; FUEL_RUNTIME_TABLE_DIM];
+        ve_table[2][3] = 81;
+        afr_table[4][5] = 132;
+
+        let tune = FuelRuntimeTune::new(ve_table, afr_table, 2400, 775, 1);
+
+        assert_eq!(tune.ve_table[2][3], 81);
+        assert_eq!(tune.afr_table[4][5], 132);
+        assert_eq!(tune.required_fuel_us, 2400);
+        assert_eq!(tune.injector_deadtime_us, 775);
+        assert_eq!(tune.ve_load_source, 1);
+    }
+
+    #[test]
+    fn fuel_runtime_axes_match_legacy_core_defaults() {
+        assert_eq!(
+            FUEL_RUNTIME_RPM_BINS,
+            [
+                500, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 4500, 5000, 5500, 6000, 6500, 7000,
+                7500, 8000,
+            ]
+        );
+        assert_eq!(
+            FUEL_RUNTIME_LOAD_BINS,
+            [20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 170,]
+        );
+    }
+
+    #[test]
+    fn fuel_runtime_axes_are_len_16_and_strictly_monotonic() {
+        assert_eq!(FUEL_RUNTIME_RPM_BINS.len(), 16);
+        assert_eq!(FUEL_RUNTIME_LOAD_BINS.len(), 16);
+        for pair in FUEL_RUNTIME_RPM_BINS.windows(2) {
+            assert!(pair[0] < pair[1], "RPM bins must be strictly increasing");
+        }
+        for pair in FUEL_RUNTIME_LOAD_BINS.windows(2) {
+            assert!(pair[0] < pair[1], "load bins must be strictly increasing");
+        }
+    }
+}

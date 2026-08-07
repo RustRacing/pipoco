@@ -1,0 +1,301 @@
+diff --git a/hw/avr/Kconfig b/hw/avr/Kconfig
+index b29937b..61faabf 100644
+--- a/hw/avr/Kconfig
++++ b/hw/avr/Kconfig
+@@ -9,4 +9,5 @@ config ARDUINO
+     default y
+     depends on AVR
+     select AVR_ATMEGA_MCU
++    select ATMEGA_GPIO
+     select UNIMP
+diff --git a/hw/avr/atmega.c b/hw/avr/atmega.c
+index 95b6da5..cef9a13 100644
+--- a/hw/avr/atmega.c
++++ b/hw/avr/atmega.c
+@@ -19,6 +19,7 @@
+ #include "hw/qdev-properties.h"
+ #include "hw/sysbus.h"
+ #include "qom/object.h"
++#include "hw/gpio/atmega_gpio.h"
+ #include "hw/misc/unimp.h"
+ #include "migration/vmstate.h"
+ #include "atmega.h"
+@@ -311,9 +312,12 @@ static void atmega_realize(DeviceState *dev, Error **errp)
+         if (!mc->dev[idx].addr) {
+             continue;
+         }
+-        devname = g_strdup_printf("atmega-gpio-%c", 'a' + (char)i);
+-        create_unimplemented_device(devname,
+-                                    OFFSET_DATA + mc->dev[idx].addr, 3);
++        devname = g_strdup_printf("gpio%c", 'a' + (char)i);
++        object_initialize_child(OBJECT(dev), devname, &s->gpio[i],
++                                TYPE_ATMEGA_GPIO);
++        sbd = SYS_BUS_DEVICE(&s->gpio[i]);
++        sysbus_realize(sbd, &error_abort);
++        sysbus_mmio_map(sbd, 0, OFFSET_DATA + mc->dev[idx].addr);
+         g_free(devname);
+     }
+ 
+diff --git a/hw/avr/atmega.h b/hw/avr/atmega.h
+index 9ac4678..92222de 100644
+--- a/hw/avr/atmega.h
++++ b/hw/avr/atmega.h
+@@ -12,6 +12,7 @@
+ #define HW_AVR_ATMEGA_H
+ 
+ #include "hw/char/avr_usart.h"
++#include "hw/gpio/atmega_gpio.h"
+ #include "hw/timer/avr_timer16.h"
+ #include "hw/misc/avr_power.h"
+ #include "target/avr/cpu.h"
+@@ -44,6 +45,7 @@ struct AtmegaMcuState {
+     MemoryRegion sram_io;
+     DeviceState *io;
+     AVRMaskState pwr[POWER_MAX];
++    AtmegaGpioState gpio[GPIO_MAX];
+     AVRUsartState usart[USART_MAX];
+     AVRTimer16State timer[TIMER_MAX];
+     uint64_t xtal_freq_hz;
+diff --git a/hw/gpio/Kconfig b/hw/gpio/Kconfig
+index a209294..905d7f2 100644
+--- a/hw/gpio/Kconfig
++++ b/hw/gpio/Kconfig
+@@ -1,6 +1,9 @@
+ config PL061
+     bool
+ 
++config ATMEGA_GPIO
++    bool
++
+ config GPIO_KEY
+     bool
+ 
+diff --git a/hw/gpio/atmega_gpio.c b/hw/gpio/atmega_gpio.c
+new file mode 100644
+index 0000000..ac71cd1
+--- /dev/null
++++ b/hw/gpio/atmega_gpio.c
+@@ -0,0 +1,179 @@
++/*
++ * ATmega GPIO port model.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "hw/gpio/atmega_gpio.h"
++#include "hw/irq.h"
++#include "hw/sysbus.h"
++#include "migration/vmstate.h"
++#include "qemu/log.h"
++#include "qemu/module.h"
++
++#define ATMEGA_GPIO_PIN  0
++#define ATMEGA_GPIO_DDR  1
++#define ATMEGA_GPIO_PORT 2
++
++static uint8_t atmega_gpio_pin_value(AtmegaGpioState *s)
++{
++    return (s->port & s->ddr) | (s->external_level & ~s->ddr);
++}
++
++static void atmega_gpio_update_outputs(AtmegaGpioState *s)
++{
++    uint8_t value = s->port & s->ddr;
++    uint8_t changed = s->last_output ^ value;
++
++    while (changed) {
++        int bit = ctz32(changed);
++        qemu_set_irq(s->out[bit], (value >> bit) & 1);
++        changed &= ~(1u << bit);
++    }
++
++    s->last_output = value;
++}
++
++static uint64_t atmega_gpio_read(void *opaque, hwaddr addr, unsigned size)
++{
++    AtmegaGpioState *s = opaque;
++
++    if (size != 1) {
++        qemu_log_mask(LOG_GUEST_ERROR, "%s: invalid size %u\n",
++                      __func__, size);
++        return 0;
++    }
++
++    switch (addr) {
++    case ATMEGA_GPIO_PIN:
++        return atmega_gpio_pin_value(s);
++    case ATMEGA_GPIO_DDR:
++        return s->ddr;
++    case ATMEGA_GPIO_PORT:
++        return s->port;
++    default:
++        qemu_log_mask(LOG_GUEST_ERROR,
++                      "%s: bad offset 0x%" HWADDR_PRIx "\n", __func__, addr);
++        return 0;
++    }
++}
++
++static void atmega_gpio_write(void *opaque, hwaddr addr, uint64_t value,
++                              unsigned size)
++{
++    AtmegaGpioState *s = opaque;
++    uint8_t byte = value & 0xff;
++
++    if (size != 1) {
++        qemu_log_mask(LOG_GUEST_ERROR, "%s: invalid size %u\n",
++                      __func__, size);
++        return;
++    }
++
++    switch (addr) {
++    case ATMEGA_GPIO_PIN:
++        /* AVR toggles PORT bits when software writes one bits to PINx. */
++        s->port ^= byte;
++        break;
++    case ATMEGA_GPIO_DDR:
++        s->ddr = byte;
++        break;
++    case ATMEGA_GPIO_PORT:
++        s->port = byte;
++        break;
++    default:
++        qemu_log_mask(LOG_GUEST_ERROR,
++                      "%s: bad offset 0x%" HWADDR_PRIx "\n", __func__, addr);
++        return;
++    }
++
++    atmega_gpio_update_outputs(s);
++}
++
++static void atmega_gpio_set_external(void *opaque, int line, int level)
++{
++    AtmegaGpioState *s = opaque;
++
++    if (level) {
++        s->external_level |= 1u << line;
++    } else {
++        s->external_level &= ~(1u << line);
++    }
++}
++
++static const MemoryRegionOps atmega_gpio_ops = {
++    .read = atmega_gpio_read,
++    .write = atmega_gpio_write,
++    .endianness = DEVICE_NATIVE_ENDIAN,
++    .impl = {
++        .min_access_size = 1,
++        .max_access_size = 1,
++    },
++    .valid = {
++        .min_access_size = 1,
++        .max_access_size = 1,
++    },
++};
++
++static void atmega_gpio_init(Object *obj)
++{
++    AtmegaGpioState *s = ATMEGA_GPIO(obj);
++    DeviceState *dev = DEVICE(obj);
++    SysBusDevice *sbd = SYS_BUS_DEVICE(obj);
++
++    qdev_init_gpio_in(dev, atmega_gpio_set_external, 8);
++    qdev_init_gpio_out(dev, s->out, 8);
++    object_property_add_uint8_ptr(obj, "external-level",
++                                  &s->external_level,
++                                  OBJ_PROP_FLAG_READWRITE);
++    memory_region_init_io(&s->iomem, obj, &atmega_gpio_ops, s,
++                          "atmega-gpio", 3);
++    sysbus_init_mmio(sbd, &s->iomem);
++}
++
++static void atmega_gpio_reset(DeviceState *dev)
++{
++    AtmegaGpioState *s = ATMEGA_GPIO(dev);
++
++    s->ddr = 0;
++    s->port = 0;
++    s->last_output = 0;
++    atmega_gpio_update_outputs(s);
++}
++
++static const VMStateDescription vmstate_atmega_gpio = {
++    .name = "atmega-gpio",
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_UINT8(ddr, AtmegaGpioState),
++        VMSTATE_UINT8(port, AtmegaGpioState),
++        VMSTATE_UINT8(external_level, AtmegaGpioState),
++        VMSTATE_UINT8(last_output, AtmegaGpioState),
++        VMSTATE_END_OF_LIST()
++    }
++};
++
++static void atmega_gpio_class_init(ObjectClass *klass, const void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++
++    device_class_set_legacy_reset(dc, atmega_gpio_reset);
++    dc->vmsd = &vmstate_atmega_gpio;
++}
++
++static const TypeInfo atmega_gpio_info = {
++    .name          = TYPE_ATMEGA_GPIO,
++    .parent        = TYPE_SYS_BUS_DEVICE,
++    .instance_size = sizeof(AtmegaGpioState),
++    .instance_init = atmega_gpio_init,
++    .class_init    = atmega_gpio_class_init,
++};
++
++static void atmega_gpio_register_types(void)
++{
++    type_register_static(&atmega_gpio_info);
++}
++
++type_init(atmega_gpio_register_types)
+diff --git a/hw/gpio/meson.build b/hw/gpio/meson.build
+index 7484061..e0ca748 100644
+--- a/hw/gpio/meson.build
++++ b/hw/gpio/meson.build
+@@ -1,3 +1,4 @@
++system_ss.add(when: 'CONFIG_ATMEGA_GPIO', if_true: files('atmega_gpio.c'))
+ system_ss.add(when: 'CONFIG_GPIO_KEY', if_true: files('gpio_key.c'))
+ system_ss.add(when: 'CONFIG_GPIO_MPC8XXX', if_true: files('mpc8xxx.c'))
+ system_ss.add(when: 'CONFIG_GPIO_PWR', if_true: files('gpio_pwr.c'))
+diff --git a/include/hw/gpio/atmega_gpio.h b/include/hw/gpio/atmega_gpio.h
+new file mode 100644
+index 0000000..f88d89b
+--- /dev/null
++++ b/include/hw/gpio/atmega_gpio.h
+@@ -0,0 +1,29 @@
++/*
++ * ATmega GPIO port model.
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#ifndef HW_GPIO_ATMEGA_GPIO_H
++#define HW_GPIO_ATMEGA_GPIO_H
++
++#include "system/memory.h"
++#include "hw/irq.h"
++#include "hw/sysbus.h"
++#include "qom/object.h"
++
++#define TYPE_ATMEGA_GPIO "atmega-gpio"
++OBJECT_DECLARE_SIMPLE_TYPE(AtmegaGpioState, ATMEGA_GPIO)
++
++struct AtmegaGpioState {
++    SysBusDevice parent_obj;
++
++    MemoryRegion iomem;
++    qemu_irq out[8];
++    uint8_t ddr;
++    uint8_t port;
++    uint8_t external_level;
++    uint8_t last_output;
++};
++
++#endif

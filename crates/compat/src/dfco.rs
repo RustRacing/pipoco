@@ -2,73 +2,11 @@
 
 pub use ecu_calibration::configs::DfcoConfig;
 
-#[derive(Copy, Clone)]
-pub struct DfcoState {
-    pub active: bool,
-    enter_ts: u32,
-    last_change_ts: u32,
-    armed: bool,
-}
-
-impl DfcoState {
-    pub const fn new() -> Self {
-        Self {
-            active: false,
-            enter_ts: 0,
-            last_change_ts: 0,
-            armed: false,
-        }
-    }
-
-    pub fn update(
-        &mut self,
-        now_us: u32,
-        rpm: u16,
-        tps_pct: u8,
-        map_kpa: u16,
-        cfg: &DfcoConfig,
-    ) -> bool {
-        let allow = tps_pct <= cfg.tps_max_pct
-            && map_kpa <= cfg.map_max_kpa
-            && rpm >= cfg.rpm_min
-            && rpm <= cfg.rpm_max;
-        if allow {
-            if !self.active {
-                // ensure delay elapsed
-                if !self.armed {
-                    self.enter_ts = now_us;
-                    self.armed = true;
-                }
-                let delay_us = cfg.delay_ms * 1000;
-                if now_us.wrapping_sub(self.enter_ts) >= delay_us {
-                    self.active = true;
-                    self.last_change_ts = now_us;
-                }
-            }
-        } else {
-            // resume with hysteresis
-            if self.active {
-                let hyst_us = cfg.resume_hyst_ms * 1000;
-                if now_us.wrapping_sub(self.last_change_ts) >= hyst_us {
-                    self.active = false;
-                    self.enter_ts = 0;
-                    self.armed = false;
-                    self.last_change_ts = now_us;
-                }
-            } else {
-                self.enter_ts = 0;
-                self.armed = false;
-            }
-        }
-        self.active
-    }
-}
-
-impl Default for DfcoState {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+/// Canonical decel-fuel-cut state machine, owned by `ecu-control`.
+///
+/// Compatibility shell re-exports the control `DecelFuelCutState` (same
+/// enter-delay / resume-hysteresis logic) as `DfcoState`; see review 001.
+pub use ecu_control::DecelFuelCutState as DfcoState;
 
 #[cfg(test)]
 mod tests {

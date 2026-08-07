@@ -220,7 +220,7 @@ fn enrichment_controller_returns_combined_result() {
     assert_eq!(result.warmup_x100, WarmupConfig::DEFAULT.max_percent_x100);
     assert_eq!(
         result.total_x100(),
-        result.apply_to(PulseWidthUs::new(100)).get()
+        result.apply_to(PulseWidthUs::new(100)).get() as u16
     );
 }
 
@@ -630,7 +630,7 @@ fn control_planners_compose_purely() {
     assert!(ignition.dwell_us.get() <= DwellConfig::DEFAULT.max_dwell_us);
     assert_eq!(
         enrich.apply_to(base_pw).get(),
-        ((base_pw.get() as u32 * enrich.total_x100() as u32) / 100) as u16
+        (base_pw.get() as u32 * enrich.total_x100() as u32) / 100
     );
 }
 

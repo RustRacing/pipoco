@@ -240,6 +240,13 @@ pub enum TimingIslandCommand {
 
 impl TimingIslandCommand {
     pub const EMPTY: Self = Self::CancelAll(CancelReason::Manual);
+
+    pub const fn arm_output_request(self) -> Option<OutputTransition> {
+        match self {
+            Self::ArmOutput(request) => Some(request),
+            _ => None,
+        }
+    }
 }
 
 impl Default for TimingIslandCommand {
@@ -256,6 +263,17 @@ pub enum TimingIslandRejectReason {
     PermitDenied,
     BackendFault,
     StaleCommand,
+}
+
+impl TimingIslandRejectReason {
+    pub const fn output_reject_reason(self) -> crate::OutputRejectReason {
+        match self {
+            Self::CommandQueueFull => crate::OutputRejectReason::CommandQueueFull,
+            Self::PermitDenied => crate::OutputRejectReason::PermitDenied,
+            Self::BackendFault => crate::OutputRejectReason::BackendFault,
+            Self::StaleCommand => crate::OutputRejectReason::StaleCommand,
+        }
+    }
 }
 
 #[repr(C)]
@@ -279,6 +297,42 @@ impl TimingIslandEvent {
 impl Default for TimingIslandEvent {
     fn default() -> Self {
         Self::EMPTY
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TimingIslandOutputRequestFinalTrace {
+    pub command_id: crate::OutputCommandId,
+    pub request: OutputTransition,
+    pub final_transition: Option<OutputTransition>,
+    pub rejection: Option<crate::OutputRejectReason>,
+}
+
+impl TimingIslandOutputRequestFinalTrace {
+    pub const fn completed(
+        command_id: crate::OutputCommandId,
+        request: OutputTransition,
+        completed: OutputTransition,
+    ) -> Self {
+        Self {
+            command_id,
+            request,
+            final_transition: Some(completed),
+            rejection: None,
+        }
+    }
+
+    pub const fn rejected(
+        command_id: crate::OutputCommandId,
+        request: OutputTransition,
+        reason: TimingIslandRejectReason,
+    ) -> Self {
+        Self {
+            command_id,
+            request,
+            final_transition: None,
+            rejection: Some(reason.output_reject_reason()),
+        }
     }
 }
 
@@ -413,3 +467,69 @@ fixed_batch!(
     TimingIslandCommand,
     TimingIslandCommand::EMPTY
 );
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn arm_output_request_returns_only_arm_output_payload() {
+        let request = OutputTransition::new(
+            EcuOutput::Ignition(ChannelId::new(2)),
+            OutputLevel::High,
+            Ticks::new(123),
+        );
+
+        assert_eq!(
+            TimingIslandCommand::ArmOutput(request).arm_output_request(),
+            Some(request)
+        );
+        assert_eq!(TimingIslandCommand::FeedWatchdog.arm_output_request(), None);
+    }
+
+    #[test]
+    fn completed_output_trace_uses_terminal_transition_only() {
+        let command_id = crate::OutputCommandId::new(17);
+        let request = OutputTransition::new(
+            EcuOutput::Injector(ChannelId::new(1)),
+            OutputLevel::High,
+            Ticks::new(100),
+        );
+        let completed = OutputTransition::new(
+            EcuOutput::Injector(ChannelId::new(1)),
+            OutputLevel::Low,
+            Ticks::new(140),
+        );
+
+        let trace = TimingIslandOutputRequestFinalTrace::completed(command_id, request, completed);
+
+        assert_eq!(trace.command_id, command_id);
+        assert_eq!(trace.request, request);
+        assert_eq!(trace.final_transition, Some(completed));
+        assert_eq!(trace.rejection, None);
+    }
+
+    #[test]
+    fn rejected_output_trace_uses_backend_agnostic_rejection_reason() {
+        let command_id = crate::OutputCommandId::new(18);
+        let request = OutputTransition::new(
+            EcuOutput::Ignition(ChannelId::new(3)),
+            OutputLevel::Low,
+            Ticks::new(200),
+        );
+
+        let trace = TimingIslandOutputRequestFinalTrace::rejected(
+            command_id,
+            request,
+            TimingIslandRejectReason::BackendFault,
+        );
+
+        assert_eq!(trace.command_id, command_id);
+        assert_eq!(trace.request, request);
+        assert_eq!(trace.final_transition, None);
+        assert_eq!(
+            trace.rejection,
+            Some(crate::OutputRejectReason::BackendFault)
+        );
+    }
+}

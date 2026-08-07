@@ -8,13 +8,13 @@ pub fn cranking_corr_x1000(
     clt_c10: TempC10,
 ) -> RatioX1000 {
     if mode != EngineMode::Cranking {
-        return RatioX1000(1000);
+        return RatioX1000::new(1000);
     }
-    RatioX1000(lookup_curve_u16(cranking_curve, temp_curve_input(clt_c10)))
+    RatioX1000::new(lookup_curve_u16(cranking_curve, temp_curve_input(clt_c10)))
 }
 
 pub fn apply_cranking_pw(pw_vbat_us: PulseWidthUs, corr_x1000: RatioX1000) -> PulseWidthUs {
-    PulseWidthUs(mul_ratio_x1000(pw_vbat_us.0, corr_x1000))
+    PulseWidthUs::new(mul_ratio_x1000(pw_vbat_us.get(), corr_x1000))
 }
 
 pub fn spark_selected_for_mode(mode: EngineMode) -> bool {
@@ -35,10 +35,10 @@ fn lookup_curve_u16(curve: &Curve16, x: u16) -> u16 {
 }
 
 fn temp_curve_input(temp: TempC10) -> u16 {
-    if temp.0 < 0 {
+    if temp.get() < 0 {
         0
     } else {
-        temp.0 as u16
+        temp.get() as u16
     }
 }
 
@@ -75,19 +75,19 @@ mod tests {
     fn cranking_correction_only_applies_in_cranking_mode() {
         let c = curve();
         assert_eq!(
-            cranking_corr_x1000(&c, EngineMode::Cranking, TempC10(400)),
-            RatioX1000(1200)
+            cranking_corr_x1000(&c, EngineMode::Cranking, TempC10::new(400)),
+            RatioX1000::new(1200)
         );
         assert_eq!(
-            cranking_corr_x1000(&c, EngineMode::Running, TempC10(400)),
-            RatioX1000(1000)
+            cranking_corr_x1000(&c, EngineMode::Running, TempC10::new(400)),
+            RatioX1000::new(1000)
         );
     }
 
     #[test]
     fn cranking_pw_uses_floor_ratio_multiply() {
-        let pw = apply_cranking_pw(PulseWidthUs(1501), RatioX1000(1333));
-        assert_eq!(pw, PulseWidthUs(2000));
+        let pw = apply_cranking_pw(PulseWidthUs::new(1501), RatioX1000::new(1333));
+        assert_eq!(pw, PulseWidthUs::new(2000));
     }
 
     #[test]

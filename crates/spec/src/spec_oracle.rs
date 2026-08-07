@@ -12,7 +12,7 @@ use crate::{
     DiagnosticCode, FlatShiftResult, IdleResult, IdleTimingResult, InputSnapshot, KnockResult,
     LambdaResult, LaunchResult, LogicalState, ObservableOutput, RevLimitResult,
     SensorPlausibilityInput, SensorPlausibilityState, SensorSlewInput, SensorSlewState,
-    SignedDegrees10, StepResult, SyncState, TorquePipelineInputs, ValidatedCalibration,
+    SignedDegrees10, StepResult, SyncState, TempC10, TorquePipelineInputs, ValidatedCalibration,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -77,7 +77,7 @@ fn evaluate_fuel_details(
         afterstart_corr_x1000: lookup_afterstart_corr_x1000(cal, state, input),
         warmup_corr_x1000: lookup_warmup_corr_x1000(cal, input),
         afr_corr_x1000: compute_afr_corr_x1000(cal, tables.target_afr),
-        lambda_corr_x1000: crate::RatioX1000(lambda.correction_x1000),
+        lambda_corr_x1000: crate::RatioX1000::new(lambda.correction_x1000),
     };
     let pw_corr_us = compute_pw_corr_us(cal, state, input, parts);
     FuelEvaluation {
@@ -106,7 +106,7 @@ pub fn evaluate_schedule(
     input: InputSnapshot,
     fuel: FuelOutput,
 ) -> ScheduleOutput {
-    evaluate_schedule_with_advance_trim(cal, input, fuel, SignedDegrees10(0))
+    evaluate_schedule_with_advance_trim(cal, input, fuel, SignedDegrees10::new(0))
 }
 
 pub fn evaluate_schedule_with_advance_trim(
@@ -190,9 +190,9 @@ pub fn step(cal: &ValidatedCalibration, input: InputSnapshot, state: &LogicalSta
     arb_input.spark_cut = arbiter.spark_cut;
     let slew = crate::sensor_slew_step(
         SensorSlewInput {
-            t_us: arb_input.t_us,
-            clt_c10: arb_input.clt_c10,
-            iat_c10: arb_input.iat_c10,
+            t_us: arb_input.t_us.get(),
+            clt_c10: arb_input.clt_c10.get(),
+            iat_c10: arb_input.iat_c10.get(),
             map_kpa10: arb_input.map_kpa10.get(),
             tps_x100: arb_input.tps_x100,
             maf_x100: if state.sensor_slew_state.initialized {
@@ -211,8 +211,8 @@ pub fn step(cal: &ValidatedCalibration, input: InputSnapshot, state: &LogicalSta
         },
         state.sensor_slew_state,
     );
-    arb_input.clt_c10 = slew.limited.clt_c10;
-    arb_input.iat_c10 = slew.limited.iat_c10;
+    arb_input.clt_c10 = TempC10::new(slew.limited.clt_c10);
+    arb_input.iat_c10 = TempC10::new(slew.limited.iat_c10);
     arb_input.map_kpa10 = crate::Kpa10::new(slew.limited.map_kpa10);
     arb_input.tps_x100 = slew.limited.tps_x100;
     arb_input.knock_intensity_x100 = slew.limited.knock_intensity_x100;
@@ -234,14 +234,14 @@ pub fn step(cal: &ValidatedCalibration, input: InputSnapshot, state: &LogicalSta
         FuelOutput {
             pw_corr_us: fuel.pw_corr_us,
         },
-        SignedDegrees10(advance_trim_deg10),
+        SignedDegrees10::new(advance_trim_deg10),
     );
     let plausibility = crate::sensor_plausibility_step(
         SensorPlausibilityInput {
-            t_us: arb_input.t_us,
-            rpm: arb_input.rpm,
-            clt_c10: arb_input.clt_c10,
-            iat_c10: arb_input.iat_c10,
+            t_us: arb_input.t_us.get(),
+            rpm: arb_input.rpm.get(),
+            clt_c10: arb_input.clt_c10.get(),
+            iat_c10: arb_input.iat_c10.get(),
             map_kpa10: arb_input.map_kpa10.get(),
             tps_x100: arb_input.tps_x100,
             // MAF/O2 live sensor channels are added in later stories; keep
@@ -343,15 +343,15 @@ mod tests {
     fn oracle_step_matches_canonical_fixture() {
         let cal = default_reference_calibration();
         let input = InputSnapshot {
-            t_us: Micros(0),
-            rpm: Rpm(1000),
-            map_kpa10: Kpa10(1000),
-            load_kpa10: Kpa10(1000),
+            t_us: Micros::new(0),
+            rpm: Rpm::new(1000),
+            map_kpa10: Kpa10::new(1000),
+            load_kpa10: Kpa10::new(1000),
             tps_x100: 0,
-            clt_c10: crate::TempC10(800),
-            iat_c10: crate::TempC10(250),
-            baro_kpa10: Kpa10(1000),
-            vbatt_mv: Millivolts(12_000),
+            clt_c10: TempC10::new(800),
+            iat_c10: TempC10::new(250),
+            baro_kpa10: Kpa10::new(1000),
+            vbatt_mv: Millivolts::new(12_000),
             knock_intensity_x100: 0,
             launch_armed: false,
             flat_shift_armed: false,
@@ -362,12 +362,12 @@ mod tests {
             target_afr_override_x100: AfrOverride::None,
         };
         let result = step(&cal, input, &LogicalState::default());
-        assert_eq!(result.output.ve_pct_x100.0, 8000);
-        assert_eq!(result.output.target_afr_x100.0, 1470);
-        assert_eq!(result.output.pw_base_us.0, 2400);
-        assert_eq!(result.output.pw_air_us.0, 2400);
-        assert_eq!(result.output.pw_corr_us.0, 3200);
-        assert_eq!(result.output.dwell_us.0, 2500);
+        assert_eq!(result.output.ve_pct_x100.get(), 8000);
+        assert_eq!(result.output.target_afr_x100.get(), 1470);
+        assert_eq!(result.output.pw_base_us.get(), 2400);
+        assert_eq!(result.output.pw_air_us.get(), 2400);
+        assert_eq!(result.output.pw_corr_us.get(), 3200);
+        assert_eq!(result.output.dwell_us.get(), 2500);
         assert_eq!(result.output.events.len, 16);
         assert_eq!(result.output.soi_deg10.values[0], 6648);
         assert_eq!(result.output.eoi_deg10.values[0], 6840);
@@ -435,11 +435,11 @@ mod tests {
     #[test]
     fn oracle_soft_rev_cut_suppresses_only_spark_events() {
         let mut cal = default_reference_calibration();
-        cal.0.soft_rev_rpm = Rpm(1500);
-        cal.0.hard_rev_rpm = Rpm(2000);
-        cal.0.rev_hysteresis_rpm = Rpm(100);
+        cal.0.soft_rev_rpm = Rpm::new(1500);
+        cal.0.hard_rev_rpm = Rpm::new(2000);
+        cal.0.rev_hysteresis_rpm = Rpm::new(100);
         let input = InputSnapshot {
-            rpm: Rpm(1600),
+            rpm: Rpm::new(1600),
             mode: EngineMode::Running,
             sync: SyncState::Synced,
             ..InputSnapshot::default()
@@ -457,11 +457,11 @@ mod tests {
     #[test]
     fn oracle_hard_rev_cut_suppresses_all_events() {
         let mut cal = default_reference_calibration();
-        cal.0.soft_rev_rpm = Rpm(1500);
-        cal.0.hard_rev_rpm = Rpm(2000);
-        cal.0.rev_hysteresis_rpm = Rpm(100);
+        cal.0.soft_rev_rpm = Rpm::new(1500);
+        cal.0.hard_rev_rpm = Rpm::new(2000);
+        cal.0.rev_hysteresis_rpm = Rpm::new(100);
         let input = InputSnapshot {
-            rpm: Rpm(2100),
+            rpm: Rpm::new(2100),
             mode: EngineMode::Running,
             sync: SyncState::Synced,
             ..InputSnapshot::default()
@@ -481,9 +481,9 @@ mod tests {
     fn oracle_sensor_plausibility_fault_reports_after_debounce() {
         let cal = default_reference_calibration();
         let input0 = InputSnapshot {
-            t_us: Micros(0),
-            rpm: Rpm(2000),
-            map_kpa10: Kpa10(1000),
+            t_us: Micros::new(0),
+            rpm: Rpm::new(2000),
+            map_kpa10: Kpa10::new(1000),
             sync: SyncState::Synced,
             mode: EngineMode::Running,
             ..InputSnapshot::default()
@@ -492,9 +492,9 @@ mod tests {
         assert_eq!(step0.output.diagnostic, DiagnosticCode::None);
 
         let input1 = InputSnapshot {
-            t_us: Micros(500_000),
-            rpm: Rpm(2000),
-            map_kpa10: Kpa10(1000),
+            t_us: Micros::new(500_000),
+            rpm: Rpm::new(2000),
+            map_kpa10: Kpa10::new(1000),
             sync: SyncState::Synced,
             mode: EngineMode::Running,
             ..InputSnapshot::default()

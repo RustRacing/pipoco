@@ -23,7 +23,7 @@ impl ActuatorPageStore<'_> {
     }
 
     fn write_idle(&mut self, data: &[u8]) -> Result<(), PageError> {
-        let page = IdlePage::decode(data).map_err(page_codec_error_to_page_error)?;
+        let page = IdlePage::decode(data)?;
         *self.idle_enable = page.enable;
         *self.idle_duty_x10 = page.duty_x10;
         *self.idle_freq_hz = page.freq_hz;
@@ -31,7 +31,7 @@ impl ActuatorPageStore<'_> {
     }
 
     fn write_fan(&mut self, data: &[u8]) -> Result<(), PageError> {
-        let page = FanPage::decode(data).map_err(page_codec_error_to_page_error)?;
+        let page = FanPage::decode(data)?;
         *self.fan_enable = page.enable;
         *self.fan_on_c = page.on_c;
         *self.fan_off_c = page.off_c;
@@ -39,7 +39,7 @@ impl ActuatorPageStore<'_> {
     }
 
     fn write_cl(&mut self, data: &[u8]) -> Result<(), PageError> {
-        let page = ClosedLoopPage::decode(data).map_err(page_codec_error_to_page_error)?;
+        let page = ClosedLoopPage::decode(data)?;
         *self.cl_enable = page.enable;
         *self.cl_target_afr_x10 = page.target_afr_x10;
         *self.cl_kp_i = page.kp_i;

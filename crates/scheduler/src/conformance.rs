@@ -1,14 +1,11 @@
-use crate::types::{
-    FrontierAdmissionReport, FrontierMetricSnapshot, FRONTIER_HEARTBEAT_EXPIRY_US,
-    FRONTIER_HORIZON_SEQUENCE_BITS, FRONTIER_MAX_HORIZON_US,
-};
 use crate::{
     ChannelId, Micros, ScheduledTransitionQueue, SchedulerMode, SchedulerState, TimedIgnitionPlan,
     TimedInjectionPlan,
 };
 use ecu_board_api::frontier::{
-    TimingIslandHorizonSequenceId, TimingIslandPermitMask, TimingIslandStopReason,
-    TimingIslandSyncLossReason,
+    TimingIslandAdmissionReport, TimingIslandHorizonSequenceId, TimingIslandMetricSnapshot,
+    TimingIslandPermitMask, TimingIslandStopReason, TimingIslandSyncLossReason,
+    HEARTBEAT_EXPIRY_US, HORIZON_SEQUENCE_BITS, MAX_HORIZON_US,
 };
 use ecu_domain::SyncState;
 
@@ -39,6 +36,12 @@ pub struct SchedulerObservedSurface {
 }
 
 /// Canonical frontier contract surface for scheduler conformance checks.
+///
+/// Intentionally compiled-but-unused: this pins the board-api frontier
+/// contract (constants, default masks, admission/metric shapes) so scheduler
+/// conformance tests and the FM0016 harness can read the same surface without
+/// importing board-api directly. Kept alive by `#[allow(dead_code)]`; delete
+/// only together with the conformance tests that will consume it.
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) struct FrontierContractSurface {
@@ -48,20 +51,23 @@ pub(crate) struct FrontierContractSurface {
     pub horizon_sequence_id: TimingIslandHorizonSequenceId,
     pub default_permit_mask: TimingIslandPermitMask,
     pub default_stop_reason: TimingIslandStopReason,
-    pub admission_report: FrontierAdmissionReport,
-    pub metric_snapshot: FrontierMetricSnapshot,
+    pub admission_report: TimingIslandAdmissionReport,
+    pub metric_snapshot: TimingIslandMetricSnapshot,
 }
 
+/// Build the canonical frontier contract surface snapshot.
+///
+/// See `FrontierContractSurface`; same keep-alive rationale.
 #[allow(dead_code)]
 pub(crate) const fn frontier_contract_surface() -> FrontierContractSurface {
     FrontierContractSurface {
-        horizon_sequence_bits: FRONTIER_HORIZON_SEQUENCE_BITS,
-        heartbeat_expiry_us: FRONTIER_HEARTBEAT_EXPIRY_US,
-        max_horizon_us: FRONTIER_MAX_HORIZON_US,
+        horizon_sequence_bits: HORIZON_SEQUENCE_BITS,
+        heartbeat_expiry_us: HEARTBEAT_EXPIRY_US,
+        max_horizon_us: MAX_HORIZON_US,
         horizon_sequence_id: 0,
         default_permit_mask: TimingIslandPermitMask::NONE,
         default_stop_reason: TimingIslandStopReason::None,
-        admission_report: FrontierAdmissionReport::new(
+        admission_report: TimingIslandAdmissionReport::new(
             0,
             false,
             TimingIslandStopReason::None,
@@ -69,7 +75,7 @@ pub(crate) const fn frontier_contract_surface() -> FrontierContractSurface {
             Micros::new(0),
             Micros::new(0),
         ),
-        metric_snapshot: FrontierMetricSnapshot::new(
+        metric_snapshot: TimingIslandMetricSnapshot::new(
             SyncState::Unsynced,
             TimingIslandSyncLossReason::None,
             false,

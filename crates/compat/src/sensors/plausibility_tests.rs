@@ -182,34 +182,36 @@ fn test_rate_validator_accepts_normal_change() {
 }
 
 #[test]
-fn test_rate_validator_rejects_spike() {
+fn test_rate_validator_clamps_spike_to_rate_limit() {
     let mut validator = RateValidator::new(50);
 
     // Initialize with first sample
     validator.validate(50, 0, 500, 1000);
 
-    // Change of 80 in 10ms = 8000/s, way above 500/s limit
+    // Change of 80 in 10ms = 8000/s, way above 500/s limit.
+    // Canonical clamp: max delta = 500 * 10_000 / 1_000_000 = 5.
     let result = validator.validate(130, 10_000, 500, 1000);
-    assert_eq!(result, 50); // Returns last-known-good
+    assert_eq!(result, 55); // clamped to the rate limit
     assert!(validator.was_rejected());
 }
 
 #[test]
-fn test_rate_validator_accepts_after_5_rejections() {
+fn test_rate_validator_clamps_repeatedly_until_candidate_reached() {
     let mut validator = RateValidator::new(50);
 
     // Initialize with first sample
     validator.validate(50, 0, 500, 1000);
 
-    // 5 consecutive rejections should force acceptance
+    // Repeated clamps accumulate toward the candidate instead of
+    // forcing acceptance after a fixed rejection count.
     for i in 0..4 {
         let result = validator.validate(130, (i + 1) * 10_000, 500, 1000);
-        assert_eq!(result, 50); // Still rejecting
+        assert_eq!(result, (50 + 5 * (i + 1)) as u16);
+        assert!(validator.was_rejected());
     }
 
-    // 5th rejection - should accept
-    let result = validator.validate(130, 50_000, 500, 1000);
-    assert_eq!(result, 130);
+    // 50 -> 55 -> 60 -> 65 -> 70: still clamped, approaching the candidate.
+    assert_eq!(validator.get_value(), 70);
 }
 
 #[test]
@@ -219,7 +221,7 @@ fn test_rate_validator_reset_clears_state() {
     // Initialize with first sample
     validator.validate(50, 0, 500, 1000);
 
-    // Reject a sample
+    // Clamp a sample
     validator.validate(130, 10_000, 500, 1000);
     assert!(validator.was_rejected());
 
@@ -232,15 +234,16 @@ fn test_rate_validator_reset_clears_state() {
 }
 
 #[test]
-fn test_rate_validator_ignores_samples_within_min_interval() {
+fn test_rate_validator_holds_last_value_within_min_interval() {
     let mut validator = RateValidator::new(50);
 
     // First sample
     validator.validate(50, 0, 500, 1000);
 
-    // Sample within min interval - should accept without rate check
+    // Sample within min interval - canonical short-dt rule holds the last
+    // accepted value instead of accepting unconditionally.
     let result = validator.validate(130, 500, 500, 1000);
-    assert_eq!(result, 130); // Accepted even though rate would exceed
+    assert_eq!(result, 50);
     assert!(!validator.was_rejected());
 }
 
@@ -261,16 +264,17 @@ fn test_rate_validation_state_tps_and_map() {
 }
 
 #[test]
-fn test_rate_validation_state_rejects_tps_spike() {
+fn test_rate_validation_state_clamps_tps_spike() {
     let mut state = RateValidationState::new();
     let config = RateConfig::DEFAULT;
 
     // Initialize
     state.validate(50, 800, &config, 0);
 
-    // TPS spike (0 to 100 in 10ms = 10000/s)
+    // TPS spike (0 to 100 in 10ms = 10000/s); canonical clamp to 500/s:
+    // max delta = 500 * 10_000 / 1_000_000 = 5.
     let (tps, map, tps_rej, map_rej) = state.validate(100, 820, &config, 10_000);
-    assert_eq!(tps, 50); // Rejected, returns last-good
+    assert_eq!(tps, 55);
     assert_eq!(map, 820); // MAP OK
     assert!(tps_rej);
     assert!(!map_rej);

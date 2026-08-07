@@ -1,12 +1,13 @@
-use ecu_domain::Rpm;
+use ecu_domain::{
+    forward_angle_delta_deg10, micros_for_angle_delta, norm_deg10, CRANK_REV_DEGREES10,
+    ENGINE_CYCLE_DEGREES10,
+};
 
 use crate::{
     CrankSnapshot, ExclusiveChannel, FuelOutputProfile, FuelPlan, IgnitionOutputProfile,
     IgnitionPlan, InjectionOutputProfile, InjectionPlan, Micros, OutputGroup, SparkOutputProfile,
-    SparkPlan, TimedIgnitionPlan, TimedInjectionPlan, CRANK_REV_DEGREES10,
+    SparkPlan, TimedIgnitionPlan, TimedInjectionPlan,
 };
-
-const ENGINE_CYCLE_DEGREES10: u16 = CRANK_REV_DEGREES10 * 2;
 
 /// Converts spark intent plus crank state into timed ignition output plans.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -105,7 +106,7 @@ impl InjectionScheduler {
         let end_at = Micros::new(
             start_at
                 .get()
-                .saturating_add(u32::from(fuel.pulse_width.get()))
+                .saturating_add(fuel.pulse_width.get())
                 .max(start_at.get().saturating_add(1)),
         );
 
@@ -223,7 +224,7 @@ impl FullEcuInjectionScheduler {
         let end_at = Micros::new(
             start_at
                 .get()
-                .saturating_add(u32::from(fuel.pulse_width.get()))
+                .saturating_add(fuel.pulse_width.get())
                 .max(start_at.get().saturating_add(1)),
         );
 
@@ -239,28 +240,6 @@ impl FullEcuInjectionScheduler {
             end_at,
         }
     }
-}
-
-fn norm_deg10(value: i32, modulo: u16) -> u16 {
-    value.rem_euclid(i32::from(modulo)) as u16
-}
-
-fn forward_angle_delta_deg10(current: u16, target: u16, modulo: u16) -> u16 {
-    if target > current {
-        target - current
-    } else {
-        modulo - current + target
-    }
-}
-
-fn micros_for_angle_delta(delta_deg10: u16, rpm: Rpm) -> u32 {
-    let rpm = u64::from(rpm.get());
-    if rpm == 0 {
-        return 0;
-    }
-
-    let micros = 60_000_000u64 * u64::from(delta_deg10) / (u64::from(CRANK_REV_DEGREES10) * rpm);
-    micros.clamp(1, u64::from(u32::MAX)) as u32
 }
 
 fn full_cycle_slot_angle_deg10(event_index: usize, event_count: usize) -> u16 {

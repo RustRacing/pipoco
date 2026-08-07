@@ -12,3 +12,6 @@ ecu-domain = { path = "../domain" }
 
 [dev-dependencies]
 proptest = "1.4"
+
+[lints]
+workspace = true

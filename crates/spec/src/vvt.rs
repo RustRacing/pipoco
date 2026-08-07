@@ -54,9 +54,9 @@ impl Default for VvtConfig {
             mode: VvtMode::Disabled,
             load_source: VvtLoadSource::Map,
             require_sync: true,
-            min_rpm: Rpm(0),
-            max_rpm: Rpm(u16::MAX),
-            min_clt_c10: TempC10(i16::MIN),
+            min_rpm: Rpm::new(0),
+            max_rpm: Rpm::new(u16::MAX),
+            min_clt_c10: TempC10::new(i16::MIN),
             min_tps_x100: 0,
             on_off_duty_x1000: DUTY_MAX_X1000,
             on_off_threshold_x1000: 1,
@@ -107,15 +107,15 @@ fn clamp_duty(duty_x1000: u16) -> u16 {
 fn load_for(config: &VvtConfig, input: &VvtInput) -> Kpa10 {
     match config.load_source {
         VvtLoadSource::Map => input.map_kpa10,
-        VvtLoadSource::Tps => Kpa10(input.tps_x100),
+        VvtLoadSource::Tps => Kpa10::new(input.tps_x100),
     }
 }
 
 fn eligible(config: &VvtConfig, input: &VvtInput) -> bool {
     (!config.require_sync || input.sync_valid)
-        && input.rpm.0 >= config.min_rpm.0
-        && input.rpm.0 <= config.max_rpm.0
-        && input.clt_c10.0 >= config.min_clt_c10.0
+        && input.rpm.get() >= config.min_rpm.get()
+        && input.rpm.get() <= config.max_rpm.get()
+        && input.clt_c10.get() >= config.min_clt_c10.get()
         && input.tps_x100 >= config.min_tps_x100
 }
 
@@ -127,7 +127,7 @@ pub fn vvt_step(config: &VvtConfig, state: &VvtState, input: &VvtInput) -> VvtSt
         return VvtStepResult {
             active: false,
             duty_x1000: 0,
-            target_angle_deg10: SignedDegrees10(0),
+            target_angle_deg10: SignedDegrees10::new(0),
             measured_angle_deg10: input.measured_angle_deg10,
             closed_loop_allowed: false,
             fault,
@@ -140,7 +140,7 @@ pub fn vvt_step(config: &VvtConfig, state: &VvtState, input: &VvtInput) -> VvtSt
         VvtMode::Disabled => VvtStepResult {
             active: false,
             duty_x1000: 0,
-            target_angle_deg10: SignedDegrees10(0),
+            target_angle_deg10: SignedDegrees10::new(0),
             measured_angle_deg10: input.measured_angle_deg10,
             closed_loop_allowed: false,
             fault: false,
@@ -160,7 +160,7 @@ pub fn vvt_step(config: &VvtConfig, state: &VvtState, input: &VvtInput) -> VvtSt
                 } else {
                     0
                 },
-                target_angle_deg10: SignedDegrees10(0),
+                target_angle_deg10: SignedDegrees10::new(0),
                 measured_angle_deg10: input.measured_angle_deg10,
                 closed_loop_allowed: false,
                 fault: false,
@@ -173,7 +173,7 @@ pub fn vvt_step(config: &VvtConfig, state: &VvtState, input: &VvtInput) -> VvtSt
                 return VvtStepResult {
                     active: false,
                     duty_x1000: 0,
-                    target_angle_deg10: SignedDegrees10(0),
+                    target_angle_deg10: SignedDegrees10::new(0),
                     measured_angle_deg10: input.measured_angle_deg10,
                     closed_loop_allowed: false,
                     fault: true,
@@ -184,7 +184,7 @@ pub fn vvt_step(config: &VvtConfig, state: &VvtState, input: &VvtInput) -> VvtSt
             VvtStepResult {
                 active: true,
                 duty_x1000: clamp_duty(bilerp_u16(&config.open_loop_duty_table, input.rpm, load)),
-                target_angle_deg10: SignedDegrees10(0),
+                target_angle_deg10: SignedDegrees10::new(0),
                 measured_angle_deg10: input.measured_angle_deg10,
                 closed_loop_allowed: false,
                 fault: false,
@@ -199,7 +199,7 @@ pub fn vvt_step(config: &VvtConfig, state: &VvtState, input: &VvtInput) -> VvtSt
                 return VvtStepResult {
                     active: false,
                     duty_x1000: 0,
-                    target_angle_deg10: SignedDegrees10(0),
+                    target_angle_deg10: SignedDegrees10::new(0),
                     measured_angle_deg10: input.measured_angle_deg10,
                     closed_loop_allowed: false,
                     fault: true,
@@ -210,7 +210,7 @@ pub fn vvt_step(config: &VvtConfig, state: &VvtState, input: &VvtInput) -> VvtSt
             VvtStepResult {
                 active: true,
                 duty_x1000: 0,
-                target_angle_deg10: SignedDegrees10(bilerp_i16(
+                target_angle_deg10: SignedDegrees10::new(bilerp_i16(
                     &config.closed_loop_target_table,
                     input.rpm,
                     load,
@@ -270,12 +270,12 @@ mod tests {
 
     fn input() -> VvtInput {
         VvtInput {
-            rpm: Rpm(3000),
-            map_kpa10: Kpa10(700),
+            rpm: Rpm::new(3000),
+            map_kpa10: Kpa10::new(700),
             tps_x100: 3500,
-            clt_c10: TempC10(800),
+            clt_c10: TempC10::new(800),
             sync_valid: true,
-            measured_angle_deg10: Some(SignedDegrees10(20)),
+            measured_angle_deg10: Some(SignedDegrees10::new(20)),
         }
     }
 
@@ -292,11 +292,11 @@ mod tests {
     fn sync_and_temperature_gates_prevent_output() {
         let config = VvtConfig {
             mode: VvtMode::OnOff,
-            min_clt_c10: TempC10(700),
+            min_clt_c10: TempC10::new(700),
             ..VvtConfig::default()
         };
         let mut cold = input();
-        cold.clt_c10 = TempC10(200);
+        cold.clt_c10 = TempC10::new(200);
 
         let result = vvt_step(&config, &VvtState::default(), &cold);
 
@@ -367,8 +367,8 @@ mod tests {
 
         assert!(result.active);
         assert!(result.closed_loop_allowed);
-        assert!(result.target_angle_deg10.0 > 0);
-        assert_eq!(result.measured_angle_deg10, Some(SignedDegrees10(20)));
+        assert!(result.target_angle_deg10.get() > 0);
+        assert_eq!(result.measured_angle_deg10, Some(SignedDegrees10::new(20)));
         assert_eq!(result.duty_x1000, 0);
     }
 }

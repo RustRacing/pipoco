@@ -3,11 +3,7 @@
 //! evidence for runtime-owned fields.
 use std::collections::BTreeSet;
 
-#[path = "../../compat/tests/formal/fm0016_fixture_matrix.rs"]
-#[allow(dead_code)]
-mod fm0016_fixture_matrix;
-
-use fm0016_fixture_matrix::{fixture_cases, required_fixture_names};
+use ecu_test_fixtures::fixture_matrix::{fixture_cases, required_fixture_names};
 
 #[test]
 fn fm0016_coverage_fixture_matrix_matches_required_list() {

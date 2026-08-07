@@ -4,9 +4,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 # Architecture rationale: aidocs/architecture/adr-0001-core-ownership.md.
-# The split runtime/control path is canonical for new product behavior; the
-# legacy `ecu-core` crate is a compatibility facade until board migration
-# removes the remaining target-specific direct usages.
+# The split runtime/control path is canonical for new product behavior;
+# `ecu-compat` is the shrinking legacy compatibility facade.
 
 metadata_file="$(mktemp)"
 tree_file="$(mktemp)"
@@ -67,7 +66,10 @@ check_dependency_tree() {
     local edge_kinds="${4:-normal,dev}"
 
     echo "[core-architecture] cargo tree -p $checked_package --edges $edge_kinds"
-    cargo tree -p "$checked_package" --edges "$edge_kinds" --prefix none --format '{p}' >"$tree_file"
+    if ! cargo tree -p "$checked_package" --edges "$edge_kinds" --prefix none --format '{p}' >"$tree_file"; then
+        printf 'ERROR: cargo tree failed for package %s with edges %s\n' "$checked_package" "$edge_kinds" >&2
+        return 1
+    fi
 
     python3 - "$checked_package" "$forbidden_packages_file" "$tree_file" "$forbidden_label" "$edge_kinds" <<'PY'
 import re
@@ -161,11 +163,15 @@ check_no_board_state_refs() {
 
 status=0
 core_boundary_packages=(
-    ecu-core
     ecu-board-api
+    ecu-control
+    ecu-domain
     ecu-io
     ecu-runtime
     ecu-board-profiles
+    ecu-scheduler
+    ecu-spec
+    ecu-trigger
 )
 
 for package in "${core_boundary_packages[@]}"; do
@@ -178,8 +184,8 @@ if ! check_dependency_tree ecu-target-common "$concrete_board_packages_file" "co
     status=1
 fi
 
-printf 'ecu-core\n' >"$ecu_core_package_file"
-if ! check_dependency_tree ecu-target-common "$ecu_core_package_file" "ecu-core" "normal"; then
+printf 'ecu-compat\n' >"$ecu_core_package_file"
+if ! check_dependency_tree ecu-target-common "$ecu_core_package_file" "ecu-compat" "normal"; then
     status=1
 fi
 

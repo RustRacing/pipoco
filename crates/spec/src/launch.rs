@@ -21,7 +21,7 @@ pub fn launch_step(
         };
     }
 
-    let rpm_gate = input.rpm.0 >= cal.0.launch_rpm_limit.0;
+    let rpm_gate = input.rpm.get() >= cal.0.launch_rpm_limit.get();
     if !rpm_gate {
         return LaunchResult {
             launch_cut: false,
@@ -63,7 +63,7 @@ mod tests {
         let cal = default_reference_calibration();
         let input = InputSnapshot {
             launch_armed: false,
-            rpm: Rpm(8000),
+            rpm: Rpm::new(8000),
             ..InputSnapshot::default()
         };
         let state = LogicalState {
@@ -81,10 +81,10 @@ mod tests {
     #[test]
     fn armed_below_rpm_limit_does_not_cut() {
         let mut cal = default_reference_calibration();
-        cal.0.launch_rpm_limit = Rpm(5000);
+        cal.0.launch_rpm_limit = Rpm::new(5000);
         let input = InputSnapshot {
             launch_armed: true,
-            rpm: Rpm(4500),
+            rpm: Rpm::new(4500),
             ..InputSnapshot::default()
         };
 
@@ -97,12 +97,12 @@ mod tests {
     #[test]
     fn armed_above_limit_uses_cycle_bounded_cut_pattern() {
         let mut cal = default_reference_calibration();
-        cal.0.launch_rpm_limit = Rpm(5000);
+        cal.0.launch_rpm_limit = Rpm::new(5000);
         cal.0.launch_cut_cycles = 2;
 
         let input = InputSnapshot {
             launch_armed: true,
-            rpm: Rpm(5500),
+            rpm: Rpm::new(5500),
             ..InputSnapshot::default()
         };
         let mut state = LogicalState::default();

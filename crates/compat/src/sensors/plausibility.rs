@@ -31,6 +31,12 @@ pub struct PlausibilityState {
     pub fault_confirmed: bool,
     /// Timestamp when fault cleared (for recovery tracking)
     pub clear_start_us: u32,
+    /// Last sample timestamp (canonical accumulator debounce)
+    initialized: bool,
+    last_t_us: u32,
+    /// Accumulated fault persistence (canonical debounce counters)
+    assert_counter_us: u32,
+    clear_counter_us: u32,
 }
 
 impl PlausibilityState {
@@ -42,6 +48,10 @@ impl PlausibilityState {
             fault_start_us: 0,
             fault_confirmed: false,
             clear_start_us: 0,
+            initialized: false,
+            last_t_us: 0,
+            assert_counter_us: 0,
+            clear_counter_us: 0,
         }
     }
 
@@ -56,6 +66,11 @@ impl PlausibilityState {
     ///
     /// # Returns
     /// Current confirmed fault (None if no fault)
+    ///
+    /// Uses the canonical accumulator debounce from
+    /// `ecu_control::sensors::plausibility` (review 011): the fault must
+    /// persist `debounce_time_us` of *sampled* time (dt accumulates per
+    /// step) before it confirms, matching the spec oracle verdict stream.
     pub fn check(
         &mut self,
         tps_percent: u8,
@@ -68,49 +83,53 @@ impl PlausibilityState {
             return PlausibilityFault::None;
         }
 
-        // Don't check at low RPM (idle, cranking)
+        let dt_us = if self.initialized {
+            now_us.wrapping_sub(self.last_t_us)
+        } else {
+            0
+        };
+        self.initialized = true;
+        self.last_t_us = now_us;
+
+        // Don't check at low RPM (idle, cranking) - hold current verdict.
         if rpm < config.min_rpm {
-            // Clear any pending fault
-            self.pending_fault = PlausibilityFault::None;
             return self.confirmed_fault;
         }
 
         // Detect fault conditions
         let current_fault = self.detect_fault(tps_percent, map_kpa_x10, config);
+        let prev_pending = self.pending_fault;
+        self.pending_fault = current_fault;
 
         if current_fault != PlausibilityFault::None {
-            // Fault detected
-            self.clear_start_us = 0;
-
-            if self.pending_fault != current_fault {
-                // New fault type, start debounce
-                self.pending_fault = current_fault;
+            // Fault detected: accumulate persistence; clear counter resets.
+            if prev_pending != current_fault {
                 self.fault_start_us = now_us;
-            } else {
-                // Same fault, check debounce
-                let elapsed = now_us.wrapping_sub(self.fault_start_us);
-                if elapsed >= config.debounce_time_us && !self.fault_confirmed {
-                    self.fault_confirmed = true;
-                    self.confirmed_fault = current_fault;
-                }
+            }
+            self.assert_counter_us = self.assert_counter_us.saturating_add(dt_us);
+            if self.assert_counter_us > config.debounce_time_us {
+                self.assert_counter_us = config.debounce_time_us;
+            }
+            self.clear_counter_us = 0;
+            self.clear_start_us = 0;
+            if self.assert_counter_us >= config.debounce_time_us && !self.fault_confirmed {
+                self.fault_confirmed = true;
+                self.confirmed_fault = current_fault;
             }
         } else {
-            // No fault - check for recovery
-            self.pending_fault = PlausibilityFault::None;
-
-            if self.fault_confirmed {
-                // Start recovery timer
-                if self.clear_start_us == 0 {
-                    self.clear_start_us = now_us;
-                }
-
-                // Require same debounce time for recovery
-                let clear_elapsed = now_us.wrapping_sub(self.clear_start_us);
-                if clear_elapsed >= config.debounce_time_us {
-                    self.fault_confirmed = false;
-                    self.confirmed_fault = PlausibilityFault::None;
-                    self.clear_start_us = 0;
-                }
+            // No fault: clear counter accumulates; assert resets.
+            self.clear_counter_us = self.clear_counter_us.saturating_add(dt_us);
+            if self.clear_counter_us > config.debounce_time_us {
+                self.clear_counter_us = config.debounce_time_us;
+            }
+            self.assert_counter_us = 0;
+            if self.clear_start_us == 0 {
+                self.clear_start_us = now_us;
+            }
+            if self.clear_counter_us >= config.debounce_time_us {
+                self.fault_confirmed = false;
+                self.confirmed_fault = PlausibilityFault::None;
+                self.clear_start_us = 0;
             }
         }
 
@@ -167,16 +186,20 @@ impl Default for PlausibilityState {
 
 pub use ecu_calibration::configs::RateConfig;
 
-/// Rate validator for a single sensor
+/// Rate validator for a single sensor.
+///
+/// Delegates to the canonical `ecu_control::sensors::slew` clamp math
+/// (delta-window per second, review 011): a sample that moves faster than
+/// `max_rate_per_sec` is clamped to the rate limit instead of rejected.
 #[derive(Debug, Clone, Copy)]
 pub struct RateValidator {
     /// Last valid value
     pub last_value: u16,
     /// Last update timestamp
     pub last_time_us: u32,
-    /// Was last reading rejected?
+    /// Was last reading clamped (rate exceeded)?
     pub last_rejected: bool,
-    /// Count of consecutive rejections
+    /// Count of consecutive clamps
     pub reject_count: u8,
     /// Has the validator been initialized with at least one sample?
     pub initialized: bool,
@@ -203,7 +226,9 @@ impl RateValidator {
     /// * `min_interval_us` - Minimum time between samples
     ///
     /// # Returns
-    /// Validated value (either new value if OK, or last-known-good if rejected)
+    /// Rate-limited value (clamped toward the candidate when the rate is
+    /// exceeded; the previous value is held for samples inside the minimum
+    /// interval, matching the canonical slew short-dt rule).
     pub fn validate(
         &mut self,
         value: u16,
@@ -222,43 +247,25 @@ impl RateValidator {
 
         let elapsed = now_us.wrapping_sub(self.last_time_us);
 
-        // Too soon since last sample - accept without rate check
+        // Too soon since last sample - hold the last accepted value.
         if elapsed < min_interval_us {
-            self.last_value = value;
             self.last_time_us = now_us;
             self.last_rejected = false;
-            return value;
+            return self.last_value;
         }
 
-        // Calculate rate of change
-        let delta = value.abs_diff(self.last_value);
-
-        // Convert to rate per second
-        // rate = delta / (elapsed_us / 1_000_000) = delta * 1_000_000 / elapsed_us
-        let rate_per_sec = (delta as u32).saturating_mul(1_000_000) / elapsed;
-
-        if rate_per_sec > max_rate_per_sec as u32 {
-            // Rate exceeded - reject this sample
-            self.last_rejected = true;
+        // Canonical delta-window clamp: max delta = rate * elapsed / 1e6.
+        let delta = ecu_control::sensors::slew::max_delta(max_rate_per_sec as u32, elapsed);
+        let limited = ecu_control::sensors::slew::limit_u16(self.last_value, value, delta);
+        self.last_rejected = limited != value;
+        if self.last_rejected {
             self.reject_count = self.reject_count.saturating_add(1);
-
-            // If we've rejected too many samples, accept anyway (sensor may be real)
-            // This prevents getting stuck on a wrong value forever
-            if self.reject_count >= 5 {
-                self.last_value = value;
-                self.last_time_us = now_us;
-                self.reject_count = 0;
-            }
-
-            self.last_value // Return last-known-good
         } else {
-            // Rate OK - accept
-            self.last_value = value;
-            self.last_time_us = now_us;
-            self.last_rejected = false;
             self.reject_count = 0;
-            value
         }
+        self.last_value = limited;
+        self.last_time_us = now_us;
+        limited
     }
 
     /// Check if the last reading was rejected

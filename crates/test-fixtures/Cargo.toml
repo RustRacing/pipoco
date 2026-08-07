@@ -1,0 +1,15 @@
+[package]
+name = "ecu-test-fixtures"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Shared FM0016 fixture matrix and semantic calibration builders for host conformance tests"
+
+[dependencies]
+ecu-domain = { path = "../domain" }
+ecu-runtime = { path = "../runtime" }
+ecu-spec = { path = "../spec" }
+ecu-ts = { path = "../ts", default-features = false, features = ["persistence"] }
+
+[lints]
+workspace = true

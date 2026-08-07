@@ -112,15 +112,15 @@ fn table_u32(value: u32) -> Table2D16<u32> {
 
 fn canonical_input() -> InputSnapshot {
     InputSnapshot {
-        t_us: ecu_spec::Micros(0),
-        rpm: Rpm(1000),
-        map_kpa10: Kpa10(1000),
-        load_kpa10: Kpa10(1000),
+        t_us: ecu_spec::Micros::new(0),
+        rpm: Rpm::new(1000),
+        map_kpa10: Kpa10::new(1000),
+        load_kpa10: Kpa10::new(1000),
         tps_x100: 0,
-        clt_c10: TempC10(800),
-        iat_c10: TempC10(250),
-        baro_kpa10: Kpa10(1000),
-        vbatt_mv: Millivolts(12_000),
+        clt_c10: TempC10::new(800),
+        iat_c10: TempC10::new(250),
+        baro_kpa10: Kpa10::new(1000),
+        vbatt_mv: Millivolts::new(12_000),
         knock_intensity_x100: 0,
         launch_armed: false,
         flat_shift_armed: false,
@@ -134,15 +134,15 @@ fn canonical_input() -> InputSnapshot {
 
 fn interpolation_input() -> InputSnapshot {
     InputSnapshot {
-        t_us: ecu_spec::Micros(0),
-        rpm: Rpm(750),
-        map_kpa10: Kpa10(1000),
-        load_kpa10: Kpa10(750),
+        t_us: ecu_spec::Micros::new(0),
+        rpm: Rpm::new(750),
+        map_kpa10: Kpa10::new(1000),
+        load_kpa10: Kpa10::new(750),
         tps_x100: 0,
-        clt_c10: TempC10(800),
-        iat_c10: TempC10(250),
-        baro_kpa10: Kpa10(1000),
-        vbatt_mv: Millivolts(12_000),
+        clt_c10: TempC10::new(800),
+        iat_c10: TempC10::new(250),
+        baro_kpa10: Kpa10::new(1000),
+        vbatt_mv: Millivolts::new(12_000),
         knock_intensity_x100: 0,
         launch_armed: false,
         flat_shift_armed: false,
@@ -264,19 +264,19 @@ fn interpolation_calibration() -> ValidatedCalibration {
                 values
             },
         },
-        dfco_entry_rpm: Rpm(20_000),
-        dfco_exit_rpm: Rpm(19_000),
+        dfco_entry_rpm: Rpm::new(20_000),
+        dfco_exit_rpm: Rpm::new(19_000),
         dfco_entry_tps_x100: 0,
         dfco_exit_tps_x100: 100,
-        dfco_entry_map_kpa10: Kpa10(0),
+        dfco_entry_map_kpa10: Kpa10::new(0),
         dfco_delay_cycles: 0,
-        soft_rev_rpm: Rpm(19_500),
-        hard_rev_rpm: Rpm(20_000),
-        rev_hysteresis_rpm: Rpm(100),
+        soft_rev_rpm: Rpm::new(19_500),
+        hard_rev_rpm: Rpm::new(20_000),
+        rev_hysteresis_rpm: Rpm::new(100),
         soft_retard_max_deg10: 0,
-        launch_rpm_limit: Rpm(20_000),
+        launch_rpm_limit: Rpm::new(20_000),
         launch_cut_cycles: 0,
-        flat_shift_rpm_min: Rpm(20_000),
+        flat_shift_rpm_min: Rpm::new(20_000),
         flat_shift_cut_cycles: 0,
         knock_threshold_x100: 500,
         knock_retard_step_deg10: 20,
@@ -285,13 +285,13 @@ fn interpolation_calibration() -> ValidatedCalibration {
         knock_recovery_delay_cycles: 2,
         tps_adc_min_counts: 0,
         tps_adc_max_counts: 4095,
-        idle_target_rpm: Rpm(900),
+        idle_target_rpm: Rpm::new(900),
         idle_base_duty_x1000: 0,
         idle_kp_x1000: 0,
         idle_ki_x1000: 0,
         idle_timing_enabled: false,
         idle_timing_pid_enabled: false,
-        idle_timing_rpm_max: Rpm(1200),
+        idle_timing_rpm_max: Rpm::new(1200),
         idle_timing_tps_max_x100: 200,
         idle_advance_curve_deg10: signed_curve(0),
         idle_timing_kp_x1000: 0,
@@ -437,19 +437,19 @@ fn canonical_calibration(mode: InjectionAngleMode) -> ValidatedCalibration {
                 values
             },
         },
-        dfco_entry_rpm: Rpm(20_000),
-        dfco_exit_rpm: Rpm(19_000),
+        dfco_entry_rpm: Rpm::new(20_000),
+        dfco_exit_rpm: Rpm::new(19_000),
         dfco_entry_tps_x100: 0,
         dfco_exit_tps_x100: 100,
-        dfco_entry_map_kpa10: Kpa10(0),
+        dfco_entry_map_kpa10: Kpa10::new(0),
         dfco_delay_cycles: 0,
-        soft_rev_rpm: Rpm(19_500),
-        hard_rev_rpm: Rpm(20_000),
-        rev_hysteresis_rpm: Rpm(100),
+        soft_rev_rpm: Rpm::new(19_500),
+        hard_rev_rpm: Rpm::new(20_000),
+        rev_hysteresis_rpm: Rpm::new(100),
         soft_retard_max_deg10: 0,
-        launch_rpm_limit: Rpm(20_000),
+        launch_rpm_limit: Rpm::new(20_000),
         launch_cut_cycles: 0,
-        flat_shift_rpm_min: Rpm(20_000),
+        flat_shift_rpm_min: Rpm::new(20_000),
         flat_shift_cut_cycles: 0,
         knock_threshold_x100: 500,
         knock_retard_step_deg10: 20,
@@ -458,13 +458,13 @@ fn canonical_calibration(mode: InjectionAngleMode) -> ValidatedCalibration {
         knock_recovery_delay_cycles: 2,
         tps_adc_min_counts: 0,
         tps_adc_max_counts: 4095,
-        idle_target_rpm: Rpm(900),
+        idle_target_rpm: Rpm::new(900),
         idle_base_duty_x1000: 0,
         idle_kp_x1000: 0,
         idle_ki_x1000: 0,
         idle_timing_enabled: false,
         idle_timing_pid_enabled: false,
-        idle_timing_rpm_max: Rpm(1200),
+        idle_timing_rpm_max: Rpm::new(1200),
         idle_timing_tps_max_x100: 200,
         idle_advance_curve_deg10: signed_curve(0),
         idle_timing_kp_x1000: 0,
@@ -497,14 +497,14 @@ fn canonical_calibration(mode: InjectionAngleMode) -> ValidatedCalibration {
 }
 
 fn assert_canonical_output(output: &ObservableOutput) {
-    assert_eq!(output.ve_pct_x100.0, 8000);
-    assert_eq!(output.target_afr_x100.0, 1470);
-    assert_eq!(output.pw_base_us.0, 2400);
-    assert_eq!(output.pw_air_us.0, 2400);
-    assert_eq!(output.pw_corr_us.0, 3200);
+    assert_eq!(output.ve_pct_x100.get(), 8000);
+    assert_eq!(output.target_afr_x100.get(), 1470);
+    assert_eq!(output.pw_base_us.get(), 2400);
+    assert_eq!(output.pw_air_us.get(), 2400);
+    assert_eq!(output.pw_corr_us.get(), 3200);
     assert_eq!(output.lambda_correction_x1000, 1000);
-    assert_eq!(output.spark_advance_deg10, SignedDegrees10(150));
-    assert_eq!(output.dwell_us.0, 2500);
+    assert_eq!(output.spark_advance_deg10, SignedDegrees10::new(150));
+    assert_eq!(output.dwell_us.get(), 2500);
     assert_eq!(output.diagnostic, DiagnosticCode::None);
     assert_eq!(output.events.len, 16);
 }
@@ -514,8 +514,8 @@ fn canonical_interpolation_example_matches_expected_values() {
     let cal = interpolation_calibration();
     let input = interpolation_input();
     let result = step(&cal, input, &LogicalState::default());
-    assert_eq!(result.output.ve_pct_x100.0, 9500);
-    assert_eq!(result.output.target_afr_x100.0, 1575);
+    assert_eq!(result.output.ve_pct_x100.get(), 9500);
+    assert_eq!(result.output.target_afr_x100.get(), 1575);
 }
 
 #[test]
@@ -597,7 +597,7 @@ fn canonical_fuel_cut_example_suppresses_injection_events() {
     let mut input = canonical_input();
     input.fuel_cut = true;
     let result = step(&cal, input, &LogicalState::default());
-    assert_eq!(result.output.pw_corr_us.0, 0);
+    assert_eq!(result.output.pw_corr_us.get(), 0);
     assert_eq!(result.output.cut_reason_code, 1);
     assert!(result.output.fuel_cut);
     assert!(result.output.spark_cut);
@@ -623,9 +623,9 @@ fn interpolation_last_segment_right_closure_and_boundary_equality_examples() {
     let table = table_u16_3x3([[1000, 2000, 3000], [1000, 2000, 3000], [1000, 2000, 3000]]);
     assert_eq!(find_segment(&table.rpm_axis, 1500), 1);
     // x==x2 uses last segment right-closure and reproduces the top breakpoint value.
-    assert_eq!(bilerp_u16(&table, Rpm(1500), Kpa10(500)), 3000);
+    assert_eq!(bilerp_u16(&table, Rpm::new(1500), Kpa10::new(500)), 3000);
     // x==x1 lands exactly on the shared boundary and reproduces column 1.
-    assert_eq!(bilerp_u16(&table, Rpm(1000), Kpa10(500)), 2000);
+    assert_eq!(bilerp_u16(&table, Rpm::new(1000), Kpa10::new(500)), 2000);
 }
 
 #[test]
@@ -635,14 +635,14 @@ fn interpolation_decreasing_u16_examples_match_hand_computation() {
 
     let table = table_u16_2x2(1000, 600, 900, 500);
     // row0@x=750=1000+floor((600-1000)*250/500)=800; row1@x=750=700; y-mid => 800+floor((700-800)*250/500)=750.
-    assert_eq!(bilerp_u16(&table, Rpm(750), Kpa10(750)), 750);
+    assert_eq!(bilerp_u16(&table, Rpm::new(750), Kpa10::new(750)), 750);
 }
 
 #[test]
 fn interpolation_distinct_corner_bilinear_cell_example() {
     let table = table_u16_2x2(1000, 1400, 2000, 2600);
     // row0@x=750=1200; row1@x=750=2300; y-mid => 1200+floor((2300-1200)*250/500)=1750.
-    assert_eq!(bilerp_u16(&table, Rpm(750), Kpa10(750)), 1750);
+    assert_eq!(bilerp_u16(&table, Rpm::new(750), Kpa10::new(750)), 1750);
 }
 
 #[test]
@@ -667,7 +667,7 @@ fn phase2_deadtime_midpoint_vector_matches_hand_computation() {
     // row1=300+floor((500-300)*(7000-1000)/12000)=400
     // y-mid => 150+floor((400-150)*(2000-1000)/2000)=275
     assert_eq!(
-        deadtime_lookup(&table, Millivolts(7000), Kpa10(2000)).0,
+        deadtime_lookup(&table, Millivolts::new(7000), Kpa10::new(2000)).get(),
         275
     );
 }
@@ -683,9 +683,9 @@ fn phase2_vbat_edge_vectors_match_hand_computation() {
         values,
     };
     // Below minimum axis clamps to first cell.
-    assert_eq!(vbat_correction(&curve, Millivolts(7000)).0, 1200);
+    assert_eq!(vbat_correction(&curve, Millivolts::new(7000)).get(), 1200);
     // Above maximum axis clamps to last cell.
-    assert_eq!(vbat_correction(&curve, Millivolts(17000)).0, 900);
+    assert_eq!(vbat_correction(&curve, Millivolts::new(17000)).get(), 900);
 }
 
 #[test]
@@ -698,8 +698,8 @@ fn phase2_baro_edge_vectors_match_hand_computation() {
         axis: axis(&[700, 850, 1000]),
         values,
     };
-    assert_eq!(baro_correction(&curve, Kpa10(700)).0, 700);
-    assert_eq!(baro_correction(&curve, Kpa10(1000)).0, 1000);
+    assert_eq!(baro_correction(&curve, Kpa10::new(700)).get(), 700);
+    assert_eq!(baro_correction(&curve, Kpa10::new(1000)).get(), 1000);
 }
 
 #[test]
@@ -713,11 +713,11 @@ fn phase2_cranking_vector_matches_hand_computation() {
         values,
     };
     assert_eq!(
-        cranking_corr_x1000(&curve, EngineMode::Cranking, TempC10(400)).0,
+        cranking_corr_x1000(&curve, EngineMode::Cranking, TempC10::new(400)).get(),
         1200
     );
     assert_eq!(
-        cranking_corr_x1000(&curve, EngineMode::Running, TempC10(400)).0,
+        cranking_corr_x1000(&curve, EngineMode::Running, TempC10::new(400)).get(),
         1000
     );
 }
@@ -725,9 +725,9 @@ fn phase2_cranking_vector_matches_hand_computation() {
 #[test]
 fn phase2_ae_decay_vector_matches_hand_computation() {
     let input = InputSnapshot {
-        rpm: Rpm(2000),
-        load_kpa10: Kpa10(1000),
-        map_kpa10: Kpa10(1000),
+        rpm: Rpm::new(2000),
+        load_kpa10: Kpa10::new(1000),
+        map_kpa10: Kpa10::new(1000),
         ..InputSnapshot::default()
     };
     let tps_threshold_curve = Curve16 {
@@ -783,24 +783,24 @@ fn phase2_ae_decay_vector_matches_hand_computation() {
         0,
     );
     // 1000 * 800 / 1000 = 800 with floor integer ratio math.
-    assert_eq!(result.ae_pulse_us.0, 800);
+    assert_eq!(result.ae_pulse_us.get(), 800);
     assert_eq!(result.next_state.decay_steps_remaining, 1);
 }
 
 #[test]
 fn phase2_dfco_hysteresis_vector_matches_hand_computation() {
     let mut cal = canonical_calibration(InjectionAngleMode::EndOfInjection);
-    cal.0.dfco_entry_rpm = Rpm(2000);
-    cal.0.dfco_exit_rpm = Rpm(1800);
+    cal.0.dfco_entry_rpm = Rpm::new(2000);
+    cal.0.dfco_exit_rpm = Rpm::new(1800);
     cal.0.dfco_entry_tps_x100 = 200;
     cal.0.dfco_exit_tps_x100 = 300;
-    cal.0.dfco_entry_map_kpa10 = Kpa10(500);
+    cal.0.dfco_entry_map_kpa10 = Kpa10::new(500);
     cal.0.dfco_delay_cycles = 1;
     let mut input = canonical_input();
     input.mode = EngineMode::Running;
-    input.rpm = Rpm(3000);
+    input.rpm = Rpm::new(3000);
     input.tps_x100 = 0;
-    input.map_kpa10 = Kpa10(350);
+    input.map_kpa10 = Kpa10::new(350);
     let state = LogicalState {
         dfco_active: true,
         ..LogicalState::default()
@@ -815,14 +815,14 @@ fn phase2_dfco_hysteresis_vector_matches_hand_computation() {
 #[test]
 fn phase2_rev_limit_soft_and_hard_vectors_match_hand_computation() {
     let mut cal = canonical_calibration(InjectionAngleMode::EndOfInjection);
-    cal.0.soft_rev_rpm = Rpm(4500);
-    cal.0.hard_rev_rpm = Rpm(6000);
-    cal.0.rev_hysteresis_rpm = Rpm(100);
+    cal.0.soft_rev_rpm = Rpm::new(4500);
+    cal.0.hard_rev_rpm = Rpm::new(6000);
+    cal.0.rev_hysteresis_rpm = Rpm::new(100);
     cal.0.soft_retard_max_deg10 = 120;
     let soft = rev_limit_step(
         &cal,
         InputSnapshot {
-            rpm: Rpm(4600),
+            rpm: Rpm::new(4600),
             ..InputSnapshot::default()
         },
         &LogicalState::default(),
@@ -833,7 +833,7 @@ fn phase2_rev_limit_soft_and_hard_vectors_match_hand_computation() {
     let hard = rev_limit_step(
         &cal,
         InputSnapshot {
-            rpm: Rpm(6100),
+            rpm: Rpm::new(6100),
             ..InputSnapshot::default()
         },
         &LogicalState::default(),
@@ -844,13 +844,13 @@ fn phase2_rev_limit_soft_and_hard_vectors_match_hand_computation() {
 #[test]
 fn phase2_idle_pi_step_vector_matches_hand_computation() {
     let mut cal = canonical_calibration(InjectionAngleMode::EndOfInjection);
-    cal.0.idle_target_rpm = Rpm(1000);
+    cal.0.idle_target_rpm = Rpm::new(1000);
     cal.0.idle_base_duty_x1000 = 300;
     cal.0.idle_kp_x1000 = 200;
     cal.0.idle_ki_x1000 = 100;
     let input = InputSnapshot {
-        rpm: Rpm(900),
-        clt_c10: TempC10(800),
+        rpm: Rpm::new(900),
+        clt_c10: TempC10::new(800),
         ..InputSnapshot::default()
     };
     // error=100, p=floor(100*200/1000)=20, i=floor(100*100/1000)=10, duty=300+20+10=330.
@@ -865,7 +865,7 @@ fn phase2_lambda_pi_step_vector_matches_hand_computation() {
     cal.0.lambda_kp_x1000 = 200;
     cal.0.lambda_ki_x1000 = 100;
     let input = InputSnapshot {
-        clt_c10: TempC10(800),
+        clt_c10: TempC10::new(800),
         ..InputSnapshot::default()
     };
     // error=100, p=20, i=10, correction=1000+20+10=1030.
@@ -903,13 +903,13 @@ fn phase2_knock_retard_vector_matches_hand_computation() {
 #[test]
 fn phase2_launch_vector_matches_hand_computation() {
     let mut cal = canonical_calibration(InjectionAngleMode::EndOfInjection);
-    cal.0.launch_rpm_limit = Rpm(5000);
+    cal.0.launch_rpm_limit = Rpm::new(5000);
     cal.0.launch_cut_cycles = 2;
     let result = launch_step(
         &cal,
         InputSnapshot {
             launch_armed: true,
-            rpm: Rpm(5500),
+            rpm: Rpm::new(5500),
             ..InputSnapshot::default()
         },
         &LogicalState {
@@ -925,13 +925,13 @@ fn phase2_launch_vector_matches_hand_computation() {
 #[test]
 fn phase2_flat_shift_vector_matches_hand_computation() {
     let mut cal = canonical_calibration(InjectionAngleMode::EndOfInjection);
-    cal.0.flat_shift_rpm_min = Rpm(5000);
+    cal.0.flat_shift_rpm_min = Rpm::new(5000);
     cal.0.flat_shift_cut_cycles = 2;
     let result = flat_shift_step(
         &cal,
         InputSnapshot {
             flat_shift_armed: true,
-            rpm: Rpm(6000),
+            rpm: Rpm::new(6000),
             ..InputSnapshot::default()
         },
         &LogicalState {

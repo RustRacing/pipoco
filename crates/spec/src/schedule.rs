@@ -12,7 +12,7 @@ pub struct FuelOutput {
 impl Default for FuelOutput {
     fn default() -> Self {
         Self {
-            pw_corr_us: PulseWidthUs(0),
+            pw_corr_us: PulseWidthUs::new(0),
         }
     }
 }
@@ -60,11 +60,11 @@ impl Default for ScheduleOutput {
 }
 
 fn lookup_table_u16(table: &Table2D16<u16>, rpm: u16, load: u16) -> u16 {
-    crate::interp::bilerp_u16(table, Rpm(rpm), Kpa10(load))
+    crate::interp::bilerp_u16(table, Rpm::new(rpm), Kpa10::new(load))
 }
 
 fn lookup_table_i16(table: &Table2D16<i16>, rpm: u16, load: u16) -> i16 {
-    crate::interp::bilerp_i16(table, Rpm(rpm), Kpa10(load))
+    crate::interp::bilerp_i16(table, Rpm::new(rpm), Kpa10::new(load))
 }
 
 fn lerp_u32(x0: u16, x1: u16, y0: u32, y1: u32, x: u16) -> u32 {
@@ -91,12 +91,12 @@ fn bilerp_u32(table: &Table2D16<u32>, rpm: Rpm, load: Kpa10) -> u32 {
     let rpm_len = table.rpm_axis.len as usize;
     let load_len = table.load_axis.len as usize;
     let rpm_clip = crate::numeric::clamp_u16(
-        rpm.0,
+        rpm.get(),
         table.rpm_axis.values[0],
         table.rpm_axis.values[rpm_len - 1],
     );
     let load_clip = crate::numeric::clamp_u16(
-        load.0,
+        load.get(),
         table.load_axis.values[0],
         table.load_axis.values[load_len - 1],
     );
@@ -152,15 +152,15 @@ pub fn compute_spark_advance_deg10(
     cal: &ValidatedCalibration,
     input: InputSnapshot,
 ) -> SignedDegrees10 {
-    SignedDegrees10(lookup_table_i16(
+    SignedDegrees10::new(lookup_table_i16(
         &cal.0.spark_advance_table_deg10,
-        input.rpm.0,
-        input.load_kpa10.0,
+        input.rpm.get(),
+        input.load_kpa10.get(),
     ))
 }
 
 pub fn compute_dwell_us(cal: &ValidatedCalibration, input: InputSnapshot) -> PulseWidthUs {
-    PulseWidthUs(bilerp_u32(
+    PulseWidthUs::new(bilerp_u32(
         &cal.0.dwell_table_us,
         input.rpm,
         input.load_kpa10,
@@ -171,11 +171,11 @@ pub fn compute_injection_target_deg10(
     cal: &ValidatedCalibration,
     input: InputSnapshot,
 ) -> Degrees10 {
-    Degrees10(lookup_table_u16(
+    Degrees10::new(lookup_table_u16(
         &cal.0.injection_target_table_deg10,
-        input.rpm.0,
-        input.load_kpa10.0,
-    ))
+        input.rpm.get(),
+        input.load_kpa10.get(),
+    ) as i16)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -189,7 +189,7 @@ fn schedule_events(
     fuel_events_enabled: bool,
     spark_events_enabled: bool,
 ) -> Result<(), EventBatchFull> {
-    let cylinder = crate::CylinderId(cyl_index);
+    let cylinder = crate::CylinderId::new(cyl_index);
     if fuel_events_enabled {
         event_batch.push(crate::SemanticEvent {
             kind: EventKind::InjectionOpen,
@@ -223,7 +223,7 @@ pub fn schedule_cylinder(
     fuel: FuelOutput,
     cyl_index: u8,
 ) -> CylinderSchedule {
-    schedule_cylinder_with_advance_trim(cal, input, fuel, cyl_index, SignedDegrees10(0))
+    schedule_cylinder_with_advance_trim(cal, input, fuel, cyl_index, SignedDegrees10::new(0))
 }
 
 pub fn schedule_cylinder_with_advance_trim(
@@ -234,31 +234,31 @@ pub fn schedule_cylinder_with_advance_trim(
     advance_trim_deg10: SignedDegrees10,
 ) -> CylinderSchedule {
     let phase = cal.0.cylinder_phase_deg10.values[cyl_index as usize];
-    let injection_target = compute_injection_target_deg10(cal, input).0;
+    let injection_target = compute_injection_target_deg10(cal, input).get();
     let spark_advance =
-        compute_spark_advance_deg10(cal, input).0 as i32 + advance_trim_deg10.0 as i32;
-    let dwell_us = compute_dwell_us(cal, input).0;
-    let injection_duration = duration_us_to_deg10(fuel.pw_corr_us, input.rpm).0;
-    let dwell_duration = duration_us_to_deg10(PulseWidthUs(dwell_us), input.rpm).0;
+        compute_spark_advance_deg10(cal, input).get() as i32 + advance_trim_deg10.get() as i32;
+    let dwell_us = compute_dwell_us(cal, input).get();
+    let injection_duration = duration_us_to_deg10(fuel.pw_corr_us, input.rpm).get();
+    let dwell_duration = duration_us_to_deg10(PulseWidthUs::new(dwell_us), input.rpm).get();
 
     let (soi, eoi) = match cal.0.injection_angle_mode {
         crate::InjectionAngleMode::EndOfInjection => {
             let eoi = norm7200(phase as i32 - injection_target as i32);
-            let soi = norm7200(eoi.0 as i32 - injection_duration as i32);
+            let soi = norm7200(eoi.get() as i32 - injection_duration as i32);
             (soi, eoi)
         }
         crate::InjectionAngleMode::StartOfInjection => {
             let soi = norm7200(phase as i32 - injection_target as i32);
-            let eoi = norm7200(soi.0 as i32 + injection_duration as i32);
+            let eoi = norm7200(soi.get() as i32 + injection_duration as i32);
             (soi, eoi)
         }
     };
     let spark = norm7200(phase as i32 - spark_advance);
-    let dwell_start = norm7200(spark.0 as i32 - dwell_duration as i32);
+    let dwell_start = norm7200(spark.get() as i32 - dwell_duration as i32);
 
     let mut events = EventBatch::default();
     let enabled = engine_enabled(input) && sync_enabled(input);
-    let fuel_events_enabled = enabled && !input.fuel_cut && fuel.pw_corr_us.0 > 0;
+    let fuel_events_enabled = enabled && !input.fuel_cut && fuel.pw_corr_us.get() > 0;
     let spark_events_enabled = enabled && !input.spark_cut && spark_selected_for_mode(input.mode);
     let _ = schedule_events(
         &mut events,
@@ -297,7 +297,7 @@ pub fn schedule_all_cylinders(
     input: InputSnapshot,
     fuel: FuelOutput,
 ) -> ScheduleOutput {
-    schedule_all_cylinders_with_advance_trim(cal, input, fuel, SignedDegrees10(0))
+    schedule_all_cylinders_with_advance_trim(cal, input, fuel, SignedDegrees10::new(0))
 }
 
 pub fn schedule_all_cylinders_with_advance_trim(
@@ -323,9 +323,9 @@ fn schedule_all_cylinders_with_seeded_events(
     advance_trim_deg10: SignedDegrees10,
 ) -> ScheduleOutput {
     let injection_target_deg10 = compute_injection_target_deg10(cal, input);
-    let base_spark_advance_deg10 = compute_spark_advance_deg10(cal, input).0 as i32;
-    let spark_advance_deg10 = SignedDegrees10(crate::numeric::clamp_i32(
-        base_spark_advance_deg10 + advance_trim_deg10.0 as i32,
+    let base_spark_advance_deg10 = compute_spark_advance_deg10(cal, input).get() as i32;
+    let spark_advance_deg10 = SignedDegrees10::new(crate::numeric::clamp_i32(
+        base_spark_advance_deg10 + advance_trim_deg10.get() as i32,
         i16::MIN as i32,
         i16::MAX as i32,
     ) as i16);
@@ -345,18 +345,18 @@ fn schedule_all_cylinders_with_seeded_events(
     out.events = seeded_events;
 
     let enabled = engine_enabled(input) && sync_enabled(input);
-    let fuel_events_enabled = enabled && !input.fuel_cut && fuel.pw_corr_us.0 > 0;
+    let fuel_events_enabled = enabled && !input.fuel_cut && fuel.pw_corr_us.get() > 0;
     let spark_events_enabled = enabled && !input.spark_cut;
     let mut cyl = 0usize;
     while cyl < cylinder_count(cal) {
         let schedule =
             schedule_cylinder_with_advance_trim(cal, input, fuel, cyl as u8, advance_trim_deg10);
-        out.soi_deg10.values[cyl] = schedule.soi_deg10.0;
-        out.eoi_deg10.values[cyl] = schedule.eoi_deg10.0;
-        out.spark_deg10.values[cyl] = schedule.spark_deg10.0;
-        out.dwell_start_deg10.values[cyl] = schedule.dwell_start_deg10.0;
+        out.soi_deg10.values[cyl] = schedule.soi_deg10.get() as u16;
+        out.eoi_deg10.values[cyl] = schedule.eoi_deg10.get() as u16;
+        out.spark_deg10.values[cyl] = schedule.spark_deg10.get() as u16;
+        out.dwell_start_deg10.values[cyl] = schedule.dwell_start_deg10.get() as u16;
 
-        let cylinder = crate::CylinderId(cyl as u8);
+        let cylinder = crate::CylinderId::new(cyl as u8);
         if fuel_events_enabled {
             if out
                 .events
@@ -506,8 +506,8 @@ mod tests {
 
     fn input() -> InputSnapshot {
         InputSnapshot {
-            rpm: crate::Rpm(1000),
-            load_kpa10: crate::Kpa10(100),
+            rpm: Rpm::new(1000),
+            load_kpa10: Kpa10::new(100),
             tps_x100: 0,
             sync: SyncState::Synced,
             mode: crate::EngineMode::Running,
@@ -520,14 +520,14 @@ mod tests {
         let cal = calibration();
         let input = input();
         let fuel = FuelOutput {
-            pw_corr_us: PulseWidthUs(3200),
+            pw_corr_us: PulseWidthUs::new(3200),
         };
         let schedule = schedule_all_cylinders(&cal, input, fuel);
-        assert_eq!(schedule.injection_target_deg10, Degrees10(360));
-        assert_eq!(schedule.spark_advance_deg10, SignedDegrees10(150));
-        assert_eq!(schedule.dwell_us, PulseWidthUs(2500));
-        assert_eq!(schedule.injection_duration_deg10, Degrees10(192));
-        assert_eq!(schedule.dwell_duration_deg10, Degrees10(150));
+        assert_eq!(schedule.injection_target_deg10, Degrees10::new(360));
+        assert_eq!(schedule.spark_advance_deg10, SignedDegrees10::new(150));
+        assert_eq!(schedule.dwell_us, PulseWidthUs::new(2500));
+        assert_eq!(schedule.injection_duration_deg10, Degrees10::new(192));
+        assert_eq!(schedule.dwell_duration_deg10, Degrees10::new(150));
         assert_eq!(schedule.events.len, 16);
         assert_eq!(schedule.soi_deg10.values[0], 6648);
         assert_eq!(schedule.eoi_deg10.values[0], 6840);
@@ -548,7 +548,7 @@ mod tests {
             &cal,
             cut_input,
             FuelOutput {
-                pw_corr_us: PulseWidthUs(0),
+                pw_corr_us: PulseWidthUs::new(0),
             },
         );
         assert_eq!(schedule.diagnostic, DiagnosticCode::FuelCutActive);
@@ -561,7 +561,7 @@ mod tests {
             &cal,
             spark_input,
             FuelOutput {
-                pw_corr_us: PulseWidthUs(3200),
+                pw_corr_us: PulseWidthUs::new(3200),
             },
         );
         assert_eq!(schedule.diagnostic, DiagnosticCode::SparkCutActive);
@@ -578,7 +578,7 @@ mod tests {
             &cal,
             input,
             FuelOutput {
-                pw_corr_us: PulseWidthUs(3200),
+                pw_corr_us: PulseWidthUs::new(3200),
             },
         );
         assert_eq!(schedule.diagnostic, DiagnosticCode::Unsynced);
@@ -598,7 +598,7 @@ mod tests {
             &cal,
             input,
             FuelOutput {
-                pw_corr_us: PulseWidthUs(3200),
+                pw_corr_us: PulseWidthUs::new(3200),
             },
         );
         assert_eq!(schedule.diagnostic, DiagnosticCode::None);
@@ -610,7 +610,7 @@ mod tests {
             &cal,
             input,
             FuelOutput {
-                pw_corr_us: PulseWidthUs(3200),
+                pw_corr_us: PulseWidthUs::new(3200),
             },
         );
         assert_eq!(schedule.diagnostic, DiagnosticCode::None);
@@ -634,11 +634,11 @@ mod tests {
         };
 
         let mut input = input();
-        input.rpm = Rpm(150);
-        input.load_kpa10 = Kpa10(15);
+        input.rpm = Rpm::new(150);
+        input.load_kpa10 = Kpa10::new(15);
 
         let dwell = compute_dwell_us(&cal, input);
-        assert_eq!(dwell, PulseWidthUs(1625));
+        assert_eq!(dwell, PulseWidthUs::new(1625));
     }
 
     #[test]
@@ -646,13 +646,18 @@ mod tests {
         let cal = calibration();
         let input = input();
         let fuel = FuelOutput {
-            pw_corr_us: PulseWidthUs(3200),
+            pw_corr_us: PulseWidthUs::new(3200),
         };
         let mut tiny = tiny_event_batch();
         tiny.len = crate::types::MAX_EVENTS_PER_STEP as u8;
 
-        let schedule =
-            schedule_all_cylinders_with_seeded_events(&cal, input, fuel, tiny, SignedDegrees10(0));
+        let schedule = schedule_all_cylinders_with_seeded_events(
+            &cal,
+            input,
+            fuel,
+            tiny,
+            SignedDegrees10::new(0),
+        );
         assert_eq!(schedule.diagnostic, DiagnosticCode::CalibrationInvalid);
         assert_eq!(schedule.events.len, crate::types::MAX_EVENTS_PER_STEP as u8);
     }

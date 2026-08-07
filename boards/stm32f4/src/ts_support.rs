@@ -134,7 +134,7 @@ impl BoardTsState {
             &mut self.config,
             PageRuntime {
                 snapshot: &self.snapshot,
-                tooth_count: &self.tooth_count,
+                tooth_count: self.tooth_count,
                 sync_loss_counter: self.sync_loss_counter,
                 current_fault_code: self.snapshot.last_fault_code,
                 current_fault_severity: self.snapshot.fault_severity,

@@ -363,7 +363,6 @@ fn write_u32_le(bytes: &mut [u8], value: u32) {
     bytes[3] = ((value >> 24) & 0x0000_00ff) as u8;
 }
 
-#[cfg(not(kani))]
 fn crc32c(bytes: &[u8]) -> u32 {
     let mut crc = 0xffff_ffffu32;
     let mut idx = 0usize;
@@ -395,13 +394,6 @@ fn crc32c(bytes: &[u8]) -> u32 {
     !crc
 }
 
-#[cfg(kani)]
-fn crc32c(bytes: &[u8]) -> u32 {
-    let _ = bytes;
-    0x1edc_6f41u32
-}
-
-#[cfg(not(kani))]
 fn crc32c_step(mut crc: u32, byte: u8) -> u32 {
     crc ^= byte as u32;
     crc = if (crc & 1) == 1 {

@@ -15,3 +15,6 @@ ecu-sim-core = { path = "../core" }
 
 [patch.crates-io]
 simavr-ffi = { path = "../../.local/avr-tester/simavr-ffi" }
+
+[lints]
+workspace = true

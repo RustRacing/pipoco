@@ -43,8 +43,8 @@ pub fn air_load_select(config: &AirLoadConfig, input: AirLoadInput) -> AirLoad {
     match config.source {
         AirLoadSource::MapSpeedDensity => AirLoad {
             source: AirLoadSource::MapSpeedDensity,
-            value_x100: input.map_kpa10.0,
-            valid: input.map_kpa10.0 > 0,
+            value_x100: input.map_kpa10.get(),
+            valid: input.map_kpa10.get() > 0,
         },
         AirLoadSource::MafFlow => AirLoad {
             source: AirLoadSource::MafFlow,
@@ -65,7 +65,7 @@ mod tests {
 
     fn input() -> AirLoadInput {
         AirLoadInput {
-            map_kpa10: Kpa10(950),
+            map_kpa10: Kpa10::new(950),
             maf_x100: 3200,
             tps_x100: 2500,
         }

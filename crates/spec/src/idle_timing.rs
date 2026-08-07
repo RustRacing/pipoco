@@ -21,7 +21,7 @@ pub fn idle_timing_step(
     input: InputSnapshot,
     state: &LogicalState,
 ) -> IdleTimingResult {
-    idle_timing_step_with_base(cal, input, state, SignedDegrees10(0))
+    idle_timing_step_with_base(cal, input, state, SignedDegrees10::new(0))
 }
 
 pub fn idle_timing_step_with_base(
@@ -31,21 +31,21 @@ pub fn idle_timing_step_with_base(
     base_advance_deg10: SignedDegrees10,
 ) -> IdleTimingResult {
     let active = idle_timing_active(cal, input);
-    let selected_base = select_idle_or_running_advance_deg10(cal, input, base_advance_deg10).0;
-    let replacement_trim = selected_base as i32 - base_advance_deg10.0 as i32;
-    let clt_c10 = if input.clt_c10.0 < 0 {
+    let selected_base = select_idle_or_running_advance_deg10(cal, input, base_advance_deg10).get();
+    let replacement_trim = selected_base as i32 - base_advance_deg10.get() as i32;
+    let clt_c10 = if input.clt_c10.get() < 0 {
         0
     } else {
-        input.clt_c10.0 as u16
+        input.clt_c10.get() as u16
     };
-    let iat_c10 = if input.iat_c10.0 < 0 {
+    let iat_c10 = if input.iat_c10.get() < 0 {
         0
     } else {
-        input.iat_c10.0 as u16
+        input.iat_c10.get() as u16
     };
     let clt_timing = lookup_signed_curve(&cal.0.clt_timing_corr_curve_deg10, clt_c10) as i32;
     let iat_timing = lookup_signed_curve(&cal.0.iat_timing_corr_curve_deg10, iat_c10) as i32;
-    let rpm_error = cal.0.idle_target_rpm.0 as i32 - input.rpm.0 as i32;
+    let rpm_error = cal.0.idle_target_rpm.get() as i32 - input.rpm.get() as i32;
     let p_term = if active && cal.0.idle_timing_pid_enabled {
         apply_gain(rpm_error, cal.0.idle_timing_kp_x1000)
     } else {
@@ -103,21 +103,21 @@ pub fn select_idle_or_running_advance_deg10(
         return running_advance_deg10;
     }
 
-    let idle_advance = lookup_idle_advance_deg10(cal, input.rpm).0;
+    let idle_advance = lookup_idle_advance_deg10(cal, input.rpm).get();
     let threshold = cal.0.idle_timing_tps_max_x100;
     let full_idle_threshold = threshold / 2;
     if input.tps_x100 <= full_idle_threshold {
-        return SignedDegrees10(idle_advance);
+        return SignedDegrees10::new(idle_advance);
     }
     if input.tps_x100 >= threshold {
         return running_advance_deg10;
     }
 
-    SignedDegrees10(lerp_i16_by_u16(
+    SignedDegrees10::new(lerp_i16_by_u16(
         full_idle_threshold,
         threshold,
         idle_advance,
-        running_advance_deg10.0,
+        running_advance_deg10.get(),
         input.tps_x100,
     ))
 }
@@ -128,13 +128,16 @@ pub fn idle_timing_active(cal: &ValidatedCalibration, input: InputSnapshot) -> b
         && input.sync == SyncState::Synced
         && !input.fuel_cut
         && !input.spark_cut
-        && input.rpm.0 > 0
-        && input.rpm.0 <= cal.0.idle_timing_rpm_max.0
+        && input.rpm.get() > 0
+        && input.rpm.get() <= cal.0.idle_timing_rpm_max.get()
         && input.tps_x100 <= cal.0.idle_timing_tps_max_x100
 }
 
 pub fn lookup_idle_advance_deg10(cal: &ValidatedCalibration, rpm: Rpm) -> SignedDegrees10 {
-    SignedDegrees10(lookup_signed_curve(&cal.0.idle_advance_curve_deg10, rpm.0))
+    SignedDegrees10::new(lookup_signed_curve(
+        &cal.0.idle_advance_curve_deg10,
+        rpm.get(),
+    ))
 }
 
 fn lookup_signed_curve(curve: &crate::SignedCurve16, x: u16) -> i16 {
@@ -194,8 +197,8 @@ mod tests {
         let input = InputSnapshot {
             mode: EngineMode::Running,
             sync: SyncState::Synced,
-            rpm: Rpm(900),
-            clt_c10: TempC10(800),
+            rpm: Rpm::new(900),
+            clt_c10: TempC10::new(800),
             ..InputSnapshot::default()
         };
         let result = idle_timing_step(&cal, input, &LogicalState::default());
@@ -207,7 +210,7 @@ mod tests {
     fn enabled_idle_timing_uses_advance_curve() {
         let mut cal = default_reference_calibration();
         cal.0.idle_timing_enabled = true;
-        cal.0.idle_timing_rpm_max = Rpm(1200);
+        cal.0.idle_timing_rpm_max = Rpm::new(1200);
         cal.0.idle_timing_tps_max_x100 = 200;
         cal.0.idle_advance_curve_deg10 = idle_curve(100, 200);
         cal.0.idle_timing_min_trim_deg10 = -100;
@@ -215,12 +218,16 @@ mod tests {
         let input = InputSnapshot {
             mode: EngineMode::Running,
             sync: SyncState::Synced,
-            rpm: Rpm(750),
+            rpm: Rpm::new(750),
             tps_x100: 0,
             ..InputSnapshot::default()
         };
-        let result =
-            idle_timing_step_with_base(&cal, input, &LogicalState::default(), SignedDegrees10(100));
+        let result = idle_timing_step_with_base(
+            &cal,
+            input,
+            &LogicalState::default(),
+            SignedDegrees10::new(100),
+        );
         assert_eq!(result.trim_deg10, 50);
         assert!(result.active);
     }

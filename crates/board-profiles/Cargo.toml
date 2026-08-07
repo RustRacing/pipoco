@@ -12,3 +12,6 @@ path = "src/lib.rs"
 ecu-board-api = { path = "../board-api" }
 ecu-domain = { path = "../domain" }
 ecu-trigger = { path = "../trigger" }
+
+[lints]
+workspace = true

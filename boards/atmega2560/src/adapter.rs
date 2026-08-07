@@ -7,6 +7,7 @@ use ecu_board_profiles::{
     TunerStudioProfileSelection,
 };
 use ecu_domain::{Degrees10, EngineTimeAuthority};
+use ecu_io::{OutputAssemblyCounters, SignalAssemblyCounters};
 use ecu_runtime::{
     ActionExecutor, ActionOutputBatchAdapter, AuthorityStepInputs, ControlInputs, EngineRuntime,
     EnrichmentInputs, IgnitionInputs, LambdaTrimInputs, TorqueInputs,
@@ -27,6 +28,7 @@ use crate::step_io::{
     Atmega2560MappedOutputBatch, Atmega2560MappedOutputTransition, Atmega2560MappedStepOutput,
     Atmega2560StepInput, Atmega2560StepOutput,
 };
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Atmega2560PreparedFirmware {
     plan: FirmwareBuildPlan,
@@ -151,7 +153,7 @@ impl Atmega2560BoardAdapter {
         Self { runtime, profile }
     }
 
-    pub(crate) fn m50b25tu_speeduino_m5x_rev23() -> Self {
+    pub fn m50b25tu_speeduino_m5x_rev23() -> Self {
         Self::new(m50b25tu_speeduino_m5x_rev23_board_profile())
     }
 
@@ -165,6 +167,14 @@ impl Atmega2560BoardAdapter {
 
     pub fn runtime_mut(&mut self) -> &mut EngineRuntime {
         &mut self.runtime
+    }
+
+    pub fn signal_assembly_counters(&self) -> SignalAssemblyCounters {
+        self.runtime.signal_assembly_counters()
+    }
+
+    pub fn output_assembly_counters(&self) -> OutputAssemblyCounters {
+        self.runtime.output_assembly_counters()
     }
 
     pub fn step(
@@ -188,7 +198,6 @@ impl Atmega2560BoardAdapter {
         let status = executor.status();
         output.cancel_scheduled_outputs = status.cancel_scheduled_outputs();
         output.persist_calibration = status.persist_calibration;
-
         Ok(output)
     }
 }

@@ -1,27 +1,14 @@
 use super::*;
 use crate::AuthorityStepInputs;
-use ecu_board_api::frontier::{
-    TimingIslandHorizonSequenceId, TimingIslandPermitMask, TimingIslandStopReason,
-    HEARTBEAT_EXPIRY_US, HORIZON_SEQUENCE_BITS, MAX_HORIZON_US,
-};
-
-#[allow(dead_code)]
-pub(crate) type FrontierHorizonSequenceId = TimingIslandHorizonSequenceId;
-#[allow(dead_code)]
-pub(crate) const FRONTIER_HORIZON_SEQUENCE_BITS: u8 = HORIZON_SEQUENCE_BITS;
-#[allow(dead_code)]
-pub(crate) const FRONTIER_HEARTBEAT_EXPIRY_US: Micros = HEARTBEAT_EXPIRY_US;
-#[allow(dead_code)]
-pub(crate) const FRONTIER_MAX_HORIZON_US: Micros = MAX_HORIZON_US;
-#[allow(dead_code)]
-pub(crate) const FRONTIER_DEFAULT_PERMIT_MASK: TimingIslandPermitMask =
-    TimingIslandPermitMask::NONE;
-#[allow(dead_code)]
-pub(crate) const FRONTIER_DEFAULT_STOP_REASON: TimingIslandStopReason =
-    TimingIslandStopReason::None;
 
 impl EngineRuntime {
-    fn validate_step_scalars(&self, rpm: u32, load_kpa10: u32, angle_x10: i32) -> ValidatedInputs {
+    fn validate_step_scalars(
+        &mut self,
+        timestamp: Micros,
+        rpm: u32,
+        load_kpa10: u32,
+        angle_x10: i32,
+    ) -> ValidatedInputs {
         const MAX_RPM: u32 = 9000;
         const MAX_LOAD: u32 = 2000;
         const MAX_ANGLE_X10: i32 = 7200;
@@ -30,14 +17,16 @@ impl EngineRuntime {
         let clamped_load = load_kpa10.min(MAX_LOAD) as u16;
         let clamped_angle = angle_x10.clamp(-MAX_ANGLE_X10, MAX_ANGLE_X10) as i16;
 
-        ValidatedInputs {
+        let validated = ValidatedInputs {
             rpm: Rpm::new(clamped_rpm),
             load_kpa10: Kpa10::new(clamped_load),
             angle_x10: Degrees10::new(clamped_angle),
             clamped: clamped_rpm as u32 != rpm
                 || clamped_load as u32 != load_kpa10
                 || clamped_angle as i32 != angle_x10,
-        }
+        };
+        self.record_signal_stage(SignalStage::ObservationValidator, timestamp);
+        validated
     }
 
     fn derive_operating_mode(&self) -> ControlMode {
@@ -64,7 +53,12 @@ impl EngineRuntime {
     /// the runtime receives structured engine-time authority instead of deriving
     /// it from boolean sync/cam flags.
     pub fn step(&mut self, inputs: StepInputs, control_inputs: ControlInputs) -> StepResult {
-        let validated = self.validate_step_scalars(inputs.rpm, inputs.load_kpa10, inputs.angle_x10);
+        let validated = self.validate_step_scalars(
+            inputs.now_us,
+            inputs.rpm,
+            inputs.load_kpa10,
+            inputs.angle_x10,
+        );
         let authority = derive_engine_time_authority(
             self.engine.engine_time_authority,
             inputs.trigger_synced,
@@ -90,7 +84,12 @@ impl EngineRuntime {
         inputs: AuthorityStepInputs,
         control_inputs: ControlInputs,
     ) -> StepResult {
-        let validated = self.validate_step_scalars(inputs.rpm, inputs.load_kpa10, inputs.angle_x10);
+        let validated = self.validate_step_scalars(
+            inputs.now_us,
+            inputs.rpm,
+            inputs.load_kpa10,
+            inputs.angle_x10,
+        );
         self.step_with_validated(
             inputs.now_us,
             validated,
@@ -171,6 +170,7 @@ impl EngineRuntime {
             flat_shift_armed,
             safety_latch_request,
         );
+        self.record_signal_stage(SignalStage::PolicyConsumer, now_us);
         let actions = self.emit_actions(now_us, &control);
         self.apply_control_cut_state(&control);
         let torque_observations = TorqueObservations::from_step(
@@ -182,6 +182,7 @@ impl EngineRuntime {
             self.spark_cut,
         );
         self.refresh_snapshot();
+        self.record_signal_stage(SignalStage::RuntimeSnapshotBuilder, now_us);
 
         StepResult {
             validated,
@@ -190,5 +191,54 @@ impl EngineRuntime {
             actions,
             torque_observations,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ecu_control::IgnitionInputs;
+
+    #[test]
+    fn step_records_only_runtime_owned_signal_stages() {
+        let mut runtime = EngineRuntime::new();
+        let ignition = IgnitionInputs::new(Degrees10::new(0), 0, 0, 0, false, Rpm::new(0));
+        let inputs = StepInputs {
+            now_us: Micros::new(42),
+            rpm: 1_234,
+            load_kpa10: 321,
+            angle_x10: 87,
+            trigger_synced: true,
+            cam_seen: true,
+            launch_armed: false,
+            flat_shift_armed: false,
+            safety_latch_request: false,
+        };
+
+        let _ = runtime.step(inputs, ControlInputs::spark_only(Micros::new(42), ignition));
+
+        let counters = runtime.signal_assembly_counters;
+        assert_eq!(counters.observation_validator.seen, 1);
+        assert_eq!(counters.observation_validator.accepted, 1);
+        assert_eq!(
+            counters.observation_validator.last_timestamp,
+            Micros::new(42)
+        );
+
+        assert_eq!(counters.policy_consumer.seen, 1);
+        assert_eq!(counters.policy_consumer.accepted, 1);
+        assert_eq!(counters.policy_consumer.last_timestamp, Micros::new(42));
+
+        assert_eq!(counters.runtime_snapshot_builder.seen, 1);
+        assert_eq!(counters.runtime_snapshot_builder.accepted, 1);
+        assert_eq!(
+            counters.runtime_snapshot_builder.last_timestamp,
+            Micros::new(42)
+        );
+
+        assert_eq!(counters.signal_capture.seen, 0);
+        assert_eq!(counters.signal_normalizer.seen, 0);
+        assert_eq!(counters.observation_publisher.seen, 0);
+        assert_eq!(counters.observation_reader.seen, 0);
     }
 }

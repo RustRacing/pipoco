@@ -1,11 +1,8 @@
 use std::collections::BTreeSet;
 
-#[path = "../../compat/tests/formal/fm0016_fixture_matrix.rs"]
-mod fm0016_fixture_matrix;
-
 use ecu_domain::{ChannelId, Degrees10, DwellUs, Micros, PulseWidthUs};
 use ecu_scheduler::{ExclusiveChannel, IgnitionPlan, InjectionPlan, OutputGroup, SchedulerState};
-use fm0016_fixture_matrix::{
+use ecu_test_fixtures::fixture_matrix::{
     assert_fixture_semantics, fixture_cases, oracle_result, required_fixture_names,
     EPS_ANGLE_DEG10, EPS_PW_US, EPS_VE_X100,
 };

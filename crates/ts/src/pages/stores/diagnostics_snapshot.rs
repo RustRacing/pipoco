@@ -1,42 +1,9 @@
 use super::*;
 
 impl SnapshotPageStore {
-    #[allow(clippy::too_many_arguments)]
-    pub fn read_page_from(
-        page: u8,
-        rpm: u16,
-        sync_code: u8,
-        cancel_reason: u8,
-        base_pw_us: u32,
-        enrich_mult_x100: u16,
-        stft_x10: i16,
-        fuel_mult_x100: u16,
-        final_pw_us: u32,
-        fault_code: u8,
-        fault_severity: u8,
-        isr_count: u32,
-        isr_max_us: u32,
-        isr_avg_us: u32,
-        out: &mut [u8],
-    ) -> Option<usize> {
+    pub fn read_page_from(page: u8, snapshot: &SnapshotPage, out: &mut [u8]) -> Option<usize> {
         match page {
-            PAGE_SNAPSHOT => SnapshotPage::new(
-                rpm,
-                sync_code,
-                cancel_reason,
-                base_pw_us,
-                enrich_mult_x100,
-                stft_x10,
-                fuel_mult_x100,
-                final_pw_us,
-                fault_code,
-                fault_severity,
-                isr_count,
-                isr_max_us,
-                isr_avg_us,
-            )
-            .encode(out)
-            .ok(),
+            PAGE_SNAPSHOT => snapshot.encode(out).ok(),
             _ => None,
         }
     }
@@ -50,28 +17,28 @@ impl DiagnosticPageStore {
         out: &mut [u8],
     ) -> Option<usize> {
         match page {
-            PAGE_DIAG => DiagPage::new(
-                snapshot.current_tooth_count,
-                snapshot.cam_seen,
-                snapshot.sync_state,
-                snapshot.phase_state,
-                snapshot.absolute_authority,
-                snapshot.trigger_angle_source,
-                snapshot.output_gating_reason,
-                snapshot.last_sync_loss_reason,
-                snapshot.primary_rpm,
-                snapshot.detected_gap_ratio,
-                snapshot.sync_loss_counter,
-                snapshot.board_pin_map_identity,
-                snapshot.profile_identity,
-                snapshot.profile_hash,
-                snapshot.current_fault_code,
-                snapshot.current_fault_severity,
-                snapshot.current_fault_action,
-                snapshot.current_cancel_reason,
-                snapshot.fault_flags,
-                snapshot.latest_diag_code,
-            )
+            PAGE_DIAG => DiagPage {
+                current_tooth_count: snapshot.current_tooth_count,
+                cam_seen: snapshot.cam_seen,
+                sync_state: snapshot.sync_state,
+                phase_state: snapshot.phase_state,
+                absolute_authority: snapshot.absolute_authority,
+                trigger_angle_source: snapshot.trigger_angle_source,
+                output_gating_reason: snapshot.output_gating_reason,
+                last_sync_loss_reason: snapshot.last_sync_loss_reason,
+                primary_rpm: snapshot.primary_rpm,
+                detected_gap_ratio: snapshot.detected_gap_ratio,
+                sync_loss_counter: snapshot.sync_loss_counter,
+                board_pin_map_identity: snapshot.board_pin_map_identity,
+                profile_identity: snapshot.profile_identity,
+                profile_hash: snapshot.profile_hash,
+                current_fault_code: snapshot.current_fault_code,
+                current_fault_severity: snapshot.current_fault_severity,
+                current_fault_action: snapshot.current_fault_action,
+                current_cancel_reason: snapshot.current_cancel_reason,
+                fault_flags: snapshot.fault_flags,
+                latest_diag_code: snapshot.latest_diag_code,
+            }
             .encode(out)
             .ok(),
             PAGE_DIAG_LOG => Self::diag_log_page(log_entries).encode(out).ok(),
@@ -157,19 +124,21 @@ impl PageStore for SnapshotPageStore {
     fn read_page(&self, page: u8, out: &mut [u8]) -> Option<usize> {
         Self::read_page_from(
             page,
-            self.rpm,
-            self.sync_code,
-            self.cancel_reason,
-            self.base_pw_us,
-            self.enrich_mult_x100,
-            self.stft_x10,
-            self.fuel_mult_x100,
-            self.final_pw_us,
-            self.fault_code,
-            self.fault_severity,
-            self.isr_count,
-            self.isr_max_us,
-            self.isr_avg_us,
+            &SnapshotPage {
+                rpm: self.rpm,
+                sync_code: self.sync_code,
+                cancel_reason: self.cancel_reason,
+                base_pw_us: self.base_pw_us,
+                enrich_mult_x100: self.enrich_mult_x100,
+                stft_x10: self.stft_x10,
+                fuel_mult_x100: self.fuel_mult_x100,
+                final_pw_us: self.final_pw_us,
+                fault_code: self.fault_code,
+                fault_severity: self.fault_severity,
+                isr_count: self.isr_count,
+                isr_max_us: self.isr_max_us,
+                isr_avg_us: self.isr_avg_us,
+            },
             out,
         )
     }

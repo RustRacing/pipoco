@@ -5,7 +5,7 @@ use crate::{diag, torque};
 impl EcuState {
     pub fn update_ltft(&mut self, clt_c: i16, now_us: u32) -> i16 {
         let trigger_inputs = self.trigger_inputs();
-        let map_kpa_x10 = self.map_kpa_x10;
+        let map_kpa_x10 = self.map_kpa_x10();
         let stft_x10 = self.stft_x10();
         let lambda_active = self.lambda_state.active;
         self.ltft_manager_mut().update(
@@ -26,7 +26,7 @@ impl EcuState {
         self.ltft_manager().get_total_trim(
             self.stft_x10(),
             self.trigger_inputs().rpm,
-            self.map_kpa_x10,
+            self.map_kpa_x10(),
         )
     }
 
@@ -125,7 +125,7 @@ impl EcuState {
     /// Arbitrated torque target (Nm x10)
     pub fn update_torque(&mut self, iat_c: i16) -> i16 {
         self.torque_controller
-            .update(self.trigger_inputs().rpm, self.map_kpa_x10, iat_c)
+            .update(self.trigger_inputs().rpm, self.map_kpa_x10(), iat_c)
     }
 
     /// Submit a driver torque request based on pedal position

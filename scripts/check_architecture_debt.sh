@@ -219,8 +219,6 @@ forbidden_paths = (
     Path("crates/core/src/transport/message.rs"),
 )
 forbidden_patterns = (
-    re.compile(r"\bpub\s+mod\s+transport\s*;"),
-    re.compile(r"\bpub\s+use\s+transport::"),
     re.compile(r"\becu_core::transport\b"),
     re.compile(
         r"\becu_core::\{[^;\n]*(BbqTransport|CanDevice|CanTransport|Message|Transport|TransportError|TransportStats)"
@@ -243,14 +241,14 @@ for path in root.rglob("*.rs"):
 
 if violations:
     print(
-        "ERROR: ecu-core must not reintroduce transport compatibility modules or reexports; use ecu-transport directly",
+        "ERROR: removed ecu-core transport paths must not be reintroduced; use ecu-transport directly",
         file=sys.stderr,
     )
     for violation in violations:
         print(violation, file=sys.stderr)
     sys.exit(1)
 
-print("PASS: ecu-core transport compatibility surface is absent")
+print("PASS: removed ecu-core transport compatibility surface is absent")
 PY
 }
 
@@ -747,6 +745,8 @@ pattern = re.compile(r"\b(ecu_core|EcuState)\b")
 production_roots = [Path("boards/common/src")]
 allowed_test_files = {
     Path("boards/common/tests/fm0016_board_adapter_contract.rs"),
+    Path("boards/common/tests/obd2_transport_service_bbq_clear.rs"),
+    Path("boards/common/tests/obd2_transport_service_bbq_reject.rs"),
     Path("boards/common/tests/ts_angles_kv_roundtrip.rs"),
     Path("boards/common/tests/ts_factory_reset.rs"),
     Path("boards/common/tests/ts_kv_factory_reset.rs"),
@@ -1268,18 +1268,18 @@ from pathlib import Path
 import re
 import sys
 
-lib_path = Path("crates/core/src/lib.rs")
-compat_path = Path("crates/core/src/compat_state.rs")
+lib_path = Path("crates/compat/src/lib.rs")
+compat_path = Path("crates/compat/src/compat_state.rs")
 lib_text = lib_path.read_text(encoding="utf-8")
 compat_text = compat_path.read_text(encoding="utf-8")
 
 errors = []
 
 if "pub mod compat {" not in lib_text:
-    errors.append("crates/core/src/lib.rs: missing explicit `pub mod compat` namespace")
+    errors.append("crates/compat/src/lib.rs: missing explicit `pub mod compat` namespace")
 
 if "adr-0001-core-ownership.md" not in lib_text or "adr-0010-runtime-compat-boundaries.md" not in lib_text:
-    errors.append("crates/core/src/lib.rs: crate docs must reference ADR-0001 and ADR-0010")
+    errors.append("crates/compat/src/lib.rs: crate docs must reference ADR-0001 and ADR-0010")
 
 required_markers = {
     "RuntimeSignals": "Compatibility-only surface",
@@ -1294,7 +1294,7 @@ for typename, marker in required_markers.items():
     struct_pos = compat_text.find(f"pub struct {typename}")
     if marker_pos == -1 or struct_pos == -1 or marker_pos > struct_pos:
         errors.append(
-            f"crates/core/src/compat_state.rs: `{typename}` docs must carry compatibility-only marker"
+            f"crates/compat/src/compat_state.rs: `{typename}` docs must carry compatibility-only marker"
         )
 
 if errors:

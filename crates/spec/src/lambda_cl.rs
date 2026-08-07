@@ -37,7 +37,7 @@ pub fn lambda_step_with_error(
     let acc = state.lambda_integrator_state.acc;
     let corr_pre = 1000 + p_term + acc;
 
-    let freeze_gate = input.clt_c10.0 < 700 || ae_active || input.fuel_cut || input.spark_cut;
+    let freeze_gate = input.clt_c10.get() < 700 || ae_active || input.fuel_cut || input.spark_cut;
     let anti_windup_freeze = saturation_freeze(corr_pre, i_step);
     let freeze = freeze_gate || anti_windup_freeze;
     let acc_next = if freeze {
@@ -103,7 +103,7 @@ mod tests {
         cal.0.lambda_kp_x1000 = 500;
         cal.0.lambda_ki_x1000 = 500;
         let input = InputSnapshot {
-            clt_c10: TempC10(800),
+            clt_c10: TempC10::new(800),
             ..InputSnapshot::default()
         };
         let state = LogicalState::default();
@@ -118,7 +118,7 @@ mod tests {
         cal.0.lambda_kp_x1000 = 0;
         cal.0.lambda_ki_x1000 = 1000;
         let input = InputSnapshot {
-            clt_c10: TempC10(800),
+            clt_c10: TempC10::new(800),
             ..InputSnapshot::default()
         };
         let state = LogicalState {
@@ -140,7 +140,7 @@ mod tests {
         cal.0.lambda_kp_x1000 = 0;
         cal.0.lambda_ki_x1000 = 1000;
         let input = InputSnapshot {
-            clt_c10: TempC10(800),
+            clt_c10: TempC10::new(800),
             ..InputSnapshot::default()
         };
         let state = LogicalState {

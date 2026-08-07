@@ -1,27 +1,29 @@
 //! Core-free persisted TunerStudio page load/burn helpers.
 
-use crate::pages::PageCodecError;
+use crate::pages::PageError;
 use crate::pages::{
     decode_trusted_expert_trigger_page, encode_expert_trigger_page,
     expert_trigger_calibration_from_page, expert_trigger_page_from_calibration, ts_page_descriptor,
     ANGLES_PAGE_BYTES, EXPERT_TRIGGER_PAGE_BYTES, PAGE_ANGLES, PAGE_EXPERT_TRIGGER, PAGE_FUEL,
     PAGE_IGN, TABLE_PAGE_BYTES,
 };
-use crate::server::{
-    CompatibilityInfoReport, CompatibilityMigrationCode, CompatibilityStatusCode, PageError,
-    PageStore, PersistError as ServerPersistError,
-};
+use crate::server::PageStore;
+#[cfg(feature = "runtime")]
+use crate::server::{CompatibilityInfoReport, CompatibilityMigrationCode, CompatibilityStatusCode};
 #[cfg(feature = "runtime")]
 use crate::{CalibrationEditSurface, CalibrationPackageApplyResult};
 use ecu_calibration::kv::{
     PERSIST_KEY_ANGLES, PERSIST_KEY_CAL_PACKAGE, PERSIST_KEY_EXPERT_TRIGGER, PERSIST_KEY_FUEL,
     PERSIST_KEY_IGN,
 };
+#[cfg(feature = "runtime")]
 use ecu_calibration::{
     CalibrationHardwareTargetId, CalibrationPackageCompatibility,
     CalibrationPackageMigrationStatus, CalibrationPackageReview, CalibrationPackageWireError,
-    CalibrationRuntimeBuildId, CalibrationSchemaVersion, ExpertTriggerCalibration, FuelRuntimeTune,
-    KvError, KvStore, PersistError, PersistedCalibrationPackage,
+    CalibrationRuntimeBuildId, CalibrationSchemaVersion,
+};
+use ecu_calibration::{
+    ExpertTriggerCalibration, FuelRuntimeTune, KvStore, PersistError, PersistedCalibrationPackage,
 };
 
 #[cfg(feature = "runtime")]
@@ -236,8 +238,7 @@ where
         }
         let data = &mut buf[..spec.len];
         if store.read_page(spec.page, data).unwrap_or(0) == spec.len {
-            kv.write(spec.key, data)
-                .map_err(kv_error_to_persist_error)?;
+            kv.write(spec.key, data).map_err(PersistError::from)?;
         }
     }
     Ok(())
@@ -269,7 +270,7 @@ pub fn burn_expert_trigger_calibration<KV: KvStore>(
     let page = expert_trigger_page_from_calibration(cal);
     encode_expert_trigger_page(&page, &mut buf).map_err(|_| PersistError::Fail)?;
     kv.write(PERSIST_KEY_EXPERT_TRIGGER, &buf)
-        .map_err(kv_error_to_persist_error)
+        .map_err(PersistError::from)
 }
 
 /// Best-effort load of a canonical persisted calibration package from KV.
@@ -294,28 +295,7 @@ pub fn burn_calibration_package<KV: KvStore>(
         .encode_wire(&mut buf)
         .map_err(|_| PersistError::Fail)?;
     kv.write(PERSIST_KEY_CAL_PACKAGE, &buf)
-        .map_err(kv_error_to_persist_error)
-}
-
-fn kv_error_to_persist_error(err: KvError) -> PersistError {
-    match err {
-        KvError::EngineRunning => PersistError::EngineRunning,
-        _ => PersistError::Fail,
-    }
-}
-
-fn page_codec_error_to_page_error(err: PageCodecError) -> PageError {
-    match err {
-        PageCodecError::WrongSize => PageError::WrongSize,
-        PageCodecError::Invalid => PageError::Invalid,
-    }
-}
-
-fn calibration_persist_error_to_server_persist_error(err: PersistError) -> ServerPersistError {
-    match err {
-        PersistError::EngineRunning => ServerPersistError::EngineRunning,
-        PersistError::Fail => ServerPersistError::Fail,
-    }
+        .map_err(PersistError::from)
 }
 
 /// Core-free provider of the live page-body store plus its runtime fuel tune.
@@ -416,9 +396,8 @@ impl<P: PageStoreProvider, KV: KvStore> PersistedTsPageStore<P, KV> {
     pub fn burn_package(
         &mut self,
         package: PersistedCalibrationPackage,
-    ) -> Result<(), ServerPersistError> {
+    ) -> Result<(), PersistError> {
         burn_calibration_package(&mut self.kv, package)
-            .map_err(calibration_persist_error_to_server_persist_error)
     }
 
     /// Export the current TS calibration state as a target-bound package and
@@ -429,7 +408,7 @@ impl<P: PageStoreProvider, KV: KvStore> PersistedTsPageStore<P, KV> {
         session: &impl CalibrationPackageSession,
         runtime_build_id: CalibrationRuntimeBuildId,
         hardware_target_id: CalibrationHardwareTargetId,
-    ) -> Result<PersistedCalibrationPackage, ServerPersistError> {
+    ) -> Result<PersistedCalibrationPackage, PersistError> {
         let package = session.export_current_package(runtime_build_id, hardware_target_id);
         self.burn_package(package)?;
         Ok(package)
@@ -492,10 +471,8 @@ impl<P: PageStoreProvider, KV: KvStore> PersistedTsPageStore<P, KV> {
     }
 
     fn write_expert_trigger(&mut self, data: &[u8]) -> Result<(), PageError> {
-        let proposed_page =
-            decode_trusted_expert_trigger_page(data).map_err(page_codec_error_to_page_error)?;
-        let proposed = expert_trigger_calibration_from_page(proposed_page)
-            .map_err(page_codec_error_to_page_error)?;
+        let proposed_page = decode_trusted_expert_trigger_page(data)?;
+        let proposed = expert_trigger_calibration_from_page(proposed_page)?;
         proposed
             .validate_transition_from(&self.expert_trigger)
             .map_err(|_| PageError::Invalid)?;
@@ -548,6 +525,7 @@ impl<S, C> TsPackageCommandStore<S, C> {
     }
 }
 
+#[cfg(feature = "runtime")]
 impl<P: PageStoreProvider, KV: KvStore, C> TsPackageCommandStore<PersistedTsPageStore<P, KV>, C> {
     pub fn runtime_fuel_tune(&self) -> FuelRuntimeTune {
         self.store.runtime_fuel_tune()
@@ -677,20 +655,17 @@ impl<P: PageStoreProvider, KV: KvStore> PageStore for PersistedTsPageStore<P, KV
         result
     }
 
-    fn burn(&mut self) -> Result<(), ServerPersistError> {
+    fn burn(&mut self) -> Result<(), PersistError> {
         let Self {
             provider,
             kv,
             expert_trigger,
             ..
         } = self;
-        provider
-            .with_pages(|inner| {
-                burn_pages::<_, _, TABLE_PAGE_BYTES>(inner, kv, &TS_SETUP_PERSISTED_PAGES)
-            })
-            .map_err(calibration_persist_error_to_server_persist_error)?;
-        burn_expert_trigger_calibration(kv, expert_trigger)
-            .map_err(calibration_persist_error_to_server_persist_error)?;
+        provider.with_pages(|inner| {
+            burn_pages::<_, _, TABLE_PAGE_BYTES>(inner, kv, &TS_SETUP_PERSISTED_PAGES)
+        })?;
+        burn_expert_trigger_calibration(kv, expert_trigger)?;
         Ok(())
     }
 }
@@ -715,7 +690,7 @@ impl<P: PageStoreProvider, KV: KvStore, C: CalibrationPackageSession> PageStore
         Ok(())
     }
 
-    fn burn(&mut self) -> Result<(), ServerPersistError> {
+    fn burn(&mut self) -> Result<(), PersistError> {
         self.store.burn()?;
         self.store.export_and_burn_current_package(
             &self.session,

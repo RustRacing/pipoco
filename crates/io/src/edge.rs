@@ -33,10 +33,48 @@ pub struct EdgeSample {
     pub rpm: Rpm,
 }
 
+/// An edge sample paired with a trace identifier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TracedEdgeSample {
+    pub trace_id: crate::TraceId,
+    pub sample: EdgeSample,
+}
+
+impl EdgeSample {
+    pub const fn with_trace_id(self, trace_id: crate::TraceId) -> TracedEdgeSample {
+        TracedEdgeSample {
+            trace_id,
+            sample: self,
+        }
+    }
+}
+
 /// Source of edge samples (e.g., input capture hardware).
 pub trait EdgeSource {
     type Error;
 
     /// Get the next edge sample, if available.
     fn next_edge(&mut self) -> Result<Option<EdgeSample>, Self::Error>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn with_trace_id_preserves_edge_sample_and_trace_id() {
+        let sample = EdgeSample {
+            at_us: Micros::new(123),
+            line: EdgeLine::Cam,
+            polarity: EdgePolarity::Falling,
+            angle_x10: Degrees10::new(456),
+            rpm: Rpm::new(789),
+        };
+        let trace_id = crate::TraceId::new(0xfeed_beef);
+
+        let traced = sample.with_trace_id(trace_id);
+
+        assert_eq!(traced.trace_id, trace_id);
+        assert_eq!(traced.sample, sample);
+    }
 }

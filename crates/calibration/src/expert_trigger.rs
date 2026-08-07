@@ -364,6 +364,17 @@ impl ExpertTriggerCalibration {
     pub fn encode_record(&self, out: &mut [u8]) -> Result<usize, ExpertTriggerRecordError> {
         self.validate()
             .map_err(ExpertTriggerRecordError::InvalidCalibration)?;
+        self.encode_record_unchecked(out)
+    }
+
+    /// Write the canonical wire layout without validation (review 004).
+    ///
+    /// Used by the calibration-package checksum so a non-canonical fallback
+    /// record can never be hashed; validity is enforced at decode/boundary.
+    pub(crate) fn encode_record_unchecked(
+        &self,
+        out: &mut [u8],
+    ) -> Result<usize, ExpertTriggerRecordError> {
         if out.len() < EXPERT_TRIGGER_RECORD_LEN {
             return Err(ExpertTriggerRecordError::WrongSize);
         }
@@ -451,6 +462,10 @@ impl ExpertTriggerCalibration {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::{
+        ActiveCalibration, Calibration, CalibrationRevision, CalibrationSchemaVersion,
+        CalibrationSnapshot, PersistedCalibrationBlob, StagedCalibration,
+    };
 
     fn valid_record_bytes() -> [u8; EXPERT_TRIGGER_RECORD_LEN] {
         let mut bytes = [0u8; EXPERT_TRIGGER_RECORD_LEN];
@@ -482,6 +497,301 @@ mod tests {
                 Err(ExpertTriggerRecordError::NonCanonicalRecord),
                 "reserved byte {index} must remain zero"
             );
+        }
+    }
+
+    #[test]
+    fn expert_trigger_roundtrip_preserves_all_fields() {
+        let expert = ExpertTriggerCalibration {
+            schema_version: CalibrationSchemaVersion::CURRENT,
+            expert_unlock: ExpertUnlock::Unlocked,
+            authority: TriggerAuthority::ExpertManual,
+            profile_identity: 0x4D353054,
+            profile_hash: 0xA5A5_1234,
+            trigger_pattern: TriggerPattern::MissingTooth,
+            primary_base_teeth: 60,
+            missing_teeth: 2,
+            primary_trigger_speed: PrimaryTriggerSpeed::Crank,
+            trigger_angle_atdc_deg10: 840,
+            trigger_angle_multiplier: 2,
+            primary_trigger_edge: TriggerEdge::Falling,
+            secondary_trigger_edge: TriggerEdge::Rising,
+            secondary_trigger_mode: SecondaryTriggerMode::SingleToothCam,
+            poll_level_polarity: PollLevelPolarity::High,
+            trigger_filter: TriggerFilter::Aggressive,
+            resync_every_cycle: true,
+            skip_cycles: 3,
+            ignition_mode: ExpertIgnitionMode::SequentialCop,
+            injection_layout: ExpertInjectionLayout::Sequential,
+            fixed_timing_mode: FixedTimingMode::Fixed,
+            fixed_timing_deg10: 100,
+        };
+        let mut bytes = [0u8; EXPERT_TRIGGER_RECORD_LEN];
+
+        assert_eq!(
+            expert.encode_record(&mut bytes),
+            Ok(EXPERT_TRIGGER_RECORD_LEN)
+        );
+
+        let decoded = ExpertTriggerCalibration::decode_record(&bytes).expect("decode record");
+        assert_eq!(decoded, expert);
+    }
+
+    #[test]
+    fn invalid_expert_trigger_config_is_rejected() {
+        let locked_manual = ExpertTriggerCalibration {
+            authority: TriggerAuthority::ExpertManual,
+            ..ExpertTriggerCalibration::default()
+        };
+        assert_eq!(
+            locked_manual.validate(),
+            Err(ExpertTriggerValidationError::ExpertUnlockRequired)
+        );
+
+        let impossible_missing_tooth = ExpertTriggerCalibration {
+            expert_unlock: ExpertUnlock::Unlocked,
+            authority: TriggerAuthority::ExpertManual,
+            primary_base_teeth: 2,
+            missing_teeth: 2,
+            ..ExpertTriggerCalibration::default()
+        };
+        assert_eq!(
+            impossible_missing_tooth.validate(),
+            Err(ExpertTriggerValidationError::InvalidMissingTeeth)
+        );
+    }
+
+    #[test]
+    fn sequential_modes_require_secondary_trigger_evidence() {
+        let no_cam = ExpertTriggerCalibration {
+            expert_unlock: ExpertUnlock::Unlocked,
+            authority: TriggerAuthority::ExpertManual,
+            injection_layout: ExpertInjectionLayout::Sequential,
+            ..ExpertTriggerCalibration::default()
+        };
+
+        assert_eq!(
+            no_cam.validate(),
+            Err(ExpertTriggerValidationError::SecondaryRequired)
+        );
+    }
+
+    #[test]
+    fn certified_profile_requires_trusted_transition_surface() {
+        let current = ExpertTriggerCalibration::default();
+        let certified = ExpertTriggerCalibration {
+            authority: TriggerAuthority::CertifiedProfile,
+            profile_identity: 0x4D353054,
+            profile_hash: 0x55AA_1234,
+            ..ExpertTriggerCalibration::default()
+        };
+        assert_eq!(
+            certified.validate_transition_from(&current),
+            Err(ExpertTriggerValidationError::CertifiedProfileRequiresTrustedPath)
+        );
+
+        let current = certified;
+        let stale_manual_blob = ExpertTriggerCalibration {
+            trigger_angle_atdc_deg10: 120,
+            ..current
+        };
+        let explicit_expert_conversion = ExpertTriggerCalibration {
+            expert_unlock: ExpertUnlock::Unlocked,
+            authority: TriggerAuthority::ExpertManual,
+            trigger_angle_atdc_deg10: 120,
+            ..current
+        };
+
+        assert_eq!(
+            stale_manual_blob.validate_transition_from(&current),
+            Err(ExpertTriggerValidationError::CertifiedProfileOverwrite)
+        );
+        assert_eq!(
+            explicit_expert_conversion.validate_transition_from(&current),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn certified_profile_cannot_be_unlocked_into_manual_path() {
+        let unlocked_certified = ExpertTriggerCalibration {
+            expert_unlock: ExpertUnlock::Unlocked,
+            authority: TriggerAuthority::CertifiedProfile,
+            profile_identity: 0x4D353054,
+            profile_hash: 0xA5A5_1234,
+            ..ExpertTriggerCalibration::default()
+        };
+
+        assert_eq!(
+            unlocked_certified.validate(),
+            Err(ExpertTriggerValidationError::CertifiedProfileMustStayLocked)
+        );
+    }
+
+    #[test]
+    fn validated_manual_trigger_can_promote_primary_locked_startup_authority() {
+        let calibration = ExpertTriggerCalibration {
+            expert_unlock: ExpertUnlock::Unlocked,
+            authority: TriggerAuthority::ExpertManual,
+            profile_identity: 0x4D353054,
+            profile_hash: 0xA5A5_1234,
+            secondary_trigger_mode: SecondaryTriggerMode::SingleToothCam,
+            ignition_mode: ExpertIgnitionMode::SequentialCop,
+            injection_layout: ExpertInjectionLayout::Sequential,
+            ..ExpertTriggerCalibration::default()
+        };
+        let startup_authority = EngineTimeAuthority::new(
+            CrankSyncState::PrimaryLocked,
+            PhaseSyncState::CamValidated720,
+            AbsoluteTimeAuthority::GeometryOnly,
+            EngineTimeAuthority::MAX_CONFIDENCE_X1000,
+            3,
+        );
+
+        let runtime_authority = calibration
+            .to_runtime_engine_time_authority(startup_authority)
+            .expect("manual authority");
+
+        assert_eq!(runtime_authority.crank, CrankSyncState::PrimaryLocked);
+        assert_eq!(runtime_authority.phase, PhaseSyncState::CamValidated720);
+        assert_eq!(
+            runtime_authority.absolute,
+            AbsoluteTimeAuthority::ExpertManual
+        );
+        assert_eq!(runtime_authority.sync_loss_count, 3);
+        assert!(runtime_authority.has_primary_lock());
+    }
+
+    #[test]
+    fn manual_runtime_authority_requires_primary_lock_and_720_for_sequential_cop() {
+        let calibration = ExpertTriggerCalibration {
+            expert_unlock: ExpertUnlock::Unlocked,
+            authority: TriggerAuthority::ExpertManual,
+            profile_identity: 0x4D353054,
+            profile_hash: 0xA5A5_1234,
+            secondary_trigger_mode: SecondaryTriggerMode::SingleToothCam,
+            ignition_mode: ExpertIgnitionMode::SequentialCop,
+            injection_layout: ExpertInjectionLayout::Sequential,
+            ..ExpertTriggerCalibration::default()
+        };
+        let crank_only = EngineTimeAuthority::new(
+            CrankSyncState::PrimaryLocked,
+            PhaseSyncState::CrankOnly360,
+            AbsoluteTimeAuthority::GeometryOnly,
+            EngineTimeAuthority::MAX_CONFIDENCE_X1000,
+            0,
+        );
+        let no_lock = EngineTimeAuthority::new(
+            CrankSyncState::NoSignal,
+            PhaseSyncState::CamValidated720,
+            AbsoluteTimeAuthority::GeometryOnly,
+            EngineTimeAuthority::MAX_CONFIDENCE_X1000,
+            0,
+        );
+
+        assert_eq!(
+            calibration.to_runtime_engine_time_authority(crank_only),
+            Err(ExpertTriggerRuntimeAuthorityError::CamValidated720Required)
+        );
+        assert_eq!(
+            calibration.to_runtime_engine_time_authority(no_lock),
+            Err(ExpertTriggerRuntimeAuthorityError::DecoderPrimaryLockRequired)
+        );
+    }
+
+    #[test]
+    fn certified_profile_does_not_convert_to_manual_runtime_authority() {
+        let calibration = ExpertTriggerCalibration {
+            expert_unlock: ExpertUnlock::Locked,
+            authority: TriggerAuthority::CertifiedProfile,
+            profile_identity: 0x4D353054,
+            profile_hash: 0xA5A5_1234,
+            ..ExpertTriggerCalibration::default()
+        };
+        let startup_authority = EngineTimeAuthority::new(
+            CrankSyncState::PrimaryLocked,
+            PhaseSyncState::CamValidated720,
+            AbsoluteTimeAuthority::GeometryOnly,
+            EngineTimeAuthority::MAX_CONFIDENCE_X1000,
+            0,
+        );
+
+        assert_eq!(
+            calibration.to_runtime_engine_time_authority(startup_authority),
+            Err(ExpertTriggerRuntimeAuthorityError::ExpertManualAuthorityRequired)
+        );
+    }
+
+    #[test]
+    fn expert_unlock_is_persisted_with_schema_version() {
+        let mut calibration = Calibration::default();
+        calibration.set_expert_trigger(ExpertTriggerCalibration {
+            expert_unlock: ExpertUnlock::Unlocked,
+            authority: TriggerAuthority::ExpertManual,
+            secondary_trigger_mode: SecondaryTriggerMode::SingleToothCam,
+            ignition_mode: ExpertIgnitionMode::SequentialCop,
+            ..ExpertTriggerCalibration::default()
+        });
+        let snapshot = CalibrationSnapshot {
+            active: ActiveCalibration::new(CalibrationRevision::new(11), calibration),
+            staged: StagedCalibration::new(CalibrationRevision::new(11), calibration),
+        };
+        let blob = PersistedCalibrationBlob::new(snapshot);
+
+        assert_eq!(blob.schema_version(), CalibrationSchemaVersion::CURRENT);
+        assert_eq!(
+            blob.snapshot()
+                .active
+                .calibration()
+                .geometry
+                .expert_trigger
+                .schema_version,
+            CalibrationSchemaVersion::CURRENT
+        );
+        assert_eq!(
+            blob.snapshot()
+                .active
+                .calibration()
+                .geometry
+                .expert_trigger
+                .expert_unlock,
+            ExpertUnlock::Unlocked
+        );
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod test_support {
+    use super::*;
+
+    /// Canonical wire-shaped expert trigger used across calibration tests.
+    pub fn sample_wire_expert_trigger(
+        profile_hash: u32,
+        fixed_timing_deg10: i16,
+    ) -> ExpertTriggerCalibration {
+        ExpertTriggerCalibration {
+            schema_version: CalibrationSchemaVersion::CURRENT,
+            expert_unlock: ExpertUnlock::Unlocked,
+            authority: TriggerAuthority::ExpertManual,
+            profile_identity: 0x4D353054,
+            profile_hash,
+            trigger_pattern: TriggerPattern::MissingTooth,
+            primary_base_teeth: 60,
+            missing_teeth: 2,
+            primary_trigger_speed: PrimaryTriggerSpeed::Crank,
+            trigger_angle_atdc_deg10: 840,
+            trigger_angle_multiplier: 2,
+            primary_trigger_edge: TriggerEdge::Falling,
+            secondary_trigger_edge: TriggerEdge::Rising,
+            secondary_trigger_mode: SecondaryTriggerMode::SingleToothCam,
+            poll_level_polarity: PollLevelPolarity::High,
+            trigger_filter: TriggerFilter::Aggressive,
+            resync_every_cycle: true,
+            skip_cycles: 3,
+            ignition_mode: ExpertIgnitionMode::SequentialCop,
+            injection_layout: ExpertInjectionLayout::Sequential,
+            fixed_timing_mode: FixedTimingMode::Fixed,
+            fixed_timing_deg10,
         }
     }
 }

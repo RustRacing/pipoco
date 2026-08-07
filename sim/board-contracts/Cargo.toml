@@ -15,3 +15,6 @@ ecu-runtime = { path = "../../crates/runtime" }
 ecu-target-common = { path = "../../boards/common" }
 ecu-rp2040-pico = { path = "../../boards/rp2040-pico" }
 ecu-rp2350b = { path = "../../boards/rp2350b" }
+
+[lints]
+workspace = true

@@ -1,19 +1,9 @@
-use crate::Calibration;
+use crate::{numeric::clamp_u16, Calibration};
 
 const ADC_MIN: u16 = 0;
 const ADC_MAX: u16 = 4095;
 const TPS_MIN_X100: u16 = 0;
 const TPS_MAX_X100: u16 = 10000;
-
-const fn clamp_u16(value: u16, lo: u16, hi: u16) -> u16 {
-    if value < lo {
-        lo
-    } else if value > hi {
-        hi
-    } else {
-        value
-    }
-}
 
 pub fn tps_from_counts(calibration: &Calibration, adc_counts: u16) -> u16 {
     let counts = clamp_u16(adc_counts, ADC_MIN, ADC_MAX);

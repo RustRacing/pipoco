@@ -18,7 +18,7 @@ impl Default for BaroSourceConfig {
     fn default() -> Self {
         Self {
             source: BaroSource::StartupMapSample,
-            fixed_kpa10: Kpa10(1013),
+            fixed_kpa10: Kpa10::new(1013),
         }
     }
 }
@@ -58,7 +58,7 @@ pub fn select_baro_source(config: &BaroSourceConfig, input: BaroSourceInput) -> 
             } else {
                 BaroSourceReading {
                     source: BaroSource::DedicatedSensor,
-                    baro_kpa10: Kpa10(0),
+                    baro_kpa10: Kpa10::new(0),
                     valid: false,
                 }
             }
@@ -67,11 +67,11 @@ pub fn select_baro_source(config: &BaroSourceConfig, input: BaroSourceInput) -> 
 }
 
 const fn valid_baro(baro_kpa10: Kpa10) -> bool {
-    baro_kpa10.0 >= 500 && baro_kpa10.0 <= 1200
+    baro_kpa10.get() >= 500 && baro_kpa10.get() <= 1200
 }
 
 pub fn baro_correction(baro_corr_curve: &Curve16, baro_kpa10: Kpa10) -> RatioX1000 {
-    RatioX1000(lookup_curve_u16(baro_corr_curve, baro_kpa10.0))
+    RatioX1000::new(lookup_curve_u16(baro_corr_curve, baro_kpa10.get()))
 }
 
 fn lookup_curve_u16(curve: &Curve16, x: u16) -> u16 {
@@ -118,33 +118,33 @@ mod tests {
 
     #[test]
     fn baro_high_altitude_matches_curve_point() {
-        let corr = baro_correction(&baro_curve(), Kpa10(700));
-        assert_eq!(corr, RatioX1000(700));
+        let corr = baro_correction(&baro_curve(), Kpa10::new(700));
+        assert_eq!(corr, RatioX1000::new(700));
     }
 
     #[test]
     fn baro_sea_level_matches_curve_point() {
-        let corr = baro_correction(&baro_curve(), Kpa10(1000));
-        assert_eq!(corr, RatioX1000(1000));
+        let corr = baro_correction(&baro_curve(), Kpa10::new(1000));
+        assert_eq!(corr, RatioX1000::new(1000));
     }
 
     #[test]
     fn fixed_baro_source_uses_configured_value() {
         let config = BaroSourceConfig {
             source: BaroSource::FixedKpa,
-            fixed_kpa10: Kpa10(990),
+            fixed_kpa10: Kpa10::new(990),
         };
 
         let reading = select_baro_source(
             &config,
             BaroSourceInput {
-                startup_map_kpa10: Kpa10(940),
-                dedicated_baro_kpa10: Some(Kpa10(980)),
+                startup_map_kpa10: Kpa10::new(940),
+                dedicated_baro_kpa10: Some(Kpa10::new(980)),
             },
         );
 
         assert_eq!(reading.source, BaroSource::FixedKpa);
-        assert_eq!(reading.baro_kpa10, Kpa10(990));
+        assert_eq!(reading.baro_kpa10, Kpa10::new(990));
         assert!(reading.valid);
     }
 
@@ -153,13 +153,13 @@ mod tests {
         let reading = select_baro_source(
             &BaroSourceConfig::default(),
             BaroSourceInput {
-                startup_map_kpa10: Kpa10(950),
+                startup_map_kpa10: Kpa10::new(950),
                 dedicated_baro_kpa10: None,
             },
         );
 
         assert_eq!(reading.source, BaroSource::StartupMapSample);
-        assert_eq!(reading.baro_kpa10, Kpa10(950));
+        assert_eq!(reading.baro_kpa10, Kpa10::new(950));
         assert!(reading.valid);
     }
 
@@ -173,40 +173,40 @@ mod tests {
         let missing = select_baro_source(
             &config,
             BaroSourceInput {
-                startup_map_kpa10: Kpa10(950),
+                startup_map_kpa10: Kpa10::new(950),
                 dedicated_baro_kpa10: None,
             },
         );
         let present = select_baro_source(
             &config,
             BaroSourceInput {
-                startup_map_kpa10: Kpa10(950),
-                dedicated_baro_kpa10: Some(Kpa10(1000)),
+                startup_map_kpa10: Kpa10::new(950),
+                dedicated_baro_kpa10: Some(Kpa10::new(1000)),
             },
         );
 
         assert!(!missing.valid);
-        assert_eq!(missing.baro_kpa10, Kpa10(0));
+        assert_eq!(missing.baro_kpa10, Kpa10::new(0));
         assert!(present.valid);
-        assert_eq!(present.baro_kpa10, Kpa10(1000));
+        assert_eq!(present.baro_kpa10, Kpa10::new(1000));
     }
 
     #[test]
     fn baro_source_rejects_out_of_plausible_range_pressure() {
         let config = BaroSourceConfig {
             source: BaroSource::FixedKpa,
-            fixed_kpa10: Kpa10(1300),
+            fixed_kpa10: Kpa10::new(1300),
         };
 
         let reading = select_baro_source(
             &config,
             BaroSourceInput {
-                startup_map_kpa10: Kpa10(950),
+                startup_map_kpa10: Kpa10::new(950),
                 dedicated_baro_kpa10: None,
             },
         );
 
-        assert_eq!(reading.baro_kpa10, Kpa10(1300));
+        assert_eq!(reading.baro_kpa10, Kpa10::new(1300));
         assert!(!reading.valid);
     }
 }

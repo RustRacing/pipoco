@@ -3,6 +3,10 @@
 
 /// Simple per-channel slew limiter.
 /// Stores last value and timestamp; clamps new values to `max_rate_per_s`.
+///
+/// Uses the same canonical delta-window math as
+/// `ecu_control::sensors::slew` (max delta = rate * dt / 1e6); kept as a
+/// stateless i32 convenience wrapper for actuator/table paths (review 011).
 #[derive(Copy, Clone)]
 pub struct SlewLimiter {
     last_value: i32,

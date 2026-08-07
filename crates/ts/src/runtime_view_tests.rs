@@ -107,7 +107,7 @@ fn maps_runtime_snapshot_without_reading_internal_state() {
     assert_eq!(view.angle_x10, snapshot.engine.angle_x10.get());
     assert_eq!(
         view.fuel_pulse_width_us,
-        snapshot.control.fuel_pulse_width.get()
+        snapshot.control.fuel_pulse_width.get() as u16
     );
     assert_eq!(
         view.ignition_advance_deg10,
@@ -227,7 +227,7 @@ fn runtime_snapshot_adapter_fills_outpc_projection() {
 
     assert_eq!(rpm, snapshot.engine.rpm.get());
     assert_eq!(map_kpa_x10, snapshot.engine.load_kpa10.get());
-    assert_eq!(pw_us, snapshot.control.fuel_pulse_width.get());
+    assert_eq!(pw_us, snapshot.control.fuel_pulse_width.get() as u16);
     assert_eq!(dwell_us, snapshot.control.dwell.get());
     assert_eq!(advance_x10, snapshot.control.ignition_advance.get());
     assert_eq!(out.synced, 1);

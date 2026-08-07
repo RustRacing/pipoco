@@ -19,14 +19,10 @@
 
 use ecu_compat::compat::{CoreAdapterContract, CoreObservedSurface, EcuState};
 use ecu_compat::constants::ignition::{MAX_DWELL_US, MIN_DWELL_US};
-use fm0016_fixture_matrix::{assert_fixture_semantics, fixture_cases, oracle_result, FixtureCase};
+use ecu_test_fixtures::fixture_matrix::{
+    assert_fixture_semantics, fixture_cases, oracle_result, FixtureCase,
+};
 use std::panic::catch_unwind;
-
-// Include the fixture matrix (lives in tests/formal/)
-mod fm0016_fixture_matrix {
-    #![allow(dead_code)]
-    include!("../tests/formal/fm0016_fixture_matrix.rs");
-}
 
 // ---------------------------------------------------------------------------
 // Observable from EcuState public API
@@ -39,14 +35,14 @@ fn drive_core(case: &FixtureCase) -> CoreObservedSurface {
     let input = case.input;
 
     // --- Set sensor inputs via public setters ---
-    state.clt_x10 = input.clt_c10.0;
-    state.iat_x10 = input.iat_c10.0;
-    state.tps_percent = ((input.tps_x100 as u32) / 100).min(100) as u8;
-    state.map_kpa_x10 = input.map_kpa10.get().min(9999);
+    state.set_clt_x10(input.clt_c10.get());
+    state.set_iat_x10(input.iat_c10.get());
+    state.set_tps_percent(((input.tps_x100 as u32) / 100).min(100) as u8);
+    state.set_map_kpa_x10(input.map_kpa10.get().min(9999));
 
     // --- Set RPM and sync state via public setters ---
-    state.rpm = input.rpm.get();
-    state.synced = matches!(input.sync, ecu_spec::SyncState::Synced);
+    state.set_rpm(input.rpm.get());
+    state.set_synced(matches!(input.sync, ecu_spec::SyncState::Synced));
 
     state.refreshed_observed_surface()
 }
@@ -115,12 +111,14 @@ fn conformance_test(case: &FixtureCase) {
         case.fixture
     );
     assert_eq!(
-        obs.clt_x10, case.input.clt_c10.0,
+        obs.clt_x10,
+        case.input.clt_c10.get(),
         "FAIL clt_x10: observed CLT should match driven product input ({})",
         case.fixture
     );
     assert_eq!(
-        obs.iat_x10, case.input.iat_c10.0,
+        obs.iat_x10,
+        case.input.iat_c10.get(),
         "FAIL iat_x10: observed IAT should match driven product input ({})",
         case.fixture
     );

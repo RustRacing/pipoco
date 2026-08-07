@@ -10,18 +10,22 @@ pub fn afterstart_corr_x1000(
     clt_c10: TempC10,
 ) -> RatioX1000 {
     if mode != EngineMode::Running || cycles_since_start > afterstart_window_cycles {
-        return RatioX1000(1000);
+        return RatioX1000::new(1000);
     }
-    let clt_input = if clt_c10.0 < 0 { 0 } else { clt_c10.0 as u16 };
-    RatioX1000(bilerp_u16(
+    let clt_input = if clt_c10.get() < 0 {
+        0
+    } else {
+        clt_c10.get() as u16
+    };
+    RatioX1000::new(bilerp_u16(
         afterstart_table,
-        crate::Rpm(cycles_since_start),
-        crate::Kpa10(clt_input),
+        crate::Rpm::new(cycles_since_start),
+        crate::Kpa10::new(clt_input),
     ))
 }
 
 pub fn apply_afterstart_pw(pw_cranking_us: PulseWidthUs, corr_x1000: RatioX1000) -> PulseWidthUs {
-    PulseWidthUs(mul_ratio_x1000(pw_cranking_us.0, corr_x1000))
+    PulseWidthUs::new(mul_ratio_x1000(pw_cranking_us.get(), corr_x1000))
 }
 
 #[cfg(test)]
@@ -59,22 +63,22 @@ mod tests {
     fn afterstart_applies_only_in_running_within_window() {
         let t = table();
         assert_eq!(
-            afterstart_corr_x1000(&t, 50, EngineMode::Running, 5, TempC10(0)),
-            RatioX1000(1150)
+            afterstart_corr_x1000(&t, 50, EngineMode::Running, 5, TempC10::new(0)),
+            RatioX1000::new(1150)
         );
         assert_eq!(
-            afterstart_corr_x1000(&t, 50, EngineMode::Cranking, 5, TempC10(0)),
-            RatioX1000(1000)
+            afterstart_corr_x1000(&t, 50, EngineMode::Cranking, 5, TempC10::new(0)),
+            RatioX1000::new(1000)
         );
         assert_eq!(
-            afterstart_corr_x1000(&t, 4, EngineMode::Running, 5, TempC10(0)),
-            RatioX1000(1000)
+            afterstart_corr_x1000(&t, 4, EngineMode::Running, 5, TempC10::new(0)),
+            RatioX1000::new(1000)
         );
     }
 
     #[test]
     fn afterstart_pw_uses_floor_ratio_multiply() {
-        let pw = apply_afterstart_pw(PulseWidthUs(1501), RatioX1000(1333));
-        assert_eq!(pw, PulseWidthUs(2000));
+        let pw = apply_afterstart_pw(PulseWidthUs::new(1501), RatioX1000::new(1333));
+        assert_eq!(pw, PulseWidthUs::new(2000));
     }
 }

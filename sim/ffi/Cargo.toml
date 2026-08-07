@@ -16,3 +16,6 @@ ecu-domain = { path = "../../crates/domain" }
 ecu-io = { path = "../../crates/io" }
 ecu-runtime = { path = "../../crates/runtime" }
 ecu-sim = { path = "../harness" }
+
+[lints]
+workspace = true

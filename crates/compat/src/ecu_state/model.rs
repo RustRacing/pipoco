@@ -11,18 +11,13 @@ use crate::{
 };
 
 pub struct EcuState {
-    pub rpm: u16,
-    pub synced: bool,
-    pub tooth_count: u8,
+    /// Single source of truth for runtime sensor/trigger inputs (review 002).
+    /// Public scalar mirrors were removed; use the accessor/setter methods.
     pub(crate) inputs: EcuInputs,
     pub(crate) derived: EcuDerived,
     pub(crate) outputs: EcuOutputs,
     pub config: EcuConfig,
     pub rev_limiter_state: rev_limiter::RevLimiterState,
-    pub clt_x10: i16,
-    pub iat_x10: i16,
-    pub tps_percent: u8,  // Throttle position (0-100%) (clamped)
-    pub map_kpa_x10: u16, // MAP (kPa*10) (clamped)
     pub flood_clear_state: safety::FloodClearState,
     pub sync_loss_tracker: safety::SyncLossTracker,
     pub diag_map: diag::DiagState,
@@ -51,10 +46,21 @@ impl EcuState {
     /// Create new ECU state with defaults
     pub const fn new() -> Self {
         Self {
-            rpm: 0,
-            synced: false,
-            tooth_count: 0,
-            inputs: EcuInputs::new(0, false, 0, 12500, 200, 200, 0, 1000, 0, 0, 0),
+            inputs: EcuInputs {
+                rpm: 0,
+                synced: false,
+                tooth_count: 0,
+                // Default sensor readings: 12.5 V battery, 20.0 C CLT/IAT,
+                // 0% TPS, 100.0 kPa MAP, no enrichment history.
+                battery_voltage_mv: 12_500,
+                clt_x10: 200,
+                iat_x10: 200,
+                tps_percent: 0,
+                map_kpa_x10: 1000,
+                last_enrichment_update_us: 0,
+                last_enrichment_tps_percent: 0,
+                last_enrichment_map_kpa_x10: 0,
+            },
             derived: EcuDerived {
                 wue_percent: 0,
                 ase_percent: 0,
@@ -95,10 +101,6 @@ impl EcuState {
                 cam_missing_timeout_ms: 500,
             },
             rev_limiter_state: rev_limiter::RevLimiterState::new(),
-            clt_x10: 200,
-            iat_x10: 200,
-            tps_percent: 0, // Throttle closed (clamped)
-            map_kpa_x10: 1000,
             flood_clear_state: safety::FloodClearState::new(),
             sync_loss_tracker: safety::SyncLossTracker::new(),
             diag_map: diag::DiagState::new(),

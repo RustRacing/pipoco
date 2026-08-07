@@ -59,5 +59,3 @@ pub mod test_support {
         SchedulerObservedSurface,
     };
 }
-
-pub(crate) const CRANK_REV_DEGREES10: u16 = 3600;

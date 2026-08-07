@@ -11,7 +11,7 @@ use ecu_calibration::{
     ExpertTriggerCalibration, StagedCalibration,
 };
 use ecu_calibration::{
-    CalibrationHardwareTargetId, CalibrationPackageWireError, CalibrationRuntimeBuildId,
+    CalibrationHardwareTargetId, CalibrationPackageWireError, CalibrationRuntimeBuildId, KvError,
     PersistedCalibrationBlob,
 };
 

@@ -20,6 +20,15 @@ pub enum PersistError {
     EngineRunning,
 }
 
+impl From<KvError> for PersistError {
+    fn from(err: KvError) -> Self {
+        match err {
+            KvError::EngineRunning => PersistError::EngineRunning,
+            _ => PersistError::Fail,
+        }
+    }
+}
+
 /// Legacy raw setup-page persistence keys used by current page store scaffolding.
 pub const PERSIST_KEY_FUEL: &[u8] = b"fuel";
 pub const PERSIST_KEY_IGN: &[u8] = b"ign";

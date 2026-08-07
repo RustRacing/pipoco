@@ -234,37 +234,19 @@ fn crc32_update(mut state: u32, bytes: &[u8]) -> u32 {
     state
 }
 
+/// Canonical checksum record for an expert trigger (review 004).
+///
+/// Always the canonical wire layout: validation is intentionally skipped so a
+/// non-canonical fallback record can never be hashed. Invalid trigger states
+/// are rejected at the decode/boundary instead.
 fn expert_trigger_checksum_record(
     expert_trigger: ExpertTriggerCalibration,
 ) -> [u8; EXPERT_TRIGGER_RECORD_LEN] {
     let mut record = [0u8; EXPERT_TRIGGER_RECORD_LEN];
-    if expert_trigger.encode_record(&mut record).is_ok() {
-        return record;
-    }
-
-    record[0..4].copy_from_slice(b"BAD!");
-    record[4..6].copy_from_slice(&expert_trigger.schema_version.get().to_le_bytes());
-    record[6] = expert_trigger.expert_unlock.code();
-    record[7] = expert_trigger.authority.code();
-    record[8..12].copy_from_slice(&expert_trigger.profile_identity.to_le_bytes());
-    record[12..16].copy_from_slice(&expert_trigger.profile_hash.to_le_bytes());
-    record[16] = expert_trigger.trigger_pattern.code();
-    record[17] = expert_trigger.primary_base_teeth;
-    record[18] = expert_trigger.missing_teeth;
-    record[19] = expert_trigger.primary_trigger_speed.code();
-    record[20..22].copy_from_slice(&expert_trigger.trigger_angle_atdc_deg10.to_le_bytes());
-    record[22] = expert_trigger.trigger_angle_multiplier;
-    record[23] = expert_trigger.primary_trigger_edge.code();
-    record[24] = expert_trigger.secondary_trigger_edge.code();
-    record[25] = expert_trigger.secondary_trigger_mode.code();
-    record[26] = expert_trigger.poll_level_polarity.code();
-    record[27] = expert_trigger.trigger_filter.code();
-    record[28] = u8::from(expert_trigger.resync_every_cycle);
-    record[29] = expert_trigger.skip_cycles;
-    record[30] = expert_trigger.ignition_mode.code();
-    record[31] = expert_trigger.injection_layout.code();
-    record[32] = expert_trigger.fixed_timing_mode.code();
-    record[33..35].copy_from_slice(&expert_trigger.fixed_timing_deg10.to_le_bytes());
+    let written = expert_trigger
+        .encode_record_unchecked(&mut record)
+        .expect("record buffer is exactly EXPERT_TRIGGER_RECORD_LEN");
+    debug_assert_eq!(written, EXPERT_TRIGGER_RECORD_LEN);
     record
 }
 
@@ -852,3 +834,825 @@ pub struct SafetyCalibration;
 /// Sensor calibration shell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SensorCalibration;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::expert_trigger::test_support::sample_wire_expert_trigger;
+
+    #[test]
+    fn calibration_groups_default_to_empty_shells() {
+        let calibration = Calibration::default();
+
+        assert_eq!(calibration.geometry, GeometryCalibration::default());
+        assert_eq!(
+            calibration.geometry.expert_trigger.schema_version,
+            CalibrationSchemaVersion::CURRENT
+        );
+        assert_eq!(calibration.fuel, FuelCalibration);
+        assert_eq!(calibration.ignition, IgnitionCalibration);
+        assert_eq!(calibration.lambda, LambdaCalibration);
+        assert_eq!(calibration.torque, TorqueCalibration);
+        assert_eq!(calibration.idle, IdleCalibration);
+        assert_eq!(calibration.aux, AuxCalibration);
+        assert_eq!(calibration.safety, SafetyCalibration);
+        assert_eq!(calibration.sensors, SensorCalibration);
+    }
+
+    #[test]
+    fn calibration_group_types_are_copyable() {
+        let geometry = GeometryCalibration::default();
+        let duplicate = geometry;
+
+        assert_eq!(geometry, duplicate);
+    }
+
+    #[test]
+    fn active_calibration_tracks_revision_and_payload() {
+        let calibration = Calibration::default();
+        let active = ActiveCalibration::new(CalibrationRevision::new(7), calibration);
+
+        assert_eq!(active.revision().get(), 7);
+        assert_eq!(active.calibration(), calibration);
+    }
+
+    #[test]
+    fn staged_calibration_tracks_dirty_state_and_revision() {
+        let calibration = Calibration::default();
+        let mut staged = StagedCalibration::new(CalibrationRevision::new(3), calibration);
+
+        assert_eq!(staged.base_revision().get(), 3);
+        assert_eq!(staged.revision().get(), 3);
+        assert!(!staged.is_dirty());
+
+        staged.mark_dirty();
+        assert!(staged.is_dirty());
+        assert_eq!(staged.revision().get(), 4);
+
+        staged.clear_dirty();
+        assert!(!staged.is_dirty());
+        assert_eq!(staged.calibration(), calibration);
+    }
+
+    #[test]
+    fn calibration_snapshot_keeps_views_separate() {
+        let snapshot = CalibrationSnapshot::default();
+
+        assert_eq!(snapshot.active.revision().get(), 0);
+        assert_eq!(snapshot.staged.base_revision().get(), 0);
+        assert_eq!(snapshot.staged.revision().get(), 0);
+        assert!(!snapshot.staged.is_dirty());
+    }
+
+    struct MockPersistedStore(Option<PersistedCalibrationBlob>);
+
+    impl PersistedCalibrationStore for MockPersistedStore {
+        type Error = ();
+
+        fn load(&mut self) -> Result<Option<PersistedCalibrationBlob>, Self::Error> {
+            Ok(self.0)
+        }
+
+        fn save(&mut self, blob: &PersistedCalibrationBlob) -> Result<(), Self::Error> {
+            self.0 = Some(*blob);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn persisted_calibration_store_round_trips_blob() {
+        let blob = PersistedCalibrationBlob::default();
+
+        let mut store = MockPersistedStore(None);
+        store.save(&blob).unwrap();
+
+        assert_eq!(store.load().unwrap(), Some(blob));
+    }
+
+    #[test]
+    fn calibration_diff_carries_revision_metadata() {
+        let active = ActiveCalibration::new(CalibrationRevision::new(2), Calibration::default());
+        let staged = StagedCalibration::new(CalibrationRevision::new(5), Calibration::default());
+        let diff = CalibrationDiff::from_views(active, staged, CalibrationClass::RuntimeSafe);
+
+        assert_eq!(diff.base_revision.get(), 2);
+        assert_eq!(diff.staged_revision.get(), 5);
+        assert_eq!(diff.class, CalibrationClass::RuntimeSafe);
+    }
+
+    #[test]
+    fn commit_rules_allow_metadata_and_runtime_safe_changes_when_safe() {
+        let diff = CalibrationDiff::new(
+            CalibrationRevision::new(1),
+            CalibrationRevision::new(2),
+            CalibrationClass::MetadataOnly,
+        );
+
+        assert_eq!(
+            CommitRules::evaluate(ecu_domain::CommitPolicy::Immediate, diff, false),
+            CommitVerdict::AllowNow
+        );
+
+        let diff = CalibrationDiff::new(
+            CalibrationRevision::new(1),
+            CalibrationRevision::new(2),
+            CalibrationClass::RuntimeSensitive,
+        );
+
+        assert_eq!(
+            CommitRules::evaluate(ecu_domain::CommitPolicy::SafeOnly, diff, false),
+            CommitVerdict::Defer
+        );
+        assert_eq!(
+            CommitRules::evaluate(ecu_domain::CommitPolicy::SafeOnly, diff, true),
+            CommitVerdict::AllowNow
+        );
+    }
+
+    #[test]
+    fn commit_rules_defer_all_when_policy_is_deferred() {
+        let diff = CalibrationDiff::new(
+            CalibrationRevision::new(1),
+            CalibrationRevision::new(3),
+            CalibrationClass::Mixed,
+        );
+
+        assert_eq!(
+            CommitRules::evaluate(ecu_domain::CommitPolicy::Deferred, diff, true),
+            CommitVerdict::Defer
+        );
+    }
+
+    #[test]
+    fn persisted_blob_carries_schema_version_and_revision_metadata() {
+        let mut staged =
+            StagedCalibration::new(CalibrationRevision::new(4), Calibration::default());
+        staged.mark_dirty();
+        let snapshot = CalibrationSnapshot {
+            active: ActiveCalibration::new(CalibrationRevision::new(9), Calibration::default()),
+            staged,
+        };
+        let blob = PersistedCalibrationBlob::new(snapshot);
+
+        assert_eq!(blob.schema_version(), CalibrationSchemaVersion::CURRENT);
+        assert_eq!(blob.revision().get(), 9);
+        assert_eq!(blob.snapshot(), snapshot);
+    }
+
+    #[test]
+    fn calibration_package_identity_from_default_snapshot_is_empty() {
+        let identity = CalibrationPackageIdentity::from_snapshot(CalibrationSnapshot::default());
+
+        assert_eq!(identity.schema_version, CalibrationSchemaVersion::CURRENT);
+        assert_eq!(identity.active_revision, CalibrationRevision::default());
+        assert_eq!(
+            identity.staged_base_revision,
+            CalibrationRevision::default()
+        );
+        assert_eq!(identity.staged_revision, CalibrationRevision::default());
+        assert!(!identity.staged_dirty);
+        assert_eq!(
+            identity.checksum,
+            CalibrationPackageChecksum::from_snapshot(
+                CalibrationSchemaVersion::CURRENT,
+                CalibrationSnapshot::default(),
+                false,
+            )
+        );
+    }
+
+    #[test]
+    fn calibration_package_identity_from_dirty_snapshot_carries_revisions_and_dirty_flag() {
+        let mut staged =
+            StagedCalibration::new(CalibrationRevision::new(4), Calibration::default());
+        staged.mark_dirty();
+        let snapshot = CalibrationSnapshot {
+            active: ActiveCalibration::new(CalibrationRevision::new(9), Calibration::default()),
+            staged,
+        };
+
+        let identity = CalibrationPackageIdentity::from_snapshot(snapshot);
+
+        assert_eq!(identity.schema_version, CalibrationSchemaVersion::CURRENT);
+        assert_eq!(identity.active_revision, CalibrationRevision::new(9));
+        assert_eq!(identity.staged_base_revision, CalibrationRevision::new(4));
+        assert_eq!(identity.staged_revision, CalibrationRevision::new(5));
+        assert!(identity.staged_dirty);
+        assert_eq!(
+            identity.checksum,
+            CalibrationPackageChecksum::from_snapshot(
+                CalibrationSchemaVersion::CURRENT,
+                snapshot,
+                true,
+            )
+        );
+    }
+
+    #[test]
+    fn calibration_package_identity_from_blob_uses_blob_schema_version_and_snapshot_revisions() {
+        let mut staged =
+            StagedCalibration::new(CalibrationRevision::new(4), Calibration::default());
+        staged.mark_dirty();
+        let snapshot = CalibrationSnapshot {
+            active: ActiveCalibration::new(CalibrationRevision::new(9), Calibration::default()),
+            staged,
+        };
+        let blob = PersistedCalibrationBlob::new(snapshot);
+
+        let identity = CalibrationPackageIdentity::from_blob(blob);
+
+        assert_eq!(identity.schema_version, CalibrationSchemaVersion::CURRENT);
+        assert_eq!(identity.active_revision, CalibrationRevision::new(9));
+        assert_eq!(identity.staged_base_revision, CalibrationRevision::new(4));
+        assert_eq!(identity.staged_revision, CalibrationRevision::new(5));
+        assert!(identity.staged_dirty);
+        assert_eq!(
+            identity.checksum,
+            CalibrationPackageChecksum::from_blob(blob)
+        );
+    }
+
+    #[test]
+    fn calibration_package_checksum_changes_with_package_payload() {
+        let base = CalibrationSnapshot::default();
+        let mut active_calibration = Calibration::default();
+        active_calibration.set_expert_trigger(sample_wire_expert_trigger(0xA11C_E550, 100));
+        let changed = CalibrationSnapshot {
+            active: ActiveCalibration::new(CalibrationRevision::new(1), active_calibration),
+            staged: StagedCalibration::default(),
+        };
+
+        let base_checksum = CalibrationPackageIdentity::from_snapshot(base).checksum;
+        let changed_checksum = CalibrationPackageIdentity::from_snapshot(changed).checksum;
+
+        assert_ne!(base_checksum, changed_checksum);
+        assert_ne!(base_checksum.get(), 0);
+        assert_ne!(changed_checksum.get(), 0);
+    }
+
+    #[test]
+    fn calibration_package_checksum_changes_between_invalid_trigger_payloads() {
+        let first_trigger = ExpertTriggerCalibration {
+            primary_base_teeth: 0,
+            profile_hash: 0x1111_2222,
+            ..ExpertTriggerCalibration::default()
+        };
+        let mut first_calibration = Calibration::default();
+        first_calibration.set_expert_trigger(first_trigger);
+
+        let mut second_trigger = first_trigger;
+        second_trigger.profile_hash = 0x3333_4444;
+        let mut second_calibration = Calibration::default();
+        second_calibration.set_expert_trigger(second_trigger);
+
+        let first = CalibrationPackageIdentity::from_snapshot(CalibrationSnapshot {
+            active: ActiveCalibration::new(CalibrationRevision::default(), first_calibration),
+            staged: StagedCalibration::default(),
+        });
+        let second = CalibrationPackageIdentity::from_snapshot(CalibrationSnapshot {
+            active: ActiveCalibration::new(CalibrationRevision::default(), second_calibration),
+            staged: StagedCalibration::default(),
+        });
+
+        assert_ne!(first.checksum, second.checksum);
+    }
+
+    #[test]
+    fn calibration_package_target_identity_from_snapshot_carries_target_metadata() {
+        let mut staged =
+            StagedCalibration::new(CalibrationRevision::new(4), Calibration::default());
+        staged.mark_dirty();
+        let snapshot = CalibrationSnapshot {
+            active: ActiveCalibration::new(CalibrationRevision::new(9), Calibration::default()),
+            staged,
+        };
+
+        let identity = CalibrationPackageTargetIdentity::from_snapshot(
+            snapshot,
+            CalibrationRuntimeBuildId::new(0x1234_5678),
+            CalibrationHardwareTargetId::new(0x2040),
+        );
+
+        assert_eq!(
+            identity.package.schema_version,
+            CalibrationSchemaVersion::CURRENT
+        );
+        assert_eq!(
+            identity.package.active_revision,
+            CalibrationRevision::new(9)
+        );
+        assert_eq!(
+            identity.package.staged_base_revision,
+            CalibrationRevision::new(4)
+        );
+        assert_eq!(
+            identity.package.staged_revision,
+            CalibrationRevision::new(5)
+        );
+        assert!(identity.package.staged_dirty);
+        assert_eq!(identity.runtime_build_id.get(), 0x1234_5678);
+        assert_eq!(identity.hardware_target_id.get(), 0x2040);
+    }
+
+    #[test]
+    fn persisted_calibration_package_from_blob_carries_identity_and_blob() {
+        let mut staged =
+            StagedCalibration::new(CalibrationRevision::new(4), Calibration::default());
+        staged.mark_dirty();
+        let snapshot = CalibrationSnapshot {
+            active: ActiveCalibration::new(CalibrationRevision::new(9), Calibration::default()),
+            staged,
+        };
+        let blob = PersistedCalibrationBlob::new(snapshot);
+
+        let package = PersistedCalibrationPackage::new(
+            blob,
+            CalibrationRuntimeBuildId::new(0x0000_0007),
+            CalibrationHardwareTargetId::new(0x00A7),
+        );
+
+        assert_eq!(package.blob, blob);
+        assert_eq!(
+            package.identity.package,
+            CalibrationPackageIdentity::from_blob(blob)
+        );
+        assert_eq!(package.identity.runtime_build_id.get(), 0x0000_0007);
+        assert_eq!(package.identity.hardware_target_id.get(), 0x00A7);
+    }
+
+    #[test]
+    fn calibration_package_target_identity_reports_compatibility_and_mismatches() {
+        let identity = CalibrationPackageTargetIdentity::from_snapshot(
+            CalibrationSnapshot::default(),
+            CalibrationRuntimeBuildId::new(0x1234_5678),
+            CalibrationHardwareTargetId::new(0x2040),
+        );
+
+        assert_eq!(
+            identity.compatibility_with(
+                CalibrationRuntimeBuildId::new(0x1234_5678),
+                CalibrationHardwareTargetId::new(0x2040),
+            ),
+            CalibrationPackageCompatibility::Compatible
+        );
+        assert_eq!(
+            identity.compatibility_with(
+                CalibrationRuntimeBuildId::new(0x8765_4321),
+                CalibrationHardwareTargetId::new(0x2040),
+            ),
+            CalibrationPackageCompatibility::RuntimeBuildMismatch {
+                expected: CalibrationRuntimeBuildId::new(0x8765_4321),
+                actual: CalibrationRuntimeBuildId::new(0x1234_5678),
+            }
+        );
+        assert_eq!(
+            identity.compatibility_with(
+                CalibrationRuntimeBuildId::new(0x1234_5678),
+                CalibrationHardwareTargetId::new(0xF405),
+            ),
+            CalibrationPackageCompatibility::HardwareTargetMismatch {
+                expected: CalibrationHardwareTargetId::new(0xF405),
+                actual: CalibrationHardwareTargetId::new(0x2040),
+            }
+        );
+
+        let legacy_identity = CalibrationPackageTargetIdentity {
+            package: CalibrationPackageIdentity {
+                schema_version: CalibrationSchemaVersion::new(0),
+                ..CalibrationPackageIdentity::default()
+            },
+            runtime_build_id: CalibrationRuntimeBuildId::new(0x1234_5678),
+            hardware_target_id: CalibrationHardwareTargetId::new(0x2040),
+        };
+        assert_eq!(
+            legacy_identity.compatibility_with(
+                CalibrationRuntimeBuildId::new(0x1234_5678),
+                CalibrationHardwareTargetId::new(0x2040),
+            ),
+            CalibrationPackageCompatibility::SchemaVersionMismatch {
+                expected: CalibrationSchemaVersion::CURRENT,
+                actual: CalibrationSchemaVersion::new(0),
+            }
+        );
+    }
+
+    #[test]
+    fn persisted_calibration_package_review_marks_current_package_compatible_without_migration() {
+        let package = PersistedCalibrationPackage::new(
+            PersistedCalibrationBlob::default(),
+            CalibrationRuntimeBuildId::new(0x1234_5678),
+            CalibrationHardwareTargetId::new(0x2040),
+        );
+
+        let review = package.review_against(
+            CalibrationRuntimeBuildId::new(0x1234_5678),
+            CalibrationHardwareTargetId::new(0x2040),
+        );
+
+        assert_eq!(review.package, package.identity);
+        assert_eq!(
+            review.compatibility,
+            CalibrationPackageCompatibility::Compatible
+        );
+        assert_eq!(
+            review.migration,
+            CalibrationPackageMigrationStatus::NoMigrationRequired
+        );
+    }
+
+    #[test]
+    fn persisted_calibration_package_review_reports_target_mismatch_without_migration() {
+        let package = PersistedCalibrationPackage::new(
+            PersistedCalibrationBlob::default(),
+            CalibrationRuntimeBuildId::new(0x1234_5678),
+            CalibrationHardwareTargetId::new(0x2040),
+        );
+
+        let review = package.review_against(
+            CalibrationRuntimeBuildId::new(0x8765_4321),
+            CalibrationHardwareTargetId::new(0x2040),
+        );
+
+        assert_eq!(review.package, package.identity);
+        assert_eq!(
+            review.compatibility,
+            CalibrationPackageCompatibility::RuntimeBuildMismatch {
+                expected: CalibrationRuntimeBuildId::new(0x8765_4321),
+                actual: CalibrationRuntimeBuildId::new(0x1234_5678),
+            }
+        );
+        assert_eq!(
+            review.migration,
+            CalibrationPackageMigrationStatus::NoMigrationRequired
+        );
+    }
+
+    #[test]
+    fn persisted_calibration_package_review_marks_older_schema_as_migration_required() {
+        let blob = PersistedCalibrationBlob::default();
+        let package = PersistedCalibrationPackage {
+            blob,
+            identity: CalibrationPackageTargetIdentity {
+                package: CalibrationPackageIdentity {
+                    schema_version: CalibrationSchemaVersion::new(0),
+                    ..CalibrationPackageIdentity::from_blob(blob)
+                },
+                runtime_build_id: CalibrationRuntimeBuildId::new(0x1234_5678),
+                hardware_target_id: CalibrationHardwareTargetId::new(0x2040),
+            },
+        };
+
+        let review = package.review_against(
+            CalibrationRuntimeBuildId::new(0x1234_5678),
+            CalibrationHardwareTargetId::new(0x2040),
+        );
+
+        assert_eq!(review.package, package.identity);
+        assert_eq!(
+            review.compatibility,
+            CalibrationPackageCompatibility::SchemaVersionMismatch {
+                expected: CalibrationSchemaVersion::CURRENT,
+                actual: CalibrationSchemaVersion::new(0),
+            }
+        );
+        assert_eq!(
+            review.migration,
+            CalibrationPackageMigrationStatus::MigrationRequired {
+                from: CalibrationSchemaVersion::new(0),
+                to: CalibrationSchemaVersion::CURRENT,
+            }
+        );
+    }
+
+    #[test]
+    fn persisted_calibration_package_compare_reports_no_change_for_identical_identity() {
+        let current = PersistedCalibrationPackage::new(
+            PersistedCalibrationBlob::default(),
+            CalibrationRuntimeBuildId::new(0x1234_5678),
+            CalibrationHardwareTargetId::new(0x2040),
+        );
+
+        let compare = current.compare_against(current);
+
+        assert_eq!(compare.current, current.identity);
+        assert_eq!(compare.candidate, current.identity);
+        assert!(!compare.any_change());
+        assert!(!compare.schema_changed);
+        assert!(!compare.runtime_build_changed);
+        assert!(!compare.hardware_target_changed);
+        assert!(!compare.checksum_changed);
+        assert!(!compare.active_revision_changed);
+        assert!(!compare.staged_base_revision_changed);
+        assert!(!compare.staged_revision_changed);
+        assert!(!compare.staged_dirty_changed);
+    }
+
+    #[test]
+    fn persisted_calibration_package_compare_reports_revision_change() {
+        let current = PersistedCalibrationPackage::new(
+            PersistedCalibrationBlob::default(),
+            CalibrationRuntimeBuildId::new(0x1234_5678),
+            CalibrationHardwareTargetId::new(0x2040),
+        );
+        let candidate_blob = PersistedCalibrationBlob::new(CalibrationSnapshot {
+            active: ActiveCalibration::new(CalibrationRevision::new(9), Calibration::default()),
+            staged: StagedCalibration::new(CalibrationRevision::new(9), Calibration::default()),
+        });
+        let candidate = PersistedCalibrationPackage::new(
+            candidate_blob,
+            CalibrationRuntimeBuildId::new(0x1234_5678),
+            CalibrationHardwareTargetId::new(0x2040),
+        );
+
+        let compare = current.compare_against(candidate);
+
+        assert!(compare.any_change());
+        assert!(!compare.schema_changed);
+        assert!(!compare.runtime_build_changed);
+        assert!(!compare.hardware_target_changed);
+        assert!(compare.checksum_changed);
+        assert!(compare.active_revision_changed);
+        assert!(compare.staged_base_revision_changed);
+        assert!(compare.staged_revision_changed);
+        assert!(!compare.staged_dirty_changed);
+    }
+
+    #[test]
+    fn persisted_calibration_package_compare_reports_target_change() {
+        let current = PersistedCalibrationPackage::new(
+            PersistedCalibrationBlob::default(),
+            CalibrationRuntimeBuildId::new(0x1234_5678),
+            CalibrationHardwareTargetId::new(0x2040),
+        );
+        let candidate = PersistedCalibrationPackage::new(
+            PersistedCalibrationBlob::default(),
+            CalibrationRuntimeBuildId::new(0x8765_4321),
+            CalibrationHardwareTargetId::new(0xF405),
+        );
+
+        let compare = current.compare_against(candidate);
+
+        assert!(compare.any_change());
+        assert!(!compare.schema_changed);
+        assert!(!compare.checksum_changed);
+        assert!(compare.runtime_build_changed);
+        assert!(compare.hardware_target_changed);
+        assert!(!compare.active_revision_changed);
+        assert!(!compare.staged_base_revision_changed);
+        assert!(!compare.staged_revision_changed);
+        assert!(!compare.staged_dirty_changed);
+    }
+
+    #[test]
+    fn persisted_calibration_package_compare_reports_checksum_only_change() {
+        let current = PersistedCalibrationPackage::new(
+            PersistedCalibrationBlob::default(),
+            CalibrationRuntimeBuildId::new(0x1234_5678),
+            CalibrationHardwareTargetId::new(0x2040),
+        );
+        let mut active_calibration = Calibration::default();
+        active_calibration.set_expert_trigger(sample_wire_expert_trigger(0xA11C_E550, 100));
+        let candidate_blob = PersistedCalibrationBlob::new(CalibrationSnapshot {
+            active: ActiveCalibration::new(CalibrationRevision::default(), active_calibration),
+            staged: StagedCalibration::default(),
+        });
+        let candidate = PersistedCalibrationPackage::new(
+            candidate_blob,
+            CalibrationRuntimeBuildId::new(0x1234_5678),
+            CalibrationHardwareTargetId::new(0x2040),
+        );
+
+        let compare = current.compare_against(candidate);
+
+        assert!(compare.any_change());
+        assert!(!compare.schema_changed);
+        assert!(compare.checksum_changed);
+        assert!(!compare.runtime_build_changed);
+        assert!(!compare.hardware_target_changed);
+        assert!(!compare.active_revision_changed);
+        assert!(!compare.staged_base_revision_changed);
+        assert!(!compare.staged_revision_changed);
+        assert!(!compare.staged_dirty_changed);
+    }
+
+    #[test]
+    fn persisted_calibration_package_migration_leaves_current_package_unchanged() {
+        let package = PersistedCalibrationPackage::new(
+            PersistedCalibrationBlob::default(),
+            CalibrationRuntimeBuildId::new(0x1234_5678),
+            CalibrationHardwareTargetId::new(0x2040),
+        );
+
+        let migrated = package.migrate_against(
+            CalibrationRuntimeBuildId::new(0x1234_5678),
+            CalibrationHardwareTargetId::new(0x2040),
+        );
+
+        assert_eq!(
+            migrated,
+            CalibrationPackageMigrationResult::Unchanged {
+                review: package.review_against(
+                    CalibrationRuntimeBuildId::new(0x1234_5678),
+                    CalibrationHardwareTargetId::new(0x2040),
+                ),
+                package,
+            }
+        );
+    }
+
+    #[test]
+    fn persisted_calibration_package_migration_normalizes_older_schema_package() {
+        let snapshot = CalibrationSnapshot {
+            active: ActiveCalibration::new(CalibrationRevision::new(9), Calibration::default()),
+            staged: StagedCalibration::new(CalibrationRevision::new(9), Calibration::default()),
+        };
+        let blob = PersistedCalibrationBlob::new_with_schema_version_for_test(
+            snapshot,
+            CalibrationSchemaVersion::new(0),
+        );
+        let legacy = PersistedCalibrationPackage {
+            blob,
+            identity: CalibrationPackageTargetIdentity {
+                package: CalibrationPackageIdentity::from_blob(blob),
+                runtime_build_id: CalibrationRuntimeBuildId::new(0x1234_5678),
+                hardware_target_id: CalibrationHardwareTargetId::new(0x2040),
+            },
+        };
+
+        let migrated = legacy.migrate_against(
+            CalibrationRuntimeBuildId::new(0x1234_5678),
+            CalibrationHardwareTargetId::new(0x2040),
+        );
+
+        let CalibrationPackageMigrationResult::Migrated { review, package } = migrated else {
+            panic!("expected migrated package result");
+        };
+
+        assert_eq!(
+            review,
+            legacy.review_against(
+                CalibrationRuntimeBuildId::new(0x1234_5678),
+                CalibrationHardwareTargetId::new(0x2040),
+            )
+        );
+        assert_eq!(
+            review.compatibility,
+            CalibrationPackageCompatibility::SchemaVersionMismatch {
+                expected: CalibrationSchemaVersion::CURRENT,
+                actual: CalibrationSchemaVersion::new(0),
+            }
+        );
+        assert_eq!(
+            review.migration,
+            CalibrationPackageMigrationStatus::MigrationRequired {
+                from: CalibrationSchemaVersion::new(0),
+                to: CalibrationSchemaVersion::CURRENT,
+            }
+        );
+        assert_eq!(
+            package.identity.package.schema_version,
+            CalibrationSchemaVersion::CURRENT
+        );
+        assert_eq!(
+            package.blob.schema_version(),
+            CalibrationSchemaVersion::CURRENT
+        );
+        assert_eq!(package.identity.runtime_build_id.get(), 0x1234_5678);
+        assert_eq!(package.identity.hardware_target_id.get(), 0x2040);
+        assert_eq!(package.blob.snapshot(), legacy.blob.snapshot());
+    }
+
+    #[test]
+    fn persisted_calibration_package_migration_rejects_runtime_build_mismatch() {
+        let package = PersistedCalibrationPackage::new(
+            PersistedCalibrationBlob::default(),
+            CalibrationRuntimeBuildId::new(0x1234_5678),
+            CalibrationHardwareTargetId::new(0x2040),
+        );
+
+        let migrated = package.migrate_against(
+            CalibrationRuntimeBuildId::new(0x8765_4321),
+            CalibrationHardwareTargetId::new(0x2040),
+        );
+
+        assert_eq!(
+            migrated,
+            CalibrationPackageMigrationResult::Rejected {
+                review: package.review_against(
+                    CalibrationRuntimeBuildId::new(0x8765_4321),
+                    CalibrationHardwareTargetId::new(0x2040),
+                ),
+            }
+        );
+    }
+
+    #[test]
+    fn persisted_calibration_package_wire_roundtrips_current_package() {
+        let mut active_calibration = Calibration::default();
+        active_calibration.set_expert_trigger(sample_wire_expert_trigger(0xA11C_E550, 100));
+        let mut staged_calibration = Calibration::default();
+        staged_calibration.set_expert_trigger(sample_wire_expert_trigger(0xB11C_E551, 250));
+        let package = PersistedCalibrationPackage::new(
+            PersistedCalibrationBlob::new(CalibrationSnapshot {
+                active: ActiveCalibration::new(CalibrationRevision::new(9), active_calibration),
+                staged: {
+                    let mut staged =
+                        StagedCalibration::new(CalibrationRevision::new(4), staged_calibration);
+                    staged.mark_dirty();
+                    staged
+                },
+            }),
+            CalibrationRuntimeBuildId::new(0x1234_5678),
+            CalibrationHardwareTargetId::new(0x2040),
+        );
+        let mut bytes = [0u8; PersistedCalibrationPackage::WIRE_LEN];
+
+        let len = package.encode_wire(&mut bytes).expect("encode package");
+        let decoded = PersistedCalibrationPackage::decode_wire(&bytes).expect("decode package");
+
+        assert_eq!(len, PersistedCalibrationPackage::WIRE_LEN);
+        assert_eq!(decoded, package);
+    }
+
+    #[test]
+    fn persisted_calibration_package_wire_preserves_metadata_and_snapshot() {
+        let mut active_calibration = Calibration::default();
+        active_calibration.set_expert_trigger(sample_wire_expert_trigger(0xA11C_E550, 100));
+        let mut staged_calibration = Calibration::default();
+        staged_calibration.set_expert_trigger(sample_wire_expert_trigger(0xB11C_E551, 250));
+        let package = PersistedCalibrationPackage::new(
+            PersistedCalibrationBlob::new(CalibrationSnapshot {
+                active: ActiveCalibration::new(CalibrationRevision::new(17), active_calibration),
+                staged: {
+                    let mut staged =
+                        StagedCalibration::new(CalibrationRevision::new(12), staged_calibration);
+                    staged.mark_dirty();
+                    staged
+                },
+            }),
+            CalibrationRuntimeBuildId::new(0x8765_4321),
+            CalibrationHardwareTargetId::new(0xF405),
+        );
+        let mut bytes = [0u8; PersistedCalibrationPackage::WIRE_LEN];
+
+        package.encode_wire(&mut bytes).expect("encode package");
+        let decoded = PersistedCalibrationPackage::decode_wire(&bytes).expect("decode package");
+
+        assert_eq!(
+            decoded.identity.runtime_build_id,
+            package.identity.runtime_build_id
+        );
+        assert_eq!(
+            decoded.identity.hardware_target_id,
+            package.identity.hardware_target_id
+        );
+        assert_eq!(
+            decoded.identity.package.schema_version,
+            package.identity.package.schema_version
+        );
+        assert_eq!(
+            decoded.identity.package.active_revision,
+            package.identity.package.active_revision
+        );
+        assert_eq!(
+            decoded.identity.package.staged_base_revision,
+            package.identity.package.staged_base_revision
+        );
+        assert_eq!(
+            decoded.identity.package.staged_revision,
+            package.identity.package.staged_revision
+        );
+        assert_eq!(
+            decoded.identity.package.staged_dirty,
+            package.identity.package.staged_dirty
+        );
+        assert_eq!(decoded.blob.snapshot(), package.blob.snapshot());
+    }
+
+    #[test]
+    fn persisted_calibration_package_wire_rejects_truncated_bytes() {
+        let err = PersistedCalibrationPackage::decode_wire(&[0u8; 12]).expect_err("short wire");
+        assert_eq!(err, CalibrationPackageWireError::WrongSize);
+    }
+
+    #[test]
+    fn persisted_calibration_package_wire_rejects_malformed_expert_trigger_payload() {
+        let package = PersistedCalibrationPackage::new(
+            PersistedCalibrationBlob::default(),
+            CalibrationRuntimeBuildId::new(0x1234_5678),
+            CalibrationHardwareTargetId::new(0x2040),
+        );
+        let mut bytes = [0u8; PersistedCalibrationPackage::WIRE_LEN];
+        package.encode_wire(&mut bytes).expect("encode package");
+        let active_start = 28;
+        bytes[active_start + 29] = 0xFF;
+
+        let err = PersistedCalibrationPackage::decode_wire(&bytes).expect_err("malformed wire");
+        assert!(matches!(
+            err,
+            CalibrationPackageWireError::ActiveExpertTrigger(
+                ExpertTriggerRecordError::NonCanonicalRecord
+            )
+        ));
+    }
+}

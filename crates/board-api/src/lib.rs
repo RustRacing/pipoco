@@ -14,6 +14,7 @@
 #![forbid(unsafe_code)]
 
 mod capabilities;
+mod output_classes;
 mod output_profiles;
 mod safety;
 mod sensors;
@@ -46,6 +47,10 @@ pub mod frontier {
 pub use capabilities::{
     BoardCapabilities, BoardResourceLimits, IgnitionProfileId, LoadSourceCapabilities, PinMapId,
     ProfileId, RuntimeBuildId,
+};
+pub use output_classes::{
+    OutputClass, OutputCommandHeader, OutputCommandId, OutputDeadline, OutputRejectReason,
+    OutputStaleBehavior,
 };
 pub use output_profiles::{
     AuxSafetyProfile, FuelOutputMode, FuelOutputProfile, FullEcuOutputProfile,
@@ -87,9 +92,9 @@ pub use timing_island::{
     EcuOutput, EdgeBatch, EdgeKind, OutputLevel, OutputTransition, OutputTransitionBatch,
     TimingIslandAdmissionReport, TimingIslandCommand, TimingIslandCommandBatch, TimingIslandEvent,
     TimingIslandFaultStatus, TimingIslandHorizonSequenceId, TimingIslandMetricSnapshot,
-    TimingIslandPermitMask, TimingIslandRejectReason, TimingIslandStopReason,
-    TimingIslandSyncLossReason, TriggerEdge, HEARTBEAT_EXPIRY_US, HORIZON_SEQUENCE_BITS,
-    MAX_HORIZON_US,
+    TimingIslandOutputRequestFinalTrace, TimingIslandPermitMask, TimingIslandRejectReason,
+    TimingIslandStopReason, TimingIslandSyncLossReason, TriggerEdge, HEARTBEAT_EXPIRY_US,
+    HORIZON_SEQUENCE_BITS, MAX_HORIZON_US,
 };
 pub use traits::{
     AuxOutputSink, EcuClock, OutputScheduler, SensorSource, TelemetrySink, TriggerEdgeSource,

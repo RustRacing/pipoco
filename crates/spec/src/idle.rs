@@ -27,7 +27,8 @@ pub fn idle_step(
     let base = cal.0.idle_base_duty_x1000 as i32;
     let u_pre = base + p_term + acc;
 
-    let freeze_gate = input.clt_c10.0 < 700 || state.ae.active || input.fuel_cut || input.spark_cut;
+    let freeze_gate =
+        input.clt_c10.get() < 700 || state.ae.active || input.fuel_cut || input.spark_cut;
     let anti_windup_freeze = saturation_freeze(u_pre, i_step);
     let freeze = freeze_gate || anti_windup_freeze;
     let acc_next = if freeze {
@@ -61,7 +62,7 @@ pub fn idle_step(
 }
 
 fn effective_rpm_error(target: Rpm, measured: Rpm) -> i32 {
-    let raw = target.0 as i32 - measured.0 as i32;
+    let raw = target.get() as i32 - measured.get() as i32;
     if raw.abs() <= IDLE_DEADBAND_RPM {
         0
     } else {
@@ -87,14 +88,14 @@ mod tests {
     #[test]
     fn deadband_zeroes_p_and_i_terms() {
         let mut cal = default_reference_calibration();
-        cal.0.idle_target_rpm = Rpm(1000);
+        cal.0.idle_target_rpm = Rpm::new(1000);
         cal.0.idle_base_duty_x1000 = 350;
         cal.0.idle_kp_x1000 = 300;
         cal.0.idle_ki_x1000 = 500;
         let input = InputSnapshot {
-            rpm: Rpm(1010),
+            rpm: Rpm::new(1010),
             mode: EngineMode::Running,
-            clt_c10: TempC10(800),
+            clt_c10: TempC10::new(800),
             ..InputSnapshot::default()
         };
         let state = LogicalState::default();
@@ -106,13 +107,13 @@ mod tests {
     #[test]
     fn anti_windup_freezes_when_saturated_and_i_pushes_farther() {
         let mut cal = default_reference_calibration();
-        cal.0.idle_target_rpm = Rpm(3000);
+        cal.0.idle_target_rpm = Rpm::new(3000);
         cal.0.idle_base_duty_x1000 = 1000;
         cal.0.idle_kp_x1000 = 0;
         cal.0.idle_ki_x1000 = 1000;
         let input = InputSnapshot {
-            rpm: Rpm(2500),
-            clt_c10: TempC10(800),
+            rpm: Rpm::new(2500),
+            clt_c10: TempC10::new(800),
             ..InputSnapshot::default()
         };
         let state = LogicalState {
@@ -131,13 +132,13 @@ mod tests {
     #[test]
     fn freeze_gate_holds_integrator_when_engine_is_cold() {
         let mut cal = default_reference_calibration();
-        cal.0.idle_target_rpm = Rpm(1200);
+        cal.0.idle_target_rpm = Rpm::new(1200);
         cal.0.idle_base_duty_x1000 = 300;
         cal.0.idle_kp_x1000 = 0;
         cal.0.idle_ki_x1000 = 1000;
         let input = InputSnapshot {
-            rpm: Rpm(1000),
-            clt_c10: TempC10(650),
+            rpm: Rpm::new(1000),
+            clt_c10: TempC10::new(650),
             ..InputSnapshot::default()
         };
         let state = LogicalState {

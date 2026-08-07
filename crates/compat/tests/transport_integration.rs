@@ -64,7 +64,7 @@ impl<T: Transport> ManagementEngine<T> {
                 } => {
                     if synced {
                         // Calculate exact RPM from gap period
-                        let exact_rpm = 2_068_966_u32 / gap_period_us;
+                        let exact_rpm = ecu_domain::RPM_CALC_NUMERATOR_EXACT / gap_period_us;
                         println!("Injection module synced, RPM: {exact_rpm}");
                     }
                 }

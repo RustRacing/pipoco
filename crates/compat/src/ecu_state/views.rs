@@ -24,37 +24,19 @@ impl EcuState {
         self.calculate_ignition_timing(rpm, load)
     }
 
-    /// Runtime mirror of the current scalar inputs exposed on `EcuState`.
+    /// Runtime mirror of the current scalar inputs (single source of truth:
+    /// the `EcuInputs` mirror; no public scalar fields remain to drift).
     pub fn runtime_signals(&self) -> RuntimeSignals {
         RuntimeSignals {
-            rpm: self.rpm,
-            synced: self.synced,
-            tooth_count: self.tooth_count,
+            rpm: self.inputs.rpm,
+            synced: self.inputs.synced,
+            tooth_count: self.inputs.tooth_count,
             battery_voltage_mv: self.inputs.battery_voltage_mv,
-            clt_x10: self.clt_x10,
-            iat_x10: self.iat_x10,
-            tps_percent: self.tps_percent,
-            map_kpa_x10: self.map_kpa_x10,
+            clt_x10: self.inputs.clt_x10,
+            iat_x10: self.inputs.iat_x10,
+            tps_percent: self.inputs.tps_percent,
+            map_kpa_x10: self.inputs.map_kpa_x10,
         }
-    }
-
-    /// Whether the legacy public scalar fields still match the split runtime
-    /// input mirror.
-    ///
-    /// The public scalar fields remain for compatibility. New code should use
-    /// the setter/accessor methods so both representations stay synchronized.
-    pub fn runtime_signal_mirrors_consistent(&self) -> bool {
-        self.runtime_signals()
-            == RuntimeSignals {
-                rpm: self.inputs.rpm,
-                synced: self.inputs.synced,
-                tooth_count: self.inputs.tooth_count,
-                battery_voltage_mv: self.inputs.battery_voltage_mv,
-                clt_x10: self.inputs.clt_x10,
-                iat_x10: self.inputs.iat_x10,
-                tps_percent: self.inputs.tps_percent,
-                map_kpa_x10: self.inputs.map_kpa_x10,
-            }
     }
 
     /// Current RPM.

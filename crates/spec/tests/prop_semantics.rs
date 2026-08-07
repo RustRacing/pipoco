@@ -288,12 +288,12 @@ fn valid_state() -> impl Strategy<Value = LogicalState> {
             )| {
                 LogicalState {
                     math: MathState {
-                        last_valid_map_kpa10: Kpa10((1000i32 + map_delta as i32) as u16),
-                        last_valid_load_kpa10: Kpa10((1000i32 + load_delta as i32) as u16),
-                        last_valid_clt_c10: TempC10(clt_delta),
-                        last_valid_iat_c10: TempC10(iat_delta),
-                        last_valid_baro_kpa10: Kpa10((1000i32 + baro_delta as i32) as u16),
-                        trim_ratio_x1000: RatioX1000((1000i32 + trim_delta as i32) as u16),
+                        last_valid_map_kpa10: Kpa10::new((1000i32 + map_delta as i32) as u16),
+                        last_valid_load_kpa10: Kpa10::new((1000i32 + load_delta as i32) as u16),
+                        last_valid_clt_c10: TempC10::new(clt_delta),
+                        last_valid_iat_c10: TempC10::new(iat_delta),
+                        last_valid_baro_kpa10: Kpa10::new((1000i32 + baro_delta as i32) as u16),
+                        trim_ratio_x1000: RatioX1000::new((1000i32 + trim_delta as i32) as u16),
                     },
                     scheduler: SchedulerState {
                         pending: EventBatch::default(),
@@ -358,19 +358,19 @@ fn canonical_calibration(mode: InjectionAngleMode) -> ValidatedCalibration {
         ae_shot_curve_us: uniform_curve(&[100, 3000], 0),
         ae_decay_steps_curve: uniform_curve(&[100, 3000], 0),
         ae_decay_ratio_curve_x1000: uniform_curve(&[0, 16], 1000),
-        dfco_entry_rpm: Rpm(20_000),
-        dfco_exit_rpm: Rpm(19_000),
+        dfco_entry_rpm: Rpm::new(20_000),
+        dfco_exit_rpm: Rpm::new(19_000),
         dfco_entry_tps_x100: 0,
         dfco_exit_tps_x100: 100,
-        dfco_entry_map_kpa10: Kpa10(0),
+        dfco_entry_map_kpa10: Kpa10::new(0),
         dfco_delay_cycles: 0,
-        soft_rev_rpm: Rpm(19_500),
-        hard_rev_rpm: Rpm(20_000),
-        rev_hysteresis_rpm: Rpm(100),
+        soft_rev_rpm: Rpm::new(19_500),
+        hard_rev_rpm: Rpm::new(20_000),
+        rev_hysteresis_rpm: Rpm::new(100),
         soft_retard_max_deg10: 0,
-        launch_rpm_limit: Rpm(20_000),
+        launch_rpm_limit: Rpm::new(20_000),
         launch_cut_cycles: 0,
-        flat_shift_rpm_min: Rpm(20_000),
+        flat_shift_rpm_min: Rpm::new(20_000),
         flat_shift_cut_cycles: 0,
         knock_threshold_x100: 500,
         knock_retard_step_deg10: 20,
@@ -379,13 +379,13 @@ fn canonical_calibration(mode: InjectionAngleMode) -> ValidatedCalibration {
         knock_recovery_delay_cycles: 2,
         tps_adc_min_counts: 0,
         tps_adc_max_counts: 4095,
-        idle_target_rpm: Rpm(900),
+        idle_target_rpm: Rpm::new(900),
         idle_base_duty_x1000: 0,
         idle_kp_x1000: 0,
         idle_ki_x1000: 0,
         idle_timing_enabled: false,
         idle_timing_pid_enabled: false,
-        idle_timing_rpm_max: Rpm(1200),
+        idle_timing_rpm_max: Rpm::new(1200),
         idle_timing_tps_max_x100: 200,
         idle_advance_curve_deg10: signed_curve_2x2(&[500, 1000], 0, 0),
         idle_timing_kp_x1000: 0,
@@ -535,7 +535,7 @@ fn valid_input() -> impl Strategy<Value = InputSnapshot> {
         any::<bool>(),
         prop_oneof![
             Just(AfrOverride::None),
-            (500u16..3000).prop_map(|value| AfrOverride::Some(AfrX100(value))),
+            (500u16..3000).prop_map(|value| AfrOverride::Some(AfrX100::new(value))),
         ],
     )
         .prop_map(
@@ -554,15 +554,15 @@ fn valid_input() -> impl Strategy<Value = InputSnapshot> {
                 target_afr_override_x100,
             )| {
                 InputSnapshot {
-                    t_us: Micros(t_us),
-                    rpm: Rpm(rpm),
-                    map_kpa10: Kpa10(map_kpa10),
-                    load_kpa10: Kpa10(load_kpa10),
+                    t_us: Micros::new(t_us),
+                    rpm: Rpm::new(rpm),
+                    map_kpa10: Kpa10::new(map_kpa10),
+                    load_kpa10: Kpa10::new(load_kpa10),
                     tps_x100: 0,
-                    clt_c10: TempC10(clt_c10),
-                    iat_c10: TempC10(iat_c10),
-                    baro_kpa10: Kpa10(baro_kpa10),
-                    vbatt_mv: Millivolts(vbatt_mv),
+                    clt_c10: TempC10::new(clt_c10),
+                    iat_c10: TempC10::new(iat_c10),
+                    baro_kpa10: Kpa10::new(baro_kpa10),
+                    vbatt_mv: Millivolts::new(vbatt_mv),
                     knock_intensity_x100: 0,
                     launch_armed: false,
                     flat_shift_armed: false,
@@ -641,10 +641,10 @@ proptest! {
         c11 in 0u16..20_000,
     ) {
         let table = table_u16_2x2(axis(&[rpm0, rpm1]), axis(&[load0, load1]), c00, c01, c10, c11);
-        prop_assert_eq!(bilerp_u16(&table, Rpm(rpm0), Kpa10(load0)), c00);
-        prop_assert_eq!(bilerp_u16(&table, Rpm(rpm1), Kpa10(load0)), c01);
-        prop_assert_eq!(bilerp_u16(&table, Rpm(rpm0), Kpa10(load1)), c10);
-        prop_assert_eq!(bilerp_u16(&table, Rpm(rpm1), Kpa10(load1)), c11);
+        prop_assert_eq!(bilerp_u16(&table, Rpm::new(rpm0), Kpa10::new(load0)), c00);
+        prop_assert_eq!(bilerp_u16(&table, Rpm::new(rpm1), Kpa10::new(load0)), c01);
+        prop_assert_eq!(bilerp_u16(&table, Rpm::new(rpm0), Kpa10::new(load1)), c10);
+        prop_assert_eq!(bilerp_u16(&table, Rpm::new(rpm1), Kpa10::new(load1)), c11);
     }
 
     #[test]
@@ -657,8 +657,8 @@ proptest! {
         c11 in 0u16..20_000,
     ) {
         let table = table_u16_2x2(axis(&[rpm0, rpm1]), axis(&[load0, load1]), c00, c01, c10, c11);
-        let clipped = bilerp_u16(&table, Rpm(rpm0.saturating_sub(1)), Kpa10(load0.saturating_sub(1)));
-        let lower = bilerp_u16(&table, Rpm(rpm0), Kpa10(load0));
+        let clipped = bilerp_u16(&table, Rpm::new(rpm0.saturating_sub(1)), Kpa10::new(load0.saturating_sub(1)));
+        let lower = bilerp_u16(&table, Rpm::new(rpm0), Kpa10::new(load0));
         prop_assert_eq!(clipped, lower);
         prop_assert_eq!(clipped, c00);
     }
@@ -673,8 +673,8 @@ proptest! {
         c11 in 0u16..20_000,
     ) {
         let table = table_u16_2x2(axis(&[rpm0, rpm1]), axis(&[load0, load1]), c00, c01, c10, c11);
-        let clipped = bilerp_u16(&table, Rpm(rpm1 + 1), Kpa10(load1 + 1));
-        let upper = bilerp_u16(&table, Rpm(rpm1), Kpa10(load1));
+        let clipped = bilerp_u16(&table, Rpm::new(rpm1 + 1), Kpa10::new(load1 + 1));
+        let upper = bilerp_u16(&table, Rpm::new(rpm1), Kpa10::new(load1));
         prop_assert_eq!(clipped, upper);
         prop_assert_eq!(clipped, c11);
     }
@@ -710,7 +710,7 @@ proptest! {
         let table = table_u16_2x2(axis(&[rpm0, rpm1]), axis(&[load0, load1]), c00, c01, c10, c11);
         let rpm = rpm0 + (rpm_gap / 2);
         let load = load0 + (load_gap / 2);
-        let out = bilerp_u16(&table, Rpm(rpm), Kpa10(load));
+        let out = bilerp_u16(&table, Rpm::new(rpm), Kpa10::new(load));
         let lo = c00.min(c01).min(c10).min(c11);
         let hi = c00.max(c01).max(c10).max(c11);
         prop_assert!(out >= lo);
@@ -740,8 +740,8 @@ proptest! {
             load_slope as u32,
             cross_slope as u32,
         );
-        let shared_load = Kpa10(1);
-        prop_assert_eq!(bilerp_u16(&left, Rpm(2), shared_load), bilerp_u16(&right, Rpm(2), shared_load));
+        let shared_load = Kpa10::new(1);
+        prop_assert_eq!(bilerp_u16(&left, Rpm::new(2), shared_load), bilerp_u16(&right, Rpm::new(2), shared_load));
     }
 
     #[test]
@@ -758,7 +758,7 @@ proptest! {
             value,
             value,
         );
-        prop_assert_eq!(bilerp_u16(&table, Rpm(rpm), Kpa10(load)), value);
+        prop_assert_eq!(bilerp_u16(&table, Rpm::new(rpm), Kpa10::new(load)), value);
     }
 
     #[test]
@@ -777,7 +777,7 @@ proptest! {
             cross_slope as u32,
         );
         prop_assert_eq!(
-            bilerp_u16(&table, Rpm(1), Kpa10(1)),
+            bilerp_u16(&table, Rpm::new(1), Kpa10::new(1)),
             base + rpm_slope + load_slope + cross_slope
         );
     }
@@ -807,8 +807,8 @@ proptest! {
         );
         let rpm = rpm0 + ((rpm1 - rpm0) / 2);
         let load = load0 + ((load1 - load0) / 2);
-        let base = bilerp_u16(&table, Rpm(rpm), Kpa10(load));
-        let shifted_out = bilerp_u16(&shifted, Rpm(rpm), Kpa10(load));
+        let base = bilerp_u16(&table, Rpm::new(rpm), Kpa10::new(load));
+        let shifted_out = bilerp_u16(&shifted, Rpm::new(rpm), Kpa10::new(load));
         prop_assert_eq!(shifted_out, base + offset);
     }
 
@@ -838,21 +838,22 @@ proptest! {
             load_idx += 1;
         }
         let scaled = scale_table(&table, scale);
-        let base_out = bilerp_u16(&table, Rpm(1), Kpa10(1));
-        let scaled_out = bilerp_u16(&scaled, Rpm(1), Kpa10(1));
+        let base_out = bilerp_u16(&table, Rpm::new(1), Kpa10::new(1));
+        let scaled_out = bilerp_u16(&scaled, Rpm::new(1), Kpa10::new(1));
         prop_assert_eq!(scaled_out, base_out * scale);
     }
 
     #[test]
     fn prop_norm7200_range(value in any::<i32>()) {
         let out = norm7200(value);
-        prop_assert!(out.0 < 7200);
+        prop_assert!(out.get() >= 0);
+        prop_assert!(out.get() < 7200);
     }
 
     #[test]
     fn prop_cyc_distance_symmetry(a in 0u16..7200, b in 0u16..7200) {
-        let left = cyc7200_distance(ecu_spec::Degrees10(a), ecu_spec::Degrees10(b));
-        let right = cyc7200_distance(ecu_spec::Degrees10(b), ecu_spec::Degrees10(a));
+        let left = cyc7200_distance(ecu_spec::Degrees10::new(a as i16), ecu_spec::Degrees10::new(b as i16));
+        let right = cyc7200_distance(ecu_spec::Degrees10::new(b as i16), ecu_spec::Degrees10::new(a as i16));
         prop_assert_eq!(left, right);
         prop_assert!(left <= 3600);
     }
@@ -863,8 +864,8 @@ proptest! {
         pw_extra in 0u32..10_000,
         rpm in 0u16..10_000,
     ) {
-        let low = duration_us_to_deg10(PulseWidthUs(pw_base), Rpm(rpm)).0;
-        let high = duration_us_to_deg10(PulseWidthUs(pw_base + pw_extra), Rpm(rpm)).0;
+        let low = duration_us_to_deg10(PulseWidthUs::new(pw_base), Rpm::new(rpm)).get();
+        let high = duration_us_to_deg10(PulseWidthUs::new(pw_base + pw_extra), Rpm::new(rpm)).get();
         prop_assert!(high >= low);
     }
 
@@ -874,7 +875,7 @@ proptest! {
         rpm in 0u16..8_000,
     ) {
         let expected = ((dwell_us as u64 * rpm as u64 * 6u64) / 100_000u64) as u16;
-        let actual = duration_us_to_deg10(PulseWidthUs(dwell_us), Rpm(rpm)).0;
+        let actual = duration_us_to_deg10(PulseWidthUs::new(dwell_us), Rpm::new(rpm)).get() as u16;
         prop_assert_eq!(actual, expected);
     }
 
@@ -898,15 +899,15 @@ proptest! {
         );
         let cal = validate_calibration(cal).expect("valid calibration");
         let mut input = InputSnapshot {
-            rpm: Rpm(rpm),
-            load_kpa10: Kpa10(load_kpa10),
+            rpm: Rpm::new(rpm),
+            load_kpa10: Kpa10::new(load_kpa10),
             target_afr_override_x100: AfrOverride::None,
             ..InputSnapshot::default()
         };
         input.map_kpa10 = input.load_kpa10;
 
         let expected = bilerp_u16(&cal.0.afr_target_table, input.rpm, input.load_kpa10);
-        let actual = lookup_target_afr(&cal, input).0;
+        let actual = lookup_target_afr(&cal, input).get();
         prop_assert_eq!(actual, expected);
     }
 
@@ -921,14 +922,14 @@ proptest! {
         cal.afr_target_table = uniform_u16_table(table_afr);
         let cal = validate_calibration(cal).expect("valid calibration");
         let input = InputSnapshot {
-            rpm: Rpm(rpm),
-            load_kpa10: Kpa10(load_kpa10),
-            target_afr_override_x100: AfrOverride::Some(AfrX100(override_afr)),
+            rpm: Rpm::new(rpm),
+            load_kpa10: Kpa10::new(load_kpa10),
+            target_afr_override_x100: AfrOverride::Some(AfrX100::new(override_afr)),
             ..InputSnapshot::default()
         };
 
         let expected = override_afr.clamp(500, 3000);
-        prop_assert_eq!(lookup_target_afr(&cal, input).0, expected);
+        prop_assert_eq!(lookup_target_afr(&cal, input).get(), expected);
     }
 
     #[test]
@@ -946,8 +947,8 @@ proptest! {
         cal.dwell_table_us.values[1][1] = dwell_us;
         let cal = validate_calibration(cal).expect("valid calibration");
         let input = InputSnapshot {
-            rpm: Rpm(rpm),
-            load_kpa10: Kpa10(load_kpa10),
+            rpm: Rpm::new(rpm),
+            load_kpa10: Kpa10::new(load_kpa10),
             sync: SyncState::Synced,
             mode: EngineMode::Running,
             ..InputSnapshot::default()
@@ -956,13 +957,13 @@ proptest! {
             &cal,
             input,
             FuelOutput {
-                pw_corr_us: PulseWidthUs(1000),
+                pw_corr_us: PulseWidthUs::new(1000),
             },
         );
 
         let expected = ((dwell_us as u64 * rpm as u64 * 6u64) / 100_000u64) as u16;
-        prop_assert_eq!(schedule.dwell_us, PulseWidthUs(dwell_us));
-        prop_assert_eq!(schedule.dwell_duration_deg10.0, expected);
+        prop_assert_eq!(schedule.dwell_us, PulseWidthUs::new(dwell_us));
+        prop_assert_eq!(schedule.dwell_duration_deg10.get() as u16, expected);
     }
 
     #[test]
@@ -993,9 +994,9 @@ proptest! {
         input in valid_input(),
         rpm_bump in 1u16..2000,
     ) {
-        prop_assume!(input.rpm.0 >= 600);
-        prop_assume!(input.rpm.0 <= 8000);
-        prop_assume!(input.rpm.0 <= 8000 - rpm_bump);
+        prop_assume!(input.rpm.get() >= 600);
+        prop_assume!(input.rpm.get() <= 8000);
+        prop_assume!(input.rpm.get() <= 8000 - rpm_bump);
 
         let mut cal = canonical_calibration(InjectionAngleMode::EndOfInjection);
         cal.0.ve_table = table_u16_2x2(
@@ -1008,12 +1009,12 @@ proptest! {
         );
         let state = LogicalState::default();
         let higher_rpm = InputSnapshot {
-            rpm: Rpm(input.rpm.0 + rpm_bump),
+            rpm: Rpm::new(input.rpm.get() + rpm_bump),
             ..input
         };
         let lower = step(&cal, input, &state);
         let higher = step(&cal, higher_rpm, &state);
-        prop_assert!(higher.output.ve_pct_x100.0 >= lower.output.ve_pct_x100.0);
+        prop_assert!(higher.output.ve_pct_x100.get() >= lower.output.ve_pct_x100.get());
         prop_assert_eq!(higher.next_state.math.last_valid_map_kpa10, higher_rpm.map_kpa10);
         prop_assert_eq!(higher.next_state.math.last_valid_load_kpa10, higher_rpm.load_kpa10);
     }
@@ -1029,7 +1030,7 @@ proptest! {
         cut_input.spark_cut = false;
         cut_input.sync = SyncState::Synced;
         let result = step(&cal, cut_input, &state);
-        prop_assert_eq!(result.output.pw_corr_us.0, 0);
+        prop_assert_eq!(result.output.pw_corr_us.get(), 0);
         prop_assert_eq!(result.output.cut_reason_code, 1);
         prop_assert!(result.output.fuel_cut);
         prop_assert!(result.output.spark_cut);
@@ -1118,8 +1119,8 @@ proptest! {
             c10,
             c11,
         );
-        let expected = bilerp_u16(&table, Rpm(vbat_mv), Kpa10(pressure_kpa10)) as u32;
-        let actual = deadtime_lookup(&table, Millivolts(vbat_mv), Kpa10(pressure_kpa10)).0;
+        let expected = bilerp_u16(&table, Rpm::new(vbat_mv), Kpa10::new(pressure_kpa10)) as u32;
+        let actual = deadtime_lookup(&table, Millivolts::new(vbat_mv), Kpa10::new(pressure_kpa10)).get();
         prop_assert_eq!(actual, expected);
     }
 
@@ -1138,8 +1139,8 @@ proptest! {
             1200,
             800,
         );
-        let lo = deadtime_lookup(&table, Millivolts(vbat0), Kpa10(pressure_kpa10)).0;
-        let hi = deadtime_lookup(&table, Millivolts(vbat1), Kpa10(pressure_kpa10)).0;
+        let lo = deadtime_lookup(&table, Millivolts::new(vbat0), Kpa10::new(pressure_kpa10)).get();
+        let hi = deadtime_lookup(&table, Millivolts::new(vbat1), Kpa10::new(pressure_kpa10)).get();
         prop_assert!(hi <= lo);
         prop_assert!((800..=1400).contains(&lo));
         prop_assert!((800..=1400).contains(&hi));
@@ -1157,12 +1158,12 @@ proptest! {
         cal.clt_corr_curve.values[1] = hot_corr;
         let cal = validate_calibration(cal).expect("valid calibration");
         let input = InputSnapshot {
-            clt_c10: TempC10(clt_c10),
+            clt_c10: TempC10::new(clt_c10),
             ..InputSnapshot::default()
         };
         let curve_input = if clt_c10 < 0 { 0 } else { clt_c10 as u16 };
         let expected = lerp_u16(0, 1000, cold_corr, hot_corr, curve_input);
-        let actual = ecu_spec::lookup_clt_corr_x1000(&cal, input).0;
+        let actual = ecu_spec::lookup_clt_corr_x1000(&cal, input).get();
         prop_assert_eq!(actual, expected);
     }
 
@@ -1175,7 +1176,7 @@ proptest! {
         cal.required_fuel_us = required_fuel_us;
         let cal = validate_calibration(cal).expect("valid calibration");
         let expected = (required_fuel_us as u64 * ve_x100 as u64 / 10_000u64) as u32;
-        let actual = ecu_spec::compute_pw_base_us(&cal, ecu_spec::VePctX100(ve_x100)).0;
+        let actual = ecu_spec::compute_pw_base_us(&cal, ecu_spec::VePctX100::new(ve_x100)).get();
         prop_assert_eq!(actual, expected);
     }
 
@@ -1193,12 +1194,12 @@ proptest! {
             table_i16_2x2(axis(&[500, 1000]), axis(&[500, 1000]), c00, c01, c10, c11);
         let cal = validate_calibration(cal).expect("valid calibration");
         let input = InputSnapshot {
-            rpm: Rpm(rpm),
-            load_kpa10: Kpa10(load_kpa10),
+            rpm: Rpm::new(rpm),
+            load_kpa10: Kpa10::new(load_kpa10),
             ..InputSnapshot::default()
         };
         let expected = ecu_spec::bilerp_i16(&cal.0.spark_advance_table_deg10, input.rpm, input.load_kpa10);
-        let actual = ecu_spec::compute_spark_advance_deg10(&cal, input).0;
+        let actual = ecu_spec::compute_spark_advance_deg10(&cal, input).get();
         prop_assert_eq!(actual, expected);
     }
 
@@ -1210,7 +1211,7 @@ proptest! {
     ) {
         let cal = canonical_calibration(InjectionAngleMode::EndOfInjection);
         let input = InputSnapshot {
-            rpm: Rpm(rpm),
+            rpm: Rpm::new(rpm),
             tps_x100,
             mode: EngineMode::Running,
             sync: SyncState::Synced,
@@ -1240,7 +1241,7 @@ proptest! {
         let cal = validate_calibration(cal).expect("valid calibration");
         let rpm_clipped = rpm.clamp(500, 1000);
         let expected = lerp_i16(500, 1000, low, high, rpm_clipped);
-        let actual = lookup_idle_advance_deg10(&cal, Rpm(rpm)).0;
+        let actual = lookup_idle_advance_deg10(&cal, Rpm::new(rpm)).get();
         prop_assert_eq!(actual, expected);
     }
 
@@ -1257,10 +1258,10 @@ proptest! {
     ) {
         prop_assume!(min_trim <= max_trim);
         let mut cal = canonical_calibration(InjectionAngleMode::EndOfInjection).0;
-        cal.idle_target_rpm = Rpm(target);
+        cal.idle_target_rpm = Rpm::new(target);
         cal.idle_timing_enabled = true;
         cal.idle_timing_pid_enabled = true;
-        cal.idle_timing_rpm_max = Rpm(2000);
+        cal.idle_timing_rpm_max = Rpm::new(2000);
         cal.idle_timing_tps_max_x100 = 500;
         cal.idle_advance_curve_deg10 = signed_curve_2x2(&[500, 1000], base, base);
         cal.idle_timing_kp_x1000 = kp;
@@ -1269,7 +1270,7 @@ proptest! {
         cal.idle_timing_max_trim_deg10 = max_trim;
         let cal = validate_calibration(cal).expect("valid calibration");
         let input = InputSnapshot {
-            rpm: Rpm(rpm),
+            rpm: Rpm::new(rpm),
             tps_x100: 0,
             mode: EngineMode::Running,
             sync: SyncState::Synced,
@@ -1282,7 +1283,7 @@ proptest! {
             },
             ..LogicalState::default()
         };
-        let result = idle_timing_step_with_base(&cal, input, &state, SignedDegrees10(base));
+        let result = idle_timing_step_with_base(&cal, input, &state, SignedDegrees10::new(base));
         prop_assert!(result.active);
         prop_assert!(result.trim_deg10 >= min_trim);
         prop_assert!(result.trim_deg10 <= max_trim);
@@ -1300,14 +1301,14 @@ proptest! {
         let mut cal = canonical_calibration(InjectionAngleMode::EndOfInjection).0;
         cal.idle_timing_enabled = true;
         cal.idle_timing_pid_enabled = true;
-        cal.idle_timing_rpm_max = Rpm(1200);
+        cal.idle_timing_rpm_max = Rpm::new(1200);
         cal.idle_timing_tps_max_x100 = 200;
         cal.idle_advance_curve_deg10 = signed_curve_2x2(&[500, 1000], 100, 100);
         cal.idle_timing_min_trim_deg10 = -300;
         cal.idle_timing_max_trim_deg10 = 300;
         let cal = validate_calibration(cal).expect("valid calibration");
         let input = InputSnapshot {
-            rpm: Rpm(rpm),
+            rpm: Rpm::new(rpm),
             tps_x100,
             mode: EngineMode::Running,
             sync: SyncState::Synced,
@@ -1332,19 +1333,19 @@ proptest! {
     ) {
         let mut cal = canonical_calibration(InjectionAngleMode::EndOfInjection).0;
         cal.idle_timing_enabled = true;
-        cal.idle_timing_rpm_max = Rpm(1200);
+        cal.idle_timing_rpm_max = Rpm::new(1200);
         cal.idle_timing_tps_max_x100 = 200;
         cal.idle_advance_curve_deg10 = signed_curve_2x2(&[500, 1000], idle_advance, idle_advance);
         let cal = validate_calibration(cal).expect("valid calibration");
         let input = InputSnapshot {
-            rpm: Rpm(rpm),
+            rpm: Rpm::new(rpm),
             tps_x100,
             mode: EngineMode::Running,
             sync: SyncState::Synced,
             ..InputSnapshot::default()
         };
         let selected =
-            select_idle_or_running_advance_deg10(&cal, input, SignedDegrees10(running_advance)).0;
+            select_idle_or_running_advance_deg10(&cal, input, SignedDegrees10::new(running_advance)).get();
         let expected = if tps_x100 <= 100 {
             idle_advance
         } else if tps_x100 >= 200 {
@@ -1366,7 +1367,7 @@ proptest! {
         let mut cal = canonical_calibration(InjectionAngleMode::EndOfInjection).0;
         cal.idle_timing_enabled = true;
         cal.idle_timing_pid_enabled = false;
-        cal.idle_timing_rpm_max = Rpm(1200);
+        cal.idle_timing_rpm_max = Rpm::new(1200);
         cal.idle_timing_tps_max_x100 = 200;
         cal.idle_advance_curve_deg10 = signed_curve_2x2(&[500, 1000], idle_advance, idle_advance);
         cal.clt_timing_corr_curve_deg10 = signed_curve_2x2(&[0, 1000], clt_corr, clt_corr);
@@ -1375,16 +1376,16 @@ proptest! {
         cal.idle_timing_max_trim_deg10 = 7200;
         let cal = validate_calibration(cal).expect("valid calibration");
         let input = InputSnapshot {
-            rpm: Rpm(900),
+            rpm: Rpm::new(900),
             tps_x100: 0,
-            clt_c10: TempC10(800),
-            iat_c10: TempC10(250),
+            clt_c10: TempC10::new(800),
+            iat_c10: TempC10::new(250),
             mode: EngineMode::Running,
             sync: SyncState::Synced,
             ..InputSnapshot::default()
         };
         let result =
-            idle_timing_step_with_base(&cal, input, &LogicalState::default(), SignedDegrees10(running_advance));
+            idle_timing_step_with_base(&cal, input, &LogicalState::default(), SignedDegrees10::new(running_advance));
         let expected = idle_advance as i32 - running_advance as i32 + clt_corr as i32 + iat_corr as i32;
         prop_assert_eq!(result.trim_deg10, expected as i16);
     }
@@ -1404,8 +1405,8 @@ proptest! {
         cal.cylinder_phase_deg10.values[0] = phase;
         let cal = validate_calibration(cal).expect("valid calibration");
         let input = InputSnapshot {
-            rpm: Rpm(rpm),
-            load_kpa10: Kpa10(500),
+            rpm: Rpm::new(rpm),
+            load_kpa10: Kpa10::new(500),
             sync: SyncState::Synced,
             mode: EngineMode::Running,
             ..InputSnapshot::default()
@@ -1414,16 +1415,16 @@ proptest! {
             &cal,
             input,
             FuelOutput {
-                pw_corr_us: PulseWidthUs(1000),
+                pw_corr_us: PulseWidthUs::new(1000),
             },
-            SignedDegrees10(trim),
+            SignedDegrees10::new(trim),
         );
         let dwell_deg10 = ((dwell_us as u64 * rpm as u64 * 6u64) / 100_000u64) as u16;
         let spark = norm7200(phase as i32 - base_advance as i32 - trim as i32);
-        let dwell_start = norm7200(spark.0 as i32 - dwell_deg10 as i32);
-        prop_assert_eq!(schedule.spark_advance_deg10, SignedDegrees10(base_advance.saturating_add(trim)));
-        prop_assert_eq!(schedule.spark_deg10.values[0], spark.0);
-        prop_assert_eq!(schedule.dwell_start_deg10.values[0], dwell_start.0);
+        let dwell_start = norm7200(spark.get() as i32 - dwell_deg10 as i32);
+        prop_assert_eq!(schedule.spark_advance_deg10, SignedDegrees10::new(base_advance.saturating_add(trim)));
+        prop_assert_eq!(schedule.spark_deg10.values[0], spark.get() as u16);
+        prop_assert_eq!(schedule.dwell_start_deg10.values[0], dwell_start.get() as u16);
     }
 
     #[test]
@@ -1432,7 +1433,7 @@ proptest! {
             axis: axis(&[8000, 12000, 16000]),
             values: [1200, 1000, 900, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
         };
-        let corr = vbat_correction(&curve, Millivolts(vbat_mv)).0;
+        let corr = vbat_correction(&curve, Millivolts::new(vbat_mv)).get();
         prop_assert!((900..=1200).contains(&corr));
     }
 
@@ -1441,10 +1442,10 @@ proptest! {
         vbat_mv in 9_000u16..=11_000,
     ) {
         let input = SensorPlausibilityInput {
-            t_us: Micros(500_000),
-            rpm: Rpm(2_000),
-            clt_c10: TempC10(800),
-            iat_c10: TempC10(250),
+            t_us: 500_000,
+            rpm: 2_000,
+            clt_c10: 800,
+            iat_c10: 250,
             map_kpa10: 700,
             tps_x100: 2_000,
             maf_x100: 12_000,
@@ -1468,15 +1469,15 @@ proptest! {
     ) {
         let cal = canonical_calibration(InjectionAngleMode::EndOfInjection);
         let input = InputSnapshot {
-            t_us: Micros(10_000u32.saturating_add(dt_us)),
-            rpm: Rpm(2_000),
-            load_kpa10: Kpa10(700),
-            map_kpa10: Kpa10(700),
+            t_us: Micros::new(10_000u32.saturating_add(dt_us)),
+            rpm: Rpm::new(2_000),
+            load_kpa10: Kpa10::new(700),
+            map_kpa10: Kpa10::new(700),
             tps_x100: 2_000,
-            clt_c10: TempC10(800),
-            iat_c10: TempC10(250),
-            baro_kpa10: Kpa10(1_000),
-            vbatt_mv: Millivolts(raw_vbat_mv),
+            clt_c10: TempC10::new(800),
+            iat_c10: TempC10::new(250),
+            baro_kpa10: Kpa10::new(1_000),
+            vbatt_mv: Millivolts::new(raw_vbat_mv),
             mode: EngineMode::Running,
             sync: SyncState::Synced,
             ..InputSnapshot::default()
@@ -1484,15 +1485,15 @@ proptest! {
         let state = LogicalState {
             sensor_slew_state: SensorSlewState {
                 initialized: true,
-                last_t_us: Micros(10_000),
-                clt_c10: input.clt_c10,
-                iat_c10: input.iat_c10,
-                map_kpa10: input.map_kpa10.0,
+                last_t_us: 10_000,
+                clt_c10: input.clt_c10.get(),
+                iat_c10: input.iat_c10.get(),
+                map_kpa10: input.map_kpa10.get(),
                 tps_x100: input.tps_x100,
                 maf_x100: 0,
                 o2_afr_x100: 1470,
                 knock_intensity_x100: input.knock_intensity_x100,
-                baro_kpa10: input.baro_kpa10.0,
+                baro_kpa10: input.baro_kpa10.get(),
                 vbat_mv: previous_vbat_mv,
                 ..SensorSlewState::default()
             },
@@ -1524,10 +1525,10 @@ proptest! {
             1500,
             1000,
         );
-        let measured = deadtime_lookup(&table, Millivolts(vbat_mv), Kpa10(pressure_kpa10)).0;
+        let measured = deadtime_lookup(&table, Millivolts::new(vbat_mv), Kpa10::new(pressure_kpa10)).get();
         let incorrectly_clamped =
-            deadtime_lookup(&table, Millivolts(11_000), Kpa10(pressure_kpa10)).0;
-        let expected = bilerp_u16(&table, Rpm(vbat_mv), Kpa10(pressure_kpa10)) as u32;
+            deadtime_lookup(&table, Millivolts::new(11_000), Kpa10::new(pressure_kpa10)).get();
+        let expected = bilerp_u16(&table, Rpm::new(vbat_mv), Kpa10::new(pressure_kpa10)) as u32;
         prop_assert_eq!(measured, expected);
         prop_assert!(measured >= incorrectly_clamped);
         if vbat_mv < 10_950 {
@@ -1543,9 +1544,9 @@ proptest! {
             axis: axis(&[9000, 11000, 13_500]),
             values: [1300, 1100, 1000, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
         };
-        let measured = vbat_correction(&curve, Millivolts(vbat_mv)).0;
-        let incorrectly_clamped_11v = vbat_correction(&curve, Millivolts(11_000)).0;
-        let nominal = vbat_correction(&curve, Millivolts(13_500)).0;
+        let measured = vbat_correction(&curve, Millivolts::new(vbat_mv)).get();
+        let incorrectly_clamped_11v = vbat_correction(&curve, Millivolts::new(11_000)).get();
+        let nominal = vbat_correction(&curve, Millivolts::new(13_500)).get();
         let expected = lerp_u16(9000, 11000, 1300, 1100, vbat_mv);
         prop_assert_eq!(measured, expected);
         prop_assert!(measured >= incorrectly_clamped_11v);
@@ -1561,7 +1562,7 @@ proptest! {
             axis: axis(&[700, 850, 1000]),
             values: [700, 850, 1000, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
         };
-        let corr = baro_correction(&curve, Kpa10(baro_kpa10)).0;
+        let corr = baro_correction(&curve, Kpa10::new(baro_kpa10)).get();
         prop_assert!((700..=1000).contains(&corr));
     }
 
@@ -1587,18 +1588,18 @@ proptest! {
         prop_assume!(validate_calibration(invalid).is_err());
 
         let parts = ecu_spec::FuelParts {
-            pw_air_us: PulseWidthUs(pw_air),
-            ae_pulse_us: PulseWidthUs(ae_pulse),
-            deadtime_us: PulseWidthUs(deadtime),
-            clt_corr_x1000: RatioX1000(clt),
-            iat_corr_x1000: RatioX1000(iat),
-            baro_corr_x1000: RatioX1000(baro),
-            vbat_corr_x1000: RatioX1000(vbat),
-            cranking_corr_x1000: RatioX1000(cranking),
-            afterstart_corr_x1000: RatioX1000(afterstart),
-            warmup_corr_x1000: RatioX1000(warmup),
-            afr_corr_x1000: RatioX1000(afr),
-            lambda_corr_x1000: RatioX1000(lambda),
+            pw_air_us: PulseWidthUs::new(pw_air),
+            ae_pulse_us: PulseWidthUs::new(ae_pulse),
+            deadtime_us: PulseWidthUs::new(deadtime),
+            clt_corr_x1000: RatioX1000::new(clt),
+            iat_corr_x1000: RatioX1000::new(iat),
+            baro_corr_x1000: RatioX1000::new(baro),
+            vbat_corr_x1000: RatioX1000::new(vbat),
+            cranking_corr_x1000: RatioX1000::new(cranking),
+            afterstart_corr_x1000: RatioX1000::new(afterstart),
+            warmup_corr_x1000: RatioX1000::new(warmup),
+            afr_corr_x1000: RatioX1000::new(afr),
+            lambda_corr_x1000: RatioX1000::new(lambda),
         };
         let got = ecu_spec::compute_pw_corr_us(
             &cal,
@@ -1606,7 +1607,7 @@ proptest! {
             InputSnapshot::default(),
             parts,
         )
-        .0;
+        .get();
 
         let mut expected = pw_air;
         expected = apply_ratio_floor(expected, cranking);
@@ -1671,18 +1672,18 @@ proptest! {
         freeze_gate in any::<bool>(),
     ) {
         let mut cal = canonical_calibration(InjectionAngleMode::EndOfInjection);
-        cal.0.idle_target_rpm = Rpm(target);
+        cal.0.idle_target_rpm = Rpm::new(target);
         cal.0.idle_kp_x1000 = kp;
         cal.0.idle_ki_x1000 = ki;
         cal.0.lambda_kp_x1000 = kp;
         cal.0.lambda_ki_x1000 = ki;
         let mut input = InputSnapshot {
-            rpm: Rpm(rpm),
-            clt_c10: TempC10(800),
+            rpm: Rpm::new(rpm),
+            clt_c10: TempC10::new(800),
             ..InputSnapshot::default()
         };
         if freeze_gate {
-            input.clt_c10 = TempC10(600);
+            input.clt_c10 = TempC10::new(600);
         }
         let state = LogicalState {
             ae: AeState {
@@ -1737,15 +1738,15 @@ proptest! {
         cal.tps_adc_max_counts = tps_max;
         cal.o2_sensor_mode = O2SensorMode::WidebandLinear;
 
-        let clt = clt_from_counts(adc_counts).0;
-        let iat = iat_from_counts(adc_counts).0;
-        let map = map_from_counts(adc_counts).0;
+        let clt = clt_from_counts(adc_counts).get();
+        let iat = iat_from_counts(adc_counts).get();
+        let map = map_from_counts(adc_counts).get();
         let tps = tps_from_counts(&cal, adc_counts);
         let maf = maf_from_counts(adc_counts);
-        let o2 = o2_from_counts(&cal, adc_counts, was_rich).afr_x100.0;
+        let o2 = o2_from_counts(&cal, adc_counts, was_rich).afr_x100.get();
         let knock = knock_from_window(adc_counts);
-        let baro = baro_from_counts(adc_counts).0;
-        let vbat = vbat_from_counts(adc_counts).0;
+        let baro = baro_from_counts(adc_counts).get();
+        let vbat = vbat_from_counts(adc_counts).get();
 
         prop_assert!((-400..=1200).contains(&clt));
         prop_assert!((-400..=1100).contains(&iat));
@@ -1768,9 +1769,9 @@ proptest! {
     ) {
         let prev = SensorSlewState {
             initialized: true,
-            last_t_us: Micros(10_000),
-            clt_c10: TempC10(100),
-            iat_c10: TempC10(50),
+            last_t_us: 10_000,
+            clt_c10: 100,
+            iat_c10: 50,
             map_kpa10: 1200,
             tps_x100: 2500,
             maf_x100: 3000,
@@ -1781,9 +1782,9 @@ proptest! {
             ..SensorSlewState::default()
         };
         let input = SensorSlewInput {
-            t_us: Micros(prev.last_t_us.0.saturating_add(dt_us)),
-            clt_c10: TempC10(1200),
-            iat_c10: TempC10(-300),
+            t_us: prev.last_t_us.saturating_add(dt_us),
+            clt_c10: 1200,
+            iat_c10: -300,
             map_kpa10: map,
             tps_x100: tps,
             maf_x100: 60_000,
@@ -1827,9 +1828,9 @@ proptest! {
         let mut ts = 0u32;
         for dt in stream {
             ts = ts.saturating_add(dt);
-            let step = trigger_60_2_step(state, Micros(ts));
-            prop_assert!(step.angle_deg10.0 < 7200);
-            prop_assert!(step.rpm_estimate.0 <= 20_000);
+            let step = trigger_60_2_step(state, Micros::new(ts));
+            prop_assert!(step.angle_deg10.get() < 7200);
+            prop_assert!(step.rpm_estimate.get() <= 20_000);
             state = step.state;
         }
     }

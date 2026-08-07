@@ -29,8 +29,11 @@ pub fn ae_step(
         decay_steps_curve: &cal.0.ae_decay_steps_curve,
         decay_ratio_curve_x1000: &cal.0.ae_decay_ratio_curve_x1000,
     };
-    let tps_delta_x100 = delta_i16(input.load_kpa10.0, state.math.last_valid_load_kpa10.0);
-    let map_delta_kpa10 = delta_i16(input.map_kpa10.0, state.math.last_valid_map_kpa10.0);
+    let tps_delta_x100 = delta_i16(
+        input.load_kpa10.get(),
+        state.math.last_valid_load_kpa10.get(),
+    );
+    let map_delta_kpa10 = delta_i16(input.map_kpa10.get(), state.math.last_valid_map_kpa10.get());
     ae_step_with_deltas(curves, input, state.ae, tps_delta_x100, map_delta_kpa10)
 }
 
@@ -41,16 +44,16 @@ pub fn ae_step_with_deltas(
     tps_delta_x100: i16,
     map_delta_kpa10: i16,
 ) -> AeStepResult {
-    let tps_threshold = lookup_curve_u16(curves.tps_threshold_curve, input.rpm.0);
-    let map_threshold = lookup_curve_u16(curves.map_threshold_curve, input.load_kpa10.0);
+    let tps_threshold = lookup_curve_u16(curves.tps_threshold_curve, input.rpm.get());
+    let map_threshold = lookup_curve_u16(curves.map_threshold_curve, input.load_kpa10.get());
     let triggered = abs_i16_to_u16(tps_delta_x100) >= tps_threshold
         || abs_i16_to_u16(map_delta_kpa10) >= map_threshold;
 
     if triggered {
-        let shot = lookup_curve_u16(curves.shot_curve_us, input.load_kpa10.0) as u32;
-        let decay_steps = lookup_curve_u16(curves.decay_steps_curve, input.load_kpa10.0);
+        let shot = lookup_curve_u16(curves.shot_curve_us, input.load_kpa10.get()) as u32;
+        let decay_steps = lookup_curve_u16(curves.decay_steps_curve, input.load_kpa10.get());
         return AeStepResult {
-            ae_pulse_us: PulseWidthUs(shot),
+            ae_pulse_us: PulseWidthUs::new(shot),
             next_state: AeState {
                 active: shot > 0,
                 pulse_us: shot,
@@ -62,9 +65,10 @@ pub fn ae_step_with_deltas(
     if previous.decay_steps_remaining > 0 {
         let decay_index = previous.decay_steps_remaining.saturating_sub(1);
         let decay_ratio_x1000 = lookup_curve_u16(curves.decay_ratio_curve_x1000, decay_index);
-        let next_pulse = mul_ratio_x1000(previous.pulse_us, crate::RatioX1000(decay_ratio_x1000));
+        let next_pulse =
+            mul_ratio_x1000(previous.pulse_us, crate::RatioX1000::new(decay_ratio_x1000));
         return AeStepResult {
-            ae_pulse_us: PulseWidthUs(next_pulse),
+            ae_pulse_us: PulseWidthUs::new(next_pulse),
             next_state: AeState {
                 active: next_pulse > 0,
                 pulse_us: next_pulse,
@@ -74,7 +78,7 @@ pub fn ae_step_with_deltas(
     }
 
     AeStepResult {
-        ae_pulse_us: PulseWidthUs(0),
+        ae_pulse_us: PulseWidthUs::new(0),
         next_state: AeState::default(),
     }
 }
@@ -139,10 +143,10 @@ mod tests {
     #[test]
     fn triggers_shot_on_threshold_cross() {
         let input = InputSnapshot {
-            rpm: Rpm(2000),
-            load_kpa10: Kpa10(1000),
+            rpm: Rpm::new(2000),
+            load_kpa10: Kpa10::new(1000),
             tps_x100: 0,
-            map_kpa10: Kpa10(1000),
+            map_kpa10: Kpa10::new(1000),
             ..InputSnapshot::default()
         };
         let result = ae_step_with_deltas(
@@ -159,7 +163,7 @@ mod tests {
             0,
         );
 
-        assert_eq!(result.ae_pulse_us.0, 600);
+        assert_eq!(result.ae_pulse_us.get(), 600);
         assert!(result.next_state.active);
         assert_eq!(result.next_state.decay_steps_remaining, 3);
     }
@@ -167,10 +171,10 @@ mod tests {
     #[test]
     fn decays_when_active_without_retrigger() {
         let input = InputSnapshot {
-            rpm: Rpm(2000),
-            load_kpa10: Kpa10(1000),
+            rpm: Rpm::new(2000),
+            load_kpa10: Kpa10::new(1000),
             tps_x100: 0,
-            map_kpa10: Kpa10(1000),
+            map_kpa10: Kpa10::new(1000),
             ..InputSnapshot::default()
         };
         let result = ae_step_with_deltas(
@@ -191,7 +195,7 @@ mod tests {
             0,
         );
 
-        assert_eq!(result.ae_pulse_us.0, 800);
+        assert_eq!(result.ae_pulse_us.get(), 800);
         assert!(result.next_state.active);
         assert_eq!(result.next_state.decay_steps_remaining, 1);
     }
@@ -199,10 +203,10 @@ mod tests {
     #[test]
     fn resets_to_zero_when_not_triggered_and_no_decay_left() {
         let input = InputSnapshot {
-            rpm: Rpm(2000),
-            load_kpa10: Kpa10(1000),
+            rpm: Rpm::new(2000),
+            load_kpa10: Kpa10::new(1000),
             tps_x100: 0,
-            map_kpa10: Kpa10(1000),
+            map_kpa10: Kpa10::new(1000),
             ..InputSnapshot::default()
         };
         let result = ae_step_with_deltas(
@@ -223,7 +227,7 @@ mod tests {
             0,
         );
 
-        assert_eq!(result.ae_pulse_us.0, 0);
+        assert_eq!(result.ae_pulse_us.get(), 0);
         assert_eq!(result.next_state, AeState::default());
     }
 
@@ -231,18 +235,18 @@ mod tests {
     fn top_level_step_uses_state_deltas() {
         let cal = crate::default_reference_calibration();
         let mut state = LogicalState::default();
-        state.math.last_valid_map_kpa10 = Kpa10(1000);
-        state.math.last_valid_load_kpa10 = Kpa10(1000);
+        state.math.last_valid_map_kpa10 = Kpa10::new(1000);
+        state.math.last_valid_load_kpa10 = Kpa10::new(1000);
 
         let input = InputSnapshot {
-            rpm: Rpm(1000),
-            load_kpa10: Kpa10(1600),
+            rpm: Rpm::new(1000),
+            load_kpa10: Kpa10::new(1600),
             tps_x100: 0,
-            map_kpa10: Kpa10(1000),
+            map_kpa10: Kpa10::new(1000),
             ..InputSnapshot::default()
         };
 
         let result = ae_step(&cal, input, &state);
-        assert_eq!(result.ae_pulse_us.0, 0);
+        assert_eq!(result.ae_pulse_us.get(), 0);
     }
 }

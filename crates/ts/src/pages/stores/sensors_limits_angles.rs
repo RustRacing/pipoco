@@ -19,7 +19,7 @@ impl LimitsPageStore<'_> {
     }
 
     fn write_limits(&mut self, data: &[u8]) -> Result<(), PageError> {
-        let page = LimitsPage::decode(data).map_err(page_codec_error_to_page_error)?;
+        let page = LimitsPage::decode(data)?;
         *self.map_min_kpa_x10 = page.map_min_kpa_x10;
         *self.map_max_kpa_x10 = page.map_max_kpa_x10;
         *self.tps_min_percent = page.tps_min_percent;
@@ -89,7 +89,7 @@ impl SensorsPageStore<'_> {
     }
 
     fn write_sensors(&mut self, data: &[u8]) -> Result<(), PageError> {
-        let page = SensorsPage::decode(data).map_err(page_codec_error_to_page_error)?;
+        let page = SensorsPage::decode(data)?;
         *self.tps_min_counts = page.tps_min_counts;
         *self.tps_max_counts = page.tps_max_counts;
         *self.map_v0_mv = page.map_v0_mv;
@@ -159,7 +159,7 @@ impl AnglesPageStore<'_> {
     }
 
     fn write_angles(&mut self, data: &[u8]) -> Result<(), PageError> {
-        let page = AnglesPage::decode(data).map_err(page_codec_error_to_page_error)?;
+        let page = AnglesPage::decode(data)?;
         *self.inj_angles_x10 = page.inj_angles_x10;
         *self.tdc_angles_x10 = page.tdc_angles_x10;
         *self.tooth0_angle_x10 = page.tooth0_angle_x10;

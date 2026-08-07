@@ -28,6 +28,9 @@ embedded-hal = { version = "0.2", optional = true }
 usb-device = { version = "0.3", optional = true }
 usbd-serial = { version = "0.2", optional = true }
 
+
+[lints]
+workspace = true
 [[bin]]
 name = "stm32f4-ecu"
 path = "src/main.rs"

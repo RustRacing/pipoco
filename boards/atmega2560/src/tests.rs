@@ -21,7 +21,9 @@ use crate::step_io::{
 };
 use ecu_board_api::{
     AuxCommand, AuxOutput, AuxValue, EcuOutput, IgnitionProfileId, IgnitionProfileMode,
-    OutputLevel, PinMapId, ProfileId, RuntimeBuildId,
+    OutputAuthorityRequirement, OutputClass, OutputCommandHeader, OutputCommandId, OutputDeadline,
+    OutputLevel, OutputRejectReason, OutputStaleBehavior, PinMapId, ProfileId, RuntimeBuildId,
+    SafetyPermitMask,
 };
 use ecu_board_api::{FullEcuOutputProfile, RuntimeOutputProfile};
 use ecu_board_profiles::{
@@ -32,6 +34,7 @@ use ecu_board_profiles::{
 use ecu_domain::ChannelId;
 use ecu_domain::{
     AbsoluteTimeAuthority, CrankSyncState, EngineTimeAuthority, Kpa10, Micros, PhaseSyncState, Rpm,
+    Ticks,
 };
 
 #[test]
@@ -350,6 +353,37 @@ fn speeduino_m5x_prepared_board_step_maps_runtime_outputs_to_avr_pins() {
 }
 
 #[test]
+fn speeduino_m5x_static_step_records_named_assembly_counters() {
+    let mut adapter = Atmega2560BoardAdapter::m50b25tu_speeduino_m5x_rev23();
+
+    let output = adapter
+        .step(Atmega2560StepInput::bench_synced(
+            Micros::new(1_000),
+            Rpm::new(3_000),
+            Kpa10::new(800),
+        ))
+        .unwrap();
+
+    assert!(!output.outputs.is_empty());
+    let signal = adapter.signal_assembly_counters();
+    assert_eq!(signal.signal_capture.seen, 0);
+    assert_eq!(signal.signal_normalizer.seen, 0);
+    assert_eq!(signal.observation_validator.seen, 1);
+    assert_eq!(signal.observation_publisher.seen, 0);
+    assert_eq!(signal.observation_reader.seen, 0);
+    assert_eq!(signal.runtime_snapshot_builder.seen, 1);
+    assert_eq!(signal.policy_consumer.seen, 1);
+
+    let counters = adapter.output_assembly_counters();
+    assert!(counters.output_intent.seen > 0);
+    assert!(counters.output_planner.seen > 0);
+    assert!(counters.output_admission.seen > 0);
+    assert_eq!(counters.output_armer.seen, 0);
+    assert_eq!(counters.output_executor.seen, 0);
+    assert_eq!(counters.output_observer.seen, 0);
+}
+
+#[test]
 fn speeduino_m5x_aux_validation_maps_supported_roles_to_schematic_aux_pins() {
     assert_eq!(
         speeduino_m5x_rev23_aux_pin(AuxCommand::new(
@@ -370,6 +404,88 @@ fn speeduino_m5x_aux_validation_maps_supported_roles_to_schematic_aux_pins() {
         speeduino_m5x_rev23_aux_pin(AuxCommand::new(AuxOutput::SafetyRelay(2), AuxValue::Off)),
         Some(SPEEDUINO_M5X_REV23_PIN_MAP.tach2_pin.get())
     );
+}
+
+#[test]
+fn speeduino_m5x_output_command_headers_round_trip_expected_class_names() {
+    assert_eq!(OutputClass::ClassACombustionCritical as u8, 0);
+    assert_eq!(OutputClass::ClassCSlowSupervisory as u8, 2);
+    assert_eq!(OutputRejectReason::StaleCommand as u8, 3);
+
+    let class_a_header = OutputCommandHeader::new(
+        OutputCommandId::new(41),
+        OutputClass::ClassACombustionCritical,
+        Ticks::new(100),
+        OutputDeadline::new(Ticks::new(150)),
+        SafetyPermitMask::NONE,
+        OutputAuthorityRequirement::FullSequential720,
+        OutputStaleBehavior::Reject,
+    );
+    assert_eq!(class_a_header.command_id, OutputCommandId::new(41));
+    assert_eq!(class_a_header.class, OutputClass::ClassACombustionCritical);
+    assert_eq!(class_a_header.requested_at, Ticks::new(100));
+    assert_eq!(
+        class_a_header.deadline,
+        OutputDeadline::new(Ticks::new(150))
+    );
+    assert_eq!(class_a_header.permit_mask, SafetyPermitMask::NONE);
+    assert_eq!(
+        class_a_header.authority,
+        OutputAuthorityRequirement::FullSequential720
+    );
+    assert_eq!(class_a_header.stale_behavior, OutputStaleBehavior::Reject);
+
+    let class_c_header = OutputCommandHeader::new(
+        OutputCommandId::new(42),
+        OutputClass::ClassCSlowSupervisory,
+        Ticks::new(200),
+        OutputDeadline::new(Ticks::new(250)),
+        SafetyPermitMask::NONE,
+        OutputAuthorityRequirement::CrankSynchronized,
+        OutputStaleBehavior::Reject,
+    );
+    assert_eq!(class_c_header.command_id, OutputCommandId::new(42));
+    assert_eq!(class_c_header.class, OutputClass::ClassCSlowSupervisory);
+    assert_eq!(class_c_header.requested_at, Ticks::new(200));
+    assert_eq!(
+        class_c_header.deadline,
+        OutputDeadline::new(Ticks::new(250))
+    );
+    assert_eq!(class_c_header.permit_mask, SafetyPermitMask::NONE);
+    assert_eq!(
+        class_c_header.authority,
+        OutputAuthorityRequirement::CrankSynchronized
+    );
+    assert_eq!(class_c_header.stale_behavior, OutputStaleBehavior::Reject);
+    assert!(!class_c_header.authority.requires_full_sequential());
+}
+
+#[test]
+fn speeduino_m5x_fuel_pump_aux_command_is_accepted_on_supervisory_path() {
+    let command = AuxCommand::new(
+        AuxOutput::SafetyRelay(0),
+        AuxValue::Level(OutputLevel::High),
+    );
+    let mut batch = ecu_board_api::AuxCommandBatch::<1>::new();
+    batch.push(command).unwrap();
+
+    let validated = validate_speeduino_m5x_rev23_aux_batch(&batch).unwrap();
+
+    assert_eq!(validated.as_slice(), batch.as_slice());
+    assert_eq!(
+        speeduino_m5x_rev23_aux_pin(command),
+        Some(SPEEDUINO_M5X_REV23_PIN_MAP.low_current_pins[0].get())
+    );
+    let supervisory_header = OutputCommandHeader::new(
+        OutputCommandId::new(7),
+        OutputClass::ClassCSlowSupervisory,
+        Ticks::new(300),
+        OutputDeadline::new(Ticks::new(450)),
+        SafetyPermitMask::NONE,
+        OutputAuthorityRequirement::CrankSynchronized,
+        OutputStaleBehavior::Reject,
+    );
+    assert_eq!(supervisory_header.class, OutputClass::ClassCSlowSupervisory);
 }
 
 #[test]

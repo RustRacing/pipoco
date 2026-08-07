@@ -1030,17 +1030,17 @@ fn timing_island_event_wire_round_trips_representative_variants() {
 
 #[test]
 fn safety_gate_wire_round_trips_input_and_status() {
-    let input = SafetyGateInput::new(
-        Micros::new(1234),
-        true,
-        true,
-        false,
-        true,
-        false,
-        true,
-        0x11,
-        SafetyPermitMask::new(0x33),
-    );
+    let input = SafetyGateInput {
+        now_us: Micros::new(1234),
+        kill_n: true,
+        power_good: true,
+        watchdog_ok: false,
+        timing_backend_alive: true,
+        backend_alive: false,
+        sync_authority_ok: true,
+        driver_faults: 0x11,
+        requested_permit_mask: SafetyPermitMask::new(0x33),
+    };
     let status = SafetyGateStatus::denied(
         SafetyGateReason::WatchdogTimeout,
         FaultCode::SafetyCut,

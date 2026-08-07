@@ -828,8 +828,8 @@ pub enum RuntimeAdapterContract {
 pub fn extract_fuel_observations(result: &StepResult) -> RuntimeFuelObservations {
     let observations = result.control.fuel_intent.observations;
     RuntimeFuelObservations {
-        base_fuel_pw_us: result.control.base_fuel.get(),
-        enriched_fuel_pw_us: result.control.enriched_fuel.get(),
+        base_fuel_pw_us: result.control.base_fuel.get() as u16,
+        enriched_fuel_pw_us: result.control.enriched_fuel.get() as u16,
         lambda_target_x100: result.control.lambda.target_lambda100.get(),
         startup_active: observations.startup_active,
         startup_window_remaining: observations.startup_window_remaining,

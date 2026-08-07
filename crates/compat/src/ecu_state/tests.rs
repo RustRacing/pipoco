@@ -89,19 +89,8 @@ fn test_runtime_signals_view_tracks_scalar_mirrors() {
     assert_eq!(state.iat_x10(), runtime.iat_x10);
     assert_eq!(state.tps_percent(), runtime.tps_percent);
     assert_eq!(state.map_kpa_x10(), runtime.map_kpa_x10);
-    assert!(state.runtime_signal_mirrors_consistent());
-}
-
-#[test]
-fn test_runtime_signal_mirror_boundary_detects_direct_field_drift() {
-    let mut state = EcuState::new();
-    assert!(state.runtime_signal_mirrors_consistent());
-
-    state.rpm = 1234;
-
-    assert!(!state.runtime_signal_mirrors_consistent());
-    state.set_rpm(1234);
-    assert!(state.runtime_signal_mirrors_consistent());
+    // Single source of truth: runtime_signals() reads the EcuInputs mirror.
+    assert_eq!(state.runtime_signals(), runtime);
 }
 
 #[test]
@@ -381,7 +370,7 @@ fn test_ecustate_knock_disabled_conditions() {
 fn test_ecustate_ltft_learning() {
     let mut state = EcuState::new();
     state.set_rpm(2500);
-    state.map_kpa_x10 = 600;
+    state.set_map_kpa_x10(600);
     state.lambda_state.active = true;
     state.set_stft_x10(30); // 3% rich
     state.ltft_manager_mut().config.enable = true;
@@ -403,7 +392,7 @@ fn test_ecustate_ltft_learning() {
 fn test_ecustate_ltft_disabled_cold() {
     let mut state = EcuState::new();
     state.set_rpm(2500);
-    state.map_kpa_x10 = 600;
+    state.set_map_kpa_x10(600);
     state.lambda_state.active = true;
     state.set_stft_x10(30);
     state.ltft_manager_mut().config.enable = true;
@@ -421,7 +410,7 @@ fn test_ecustate_ltft_disabled_cold() {
 fn test_ecustate_ltft_reset() {
     let mut state = EcuState::new();
     state.set_rpm(2500);
-    state.map_kpa_x10 = 600;
+    state.set_map_kpa_x10(600);
     state.lambda_state.active = true;
     state.set_stft_x10(30);
     state.ltft_manager_mut().config.enable = true;
@@ -444,7 +433,7 @@ fn test_ecustate_ltft_reset() {
 fn test_ecustate_torque_driver_request() {
     let mut state = EcuState::new();
     state.set_rpm(3000);
-    state.map_kpa_x10 = 800;
+    state.set_map_kpa_x10(800);
 
     // First update to get max available
     state.update_torque(25);
@@ -462,7 +451,7 @@ fn test_ecustate_torque_driver_request() {
 fn test_ecustate_torque_safety_limits() {
     let mut state = EcuState::new();
     state.set_rpm(3000);
-    state.map_kpa_x10 = 800;
+    state.set_map_kpa_x10(800);
 
     // Update and request full power
     state.update_torque(25);
@@ -483,7 +472,7 @@ fn test_ecustate_torque_safety_limits() {
 fn test_ecustate_torque_actuators() {
     let mut state = EcuState::new();
     state.set_rpm(3000);
-    state.map_kpa_x10 = 800;
+    state.set_map_kpa_x10(800);
 
     // Update and request 50%
     state.update_torque(25);
@@ -501,7 +490,7 @@ fn test_ecustate_torque_actuators() {
 fn test_ecustate_torque_zero_rpm() {
     let mut state = EcuState::new();
     state.set_rpm(0);
-    state.map_kpa_x10 = 800;
+    state.set_map_kpa_x10(800);
 
     // Should handle 0 RPM gracefully
     let torque = state.update_torque(25);
@@ -514,7 +503,7 @@ fn test_ecustate_torque_zero_rpm() {
 fn test_integration_knock_reduces_torque() {
     let mut state = EcuState::new();
     state.set_rpm(3000);
-    state.map_kpa_x10 = 800;
+    state.set_map_kpa_x10(800);
     state.knock_controller.config.enable = true;
     state.knock_controller.config.threshold = 100;
     state.knock_controller.config.debounce_count = 1;
@@ -555,7 +544,7 @@ fn test_integration_knock_reduces_torque() {
 fn test_integration_torque_affects_actuators() {
     let mut state = EcuState::new();
     state.set_rpm(3000);
-    state.map_kpa_x10 = 800;
+    state.set_map_kpa_x10(800);
 
     // Full power request
     state.update_torque(25);
@@ -584,7 +573,7 @@ fn test_integration_torque_affects_actuators() {
 fn test_integration_limp_mode_propagation() {
     let mut state = EcuState::new();
     state.set_rpm(3000);
-    state.map_kpa_x10 = 800;
+    state.set_map_kpa_x10(800);
 
     // Full power request
     state.update_torque(25);
@@ -608,7 +597,7 @@ fn test_integration_limp_mode_propagation() {
 fn test_integration_multiple_safety_systems() {
     let mut state = EcuState::new();
     state.set_rpm(6500);
-    state.map_kpa_x10 = 900;
+    state.set_map_kpa_x10(900);
     state.knock_controller.config.enable = true;
     state.knock_controller.config.threshold = 100;
     state.knock_controller.config.debounce_count = 1;
@@ -643,14 +632,14 @@ fn test_integration_multiple_safety_systems() {
 fn test_integration_lambda_ltft_combined_trim() {
     let mut state = EcuState::new();
     state.set_rpm(2500);
-    state.map_kpa_x10 = 600;
+    state.set_map_kpa_x10(600);
     state.lambda_state.active = true;
     state.set_stft_x10(30); // 3% STFT
     state.ltft_manager_mut().config.enable = true;
 
     // Pre-learn some LTFT (stft=20, rate=50, max_trim=200)
     let rpm = state.rpm();
-    let map_kpa_x10 = state.map_kpa_x10;
+    let map_kpa_x10 = state.map_kpa_x10();
     state
         .ltft_manager_mut()
         .table

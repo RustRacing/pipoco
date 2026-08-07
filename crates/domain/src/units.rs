@@ -141,15 +141,18 @@ impl Percent {
 }
 
 /// Injector pulse width in microseconds.
+///
+/// `u32` so fuel-path intermediates (VE × required-fuel products before the
+/// final clamp) cannot overflow; final widths are clamped well below u16 max.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
-pub struct PulseWidthUs(u16);
+pub struct PulseWidthUs(u32);
 
 impl PulseWidthUs {
-    pub const fn new(value: u16) -> Self {
+    pub const fn new(value: u32) -> Self {
         Self(value)
     }
 
-    pub const fn get(self) -> u16 {
+    pub const fn get(self) -> u32 {
         self.0
     }
 }
@@ -247,6 +250,76 @@ impl VehicleSpeedKph10 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UnitRangeError {
     OutOfRange,
+}
+
+/// Engine coolant temperature in deci-degrees Celsius (signed).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub struct TempC10(i16);
+
+impl TempC10 {
+    pub const fn new(value: i16) -> Self {
+        Self(value)
+    }
+
+    pub const fn get(self) -> i16 {
+        self.0
+    }
+}
+
+/// Battery/electrical system voltage in millivolts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub struct Millivolts(u16);
+
+impl Millivolts {
+    pub const fn new(value: u16) -> Self {
+        Self(value)
+    }
+
+    pub const fn get(self) -> u16 {
+        self.0
+    }
+}
+
+/// Air/fuel ratio scaled by 100 (e.g. 1470 = 14.70:1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub struct AfrX100(u16);
+
+impl AfrX100 {
+    pub const fn new(value: u16) -> Self {
+        Self(value)
+    }
+
+    pub const fn get(self) -> u16 {
+        self.0
+    }
+}
+
+/// Volumetric efficiency percentage scaled by 100.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub struct VePctX100(u16);
+
+impl VePctX100 {
+    pub const fn new(value: u16) -> Self {
+        Self(value)
+    }
+
+    pub const fn get(self) -> u16 {
+        self.0
+    }
+}
+
+/// Ratio scaled by 1000.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub struct RatioX1000(u16);
+
+impl RatioX1000 {
+    pub const fn new(value: u16) -> Self {
+        Self(value)
+    }
+
+    pub const fn get(self) -> u16 {
+        self.0
+    }
 }
 
 #[cfg(test)]

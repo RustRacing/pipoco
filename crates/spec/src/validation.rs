@@ -268,21 +268,21 @@ pub fn validate_calibration(raw: Calibration) -> Result<ValidatedCalibration, Va
     if raw.stoich_afr_x100 < 500 || raw.stoich_afr_x100 > 3000 {
         return Err(ValidationError::AfrOutOfRange);
     }
-    if raw.dfco_entry_rpm.0 <= raw.dfco_exit_rpm.0
+    if raw.dfco_entry_rpm.get() <= raw.dfco_exit_rpm.get()
         || raw.dfco_entry_tps_x100 > raw.dfco_exit_tps_x100
     {
         return Err(ValidationError::DfcoConfigInvalid);
     }
-    if raw.hard_rev_rpm.0 <= raw.soft_rev_rpm.0
-        || raw.rev_hysteresis_rpm.0 == 0
+    if raw.hard_rev_rpm.get() <= raw.soft_rev_rpm.get()
+        || raw.rev_hysteresis_rpm.get() == 0
         || raw.soft_retard_max_deg10 > 720
     {
         return Err(ValidationError::RevLimitConfigInvalid);
     }
-    if raw.launch_rpm_limit.0 > 20_000 {
+    if raw.launch_rpm_limit.get() > 20_000 {
         return Err(ValidationError::LaunchConfigInvalid);
     }
-    if raw.flat_shift_rpm_min.0 > 20_000 {
+    if raw.flat_shift_rpm_min.get() > 20_000 {
         return Err(ValidationError::FlatShiftConfigInvalid);
     }
     if raw.knock_threshold_x100 > 10000
@@ -319,7 +319,7 @@ pub fn validate_calibration(raw: Calibration) -> Result<ValidatedCalibration, Va
         },
         ValidationError::SparkAdvanceOutOfRange,
     )?;
-    if raw.idle_timing_rpm_max.0 > 20_000
+    if raw.idle_timing_rpm_max.get() > 20_000
         || raw.idle_timing_tps_max_x100 > 10_000
         || raw.idle_timing_min_trim_deg10 > raw.idle_timing_max_trim_deg10
         || raw.idle_timing_min_trim_deg10 < -7200

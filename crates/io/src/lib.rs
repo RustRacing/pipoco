@@ -14,15 +14,30 @@
 #![forbid(unsafe_code)]
 
 mod capture;
+mod counters;
+mod debug;
 mod edge;
+mod observation;
 mod output;
 mod sensor;
 pub mod trace;
 
 pub use capture::CaptureBuffer;
-pub use edge::{EdgeLine, EdgePolarity, EdgeSample, EdgeSource};
-pub use output::{OutputLevel, OutputTransition, OutputTransitionKind, OutputTransitionSink};
-pub use sensor::{SensorFrame, SensorFrameSource, SensorValidityFlags};
+pub use counters::{
+    OutputAssemblyCounters, OutputStageSnapshot, SignalAssemblyCounters, SignalStageSnapshot,
+};
+pub use debug::{OutputStage, SignalStage, StageOutcome, TraceLevel};
+pub use edge::{EdgeLine, EdgePolarity, EdgeSample, EdgeSource, TracedEdgeSample};
+pub use observation::{
+    InputFinalStateTrace, ObservationFaultFlags, ObservationHeader, ObservationQuality,
+    ObservationSchemaId, ObservationSchemaVersion, ObservationSequence, ObservationStageRecord,
+    SourceId, TimestampDomain, TraceId,
+};
+pub use output::{
+    OutputLevel, OutputRequestFinalTrace, OutputTransition, OutputTransitionKind,
+    OutputTransitionSink,
+};
+pub use sensor::{SensorFrame, SensorFrameSource, SensorValidityFlags, TracedSensorFrame};
 
 #[cfg(test)]
 mod tests {

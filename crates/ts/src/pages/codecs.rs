@@ -17,7 +17,7 @@ pub use sensors_limits_angles::*;
 pub use tables::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PageCodecError {
+pub enum PageError {
     WrongSize,
     Invalid,
 }

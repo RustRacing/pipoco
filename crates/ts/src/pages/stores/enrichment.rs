@@ -50,7 +50,7 @@ pub fn write_enrichment_page(
 ) -> Result<(), PageError> {
     match page {
         PAGE_AE => {
-            let p = AePage::decode(data).map_err(page_codec_error_to_page_error)?;
+            let p = AePage::decode(data)?;
             ae.tpsdot_thresh_pct_s = p.tpsdot_thresh_pct_s;
             ae.mapdot_thresh_kpa_s = p.mapdot_thresh_kpa_s;
             ae.percent_gain = p.percent_gain;
@@ -59,7 +59,7 @@ pub fn write_enrichment_page(
             Ok(())
         }
         PAGE_DFCO => {
-            let p = DfcoPage::decode(data).map_err(page_codec_error_to_page_error)?;
+            let p = DfcoPage::decode(data)?;
             dfco.tps_max_pct = p.tps_max_pct;
             dfco.map_max_kpa = p.map_max_kpa;
             dfco.rpm_min = p.rpm_min;
@@ -69,7 +69,7 @@ pub fn write_enrichment_page(
             Ok(())
         }
         PAGE_WUE => {
-            let p = WuePage::decode(data).map_err(page_codec_error_to_page_error)?;
+            let p = WuePage::decode(data)?;
             wue.max_percent = p.max_percent;
             wue.min_percent = p.min_percent;
             wue.start_c = p.start_c;
@@ -77,7 +77,7 @@ pub fn write_enrichment_page(
             Ok(())
         }
         PAGE_ASE => {
-            let p = AsePage::decode(data).map_err(page_codec_error_to_page_error)?;
+            let p = AsePage::decode(data)?;
             ase.percent = p.percent;
             ase.taper_time_ms = p.taper_time_ms;
             ase.lockout_ms = p.lockout_ms as u32;

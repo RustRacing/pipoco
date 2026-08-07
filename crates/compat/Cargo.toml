@@ -13,6 +13,7 @@ ecu-transport = { path = "../transport", default-features = false }
 
 ecu-io = { path = "../io" }
 ecu-calibration = { path = "../calibration" }
+ecu-control = { path = "../control" }
 ecu-runtime = { path = "../runtime" }
 # Canonical TS protocol/server shell. Shell-only: no runtime/board deps.
 ecu-ts = { path = "../ts", default-features = false, features = ["persistence", "runtime"] }
@@ -32,7 +33,11 @@ test-utils = []
 # This allows integration tests to use create_test_pair() and split-crate runtime checks.
 ecu-sim = { path = "../../sim/harness" }
 ecu-spec = { path = "../spec" }
+ecu-test-fixtures = { path = "../test-fixtures" }
 
+
+[lints]
+workspace = true
 [[test]]
 name = "transport_integration"
 required-features = ["transport-bbqueue"]

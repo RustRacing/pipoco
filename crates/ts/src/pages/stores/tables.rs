@@ -6,7 +6,7 @@ impl<'a> FuelIgnPageStore<'a> {
     }
 
     fn write_fuel(&mut self, data: &[u8]) -> Result<(), PageError> {
-        decode_fuel_table_page_into(data, self.fuel).map_err(page_codec_error_to_page_error)
+        decode_fuel_table_page_into(data, self.fuel)
     }
 
     fn read_ign(&self, out: &mut [u8]) -> Option<usize> {
@@ -14,7 +14,7 @@ impl<'a> FuelIgnPageStore<'a> {
     }
 
     fn write_ign(&mut self, data: &[u8]) -> Result<(), PageError> {
-        decode_ignition_table_page_into(data, self.ign).map_err(page_codec_error_to_page_error)
+        decode_ignition_table_page_into(data, self.ign)
     }
 }
 

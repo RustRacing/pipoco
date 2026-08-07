@@ -504,7 +504,7 @@ fn timed_injection_on(channel: u8, start_at: u32, end_at: u32) -> TimedInjection
     TimedInjectionPlan {
         plan: SchedulerInjectionPlan {
             output: ExclusiveChannel::new(OutputGroup::Injector, ChannelId::new(channel)),
-            pulse_width: ecu_scheduler::PulseWidthUs::new((end_at - start_at) as u16),
+            pulse_width: ecu_scheduler::PulseWidthUs::new((end_at - start_at) as u32),
         },
         start_at: Micros::new(start_at),
         end_at: Micros::new(end_at),
@@ -1010,6 +1010,11 @@ fn scheduled_action_executor_capacity8_supports_current_split_scheduler_topology
         ),
         Ok(8)
     );
+    let counters = executor.output_assembly_counters();
+    assert_eq!(counters.output_executor.seen, 8);
+    assert_eq!(counters.output_observer.seen, 8);
+    assert_eq!(counters.output_executor.last_timestamp, Micros::new(1_000));
+    assert_eq!(counters.output_observer.last_timestamp, Micros::new(1_000));
     assert_eq!(inj0.high_count, 1);
     assert_eq!(inj0.low_count, 1);
     assert_eq!(inj1.high_count, 1);

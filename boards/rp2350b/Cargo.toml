@@ -50,6 +50,9 @@ transport-can-fd = [
 
 [build-dependencies]
 
+
+[lints]
+workspace = true
 [[bin]]
 name = "ecu-rp2350b-min"
 path = "src/bin/minimal_ecu.rs"

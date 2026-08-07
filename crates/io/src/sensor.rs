@@ -50,6 +50,22 @@ pub struct SensorFrame {
     pub lambda_x100: Lambda100,
 }
 
+impl SensorFrame {
+    pub const fn with_trace_id(self, trace_id: crate::TraceId) -> TracedSensorFrame {
+        TracedSensorFrame {
+            trace_id,
+            frame: self,
+        }
+    }
+}
+
+/// A sensor frame paired with a trace identifier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TracedSensorFrame {
+    pub trace_id: crate::TraceId,
+    pub frame: SensorFrame,
+}
+
 /// Packed validity flags for optional sensor channels at external boundaries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SensorValidityFlags(u8);
@@ -165,5 +181,14 @@ mod tests {
         assert!(flags.contains(SensorValidityFlags::KNOCK));
         assert!(!flags.contains(SensorValidityFlags::VEHICLE_SPEED));
         assert!(!flags.contains(SensorValidityFlags::LAMBDA));
+    }
+
+    #[test]
+    fn with_trace_id_preserves_frame_and_trace_id() {
+        const TRACE_ID: crate::TraceId = crate::TraceId::new(0x1234_5678);
+        const TRACED: TracedSensorFrame = BASE_FRAME.with_trace_id(TRACE_ID);
+
+        assert_eq!(TRACED.trace_id, TRACE_ID);
+        assert_eq!(TRACED.frame, BASE_FRAME);
     }
 }

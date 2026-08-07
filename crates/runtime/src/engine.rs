@@ -22,6 +22,9 @@ use ecu_domain::{
     DwellUs, EnginePhase, EngineTimeAuthority, FaultCode, FaultSeverity, Kpa10, Lambda100, Micros,
     PhaseSyncState, PulseWidthUs, Rpm, SyncState,
 };
+use ecu_io::{
+    OutputAssemblyCounters, OutputStage, SignalAssemblyCounters, SignalStage, StageOutcome, TraceId,
+};
 use ecu_scheduler::{
     CrankSnapshot, ExclusiveChannel, FuelOutputProfile, FuelPlan, FullEcuIgnitionScheduler,
     FullEcuInjectionScheduler, IgnitionScheduler, InjectionPlan, InjectionScheduler, OutputGroup,
@@ -120,6 +123,8 @@ pub struct EngineRuntime {
     pub(crate) calibration: CalibrationState,
     pub(crate) scheduler: SchedulerState,
     pub(crate) planners: ControlPlannerState,
+    pub(crate) signal_assembly_counters: SignalAssemblyCounters,
+    pub(crate) output_assembly_counters: OutputAssemblyCounters,
     pub(crate) runtime_snapshot: RuntimeSnapshot,
     pub(crate) calibration_snapshot: CalibrationSnapshot,
     pub(crate) output_profile: RuntimeOutputProfile,
@@ -205,8 +210,46 @@ impl Default for RuntimeFuelStrategy {
     }
 }
 
+impl EngineRuntime {
+    pub const fn signal_assembly_counters(&self) -> SignalAssemblyCounters {
+        self.signal_assembly_counters
+    }
+
+    pub fn pending_output_count(&self) -> usize {
+        self.scheduler.pending_output_count()
+    }
+
+    pub fn output_assembly_counters(&self) -> OutputAssemblyCounters {
+        let mut counters = self.output_assembly_counters;
+        counters.merge_from(self.scheduler.output_assembly_counters());
+        counters
+    }
+
+    fn record_signal_stage(&mut self, stage: SignalStage, timestamp: Micros) {
+        self.signal_assembly_counters.record(
+            stage,
+            StageOutcome::Accepted,
+            TraceId::default(),
+            0,
+            timestamp,
+            0,
+        );
+    }
+
+    fn record_output_stage(
+        &mut self,
+        stage: OutputStage,
+        outcome: StageOutcome,
+        timestamp: Micros,
+    ) {
+        self.output_assembly_counters
+            .record(stage, outcome, TraceId::default(), 0, timestamp, 0);
+    }
+}
+
 mod actions;
 mod config;
 mod control;
+mod fuel_intent;
 mod snapshot;
 mod step;

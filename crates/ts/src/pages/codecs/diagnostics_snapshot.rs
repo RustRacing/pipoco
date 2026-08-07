@@ -1,8 +1,8 @@
 use super::*;
 
-pub fn encode_snapshot_page(page: &SnapshotPage, out: &mut [u8]) -> Result<usize, PageCodecError> {
+pub fn encode_snapshot_page(page: &SnapshotPage, out: &mut [u8]) -> Result<usize, PageError> {
     if out.len() < SNAPSHOT_PAGE_BYTES {
-        return Err(PageCodecError::WrongSize);
+        return Err(PageError::WrongSize);
     }
 
     out[0..2].copy_from_slice(&page.rpm.to_le_bytes());
@@ -21,9 +21,9 @@ pub fn encode_snapshot_page(page: &SnapshotPage, out: &mut [u8]) -> Result<usize
     Ok(SNAPSHOT_PAGE_BYTES)
 }
 
-pub fn encode_diag_page(page: &DiagPage, out: &mut [u8]) -> Result<usize, PageCodecError> {
+pub fn encode_diag_page(page: &DiagPage, out: &mut [u8]) -> Result<usize, PageError> {
     if out.len() < DIAG_PAGE_BYTES {
-        return Err(PageCodecError::WrongSize);
+        return Err(PageError::WrongSize);
     }
 
     out[..DIAG_PAGE_BYTES].fill(0);
@@ -50,9 +50,9 @@ pub fn encode_diag_page(page: &DiagPage, out: &mut [u8]) -> Result<usize, PageCo
     Ok(DIAG_PAGE_BYTES)
 }
 
-pub fn decode_diag_page(data: &[u8]) -> Result<DiagPage, PageCodecError> {
+pub fn decode_diag_page(data: &[u8]) -> Result<DiagPage, PageError> {
     if data.len() != DIAG_PAGE_BYTES {
-        return Err(PageCodecError::WrongSize);
+        return Err(PageError::WrongSize);
     }
 
     Ok(DiagPage {
@@ -79,9 +79,9 @@ pub fn decode_diag_page(data: &[u8]) -> Result<DiagPage, PageCodecError> {
     })
 }
 
-pub fn encode_diag_log_page(page: &DiagLogPage, out: &mut [u8]) -> Result<usize, PageCodecError> {
+pub fn encode_diag_log_page(page: &DiagLogPage, out: &mut [u8]) -> Result<usize, PageError> {
     if out.len() < DIAG_LOG_PAGE_BYTES {
-        return Err(PageCodecError::WrongSize);
+        return Err(PageError::WrongSize);
     }
 
     for (idx, entry) in page.entries.iter().enumerate() {
@@ -102,9 +102,9 @@ pub fn encode_diag_log_page(page: &DiagLogPage, out: &mut [u8]) -> Result<usize,
     Ok(DIAG_LOG_PAGE_BYTES)
 }
 
-pub fn decode_diag_log_page(data: &[u8]) -> Result<DiagLogPage, PageCodecError> {
+pub fn decode_diag_log_page(data: &[u8]) -> Result<DiagLogPage, PageError> {
     if data.len() != DIAG_LOG_PAGE_BYTES {
-        return Err(PageCodecError::WrongSize);
+        return Err(PageError::WrongSize);
     }
 
     let mut entries = [DiagLogEntryPage::empty(); DIAG_LOG_ENTRY_COUNT];

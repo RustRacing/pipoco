@@ -97,15 +97,15 @@ mod tests {
     #[test]
     fn derive_request_maps_tps_x100_to_x1000_and_clamps() {
         let mut input = InputSnapshot {
-            t_us: Micros(0),
-            rpm: Rpm(0),
-            map_kpa10: Kpa10(1000),
-            load_kpa10: Kpa10(1000),
+            t_us: Micros::new(0),
+            rpm: Rpm::new(0),
+            map_kpa10: Kpa10::new(1000),
+            load_kpa10: Kpa10::new(1000),
             tps_x100: 5370,
-            clt_c10: TempC10(800),
-            iat_c10: TempC10(200),
-            baro_kpa10: Kpa10(1000),
-            vbatt_mv: Millivolts(12_000),
+            clt_c10: TempC10::new(800),
+            iat_c10: TempC10::new(200),
+            baro_kpa10: Kpa10::new(1000),
+            vbatt_mv: Millivolts::new(12_000),
             knock_intensity_x100: 0,
             launch_armed: false,
             flat_shift_armed: false,

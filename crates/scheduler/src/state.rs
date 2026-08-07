@@ -4,10 +4,10 @@ use crate::{
     TimedInjectionPlan,
 };
 use ecu_board_api::frontier::{
-    TimingIslandHorizonSequenceId as FrontierHorizonSequenceId,
-    TimingIslandPermitMask as FrontierPermitMask, TimingIslandStopReason as FrontierStopReason,
-    HEARTBEAT_EXPIRY_US as FRONTIER_HEARTBEAT_EXPIRY_US, MAX_HORIZON_US as FRONTIER_MAX_HORIZON_US,
+    TimingIslandHorizonSequenceId, TimingIslandPermitMask, TimingIslandStopReason,
+    HEARTBEAT_EXPIRY_US, MAX_HORIZON_US,
 };
+use ecu_io::{OutputAssemblyCounters, OutputStage, StageOutcome, TraceId};
 
 /// High-level scheduler mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
@@ -25,21 +25,22 @@ pub struct SchedulerState {
     active_groups: u8,
     reserved_channels: [u128; 4],
     scheduled_windows: [Option<ScheduledWindow>; MAX_SCHEDULED_WINDOWS],
-    last_accepted_horizon_id: Option<FrontierHorizonSequenceId>,
+    last_accepted_horizon_id: Option<TimingIslandHorizonSequenceId>,
     last_accepted_horizon_start_us: Option<Micros>,
     last_accepted_horizon_end_us: Option<Micros>,
-    active_horizon_id: Option<FrontierHorizonSequenceId>,
+    active_horizon_id: Option<TimingIslandHorizonSequenceId>,
     horizon_start_us: Option<Micros>,
     horizon_end_us: Option<Micros>,
     heartbeat_deadline_us: Option<Micros>,
-    active_permit_mask: FrontierPermitMask,
-    active_stop_reason: FrontierStopReason,
+    active_permit_mask: TimingIslandPermitMask,
+    active_stop_reason: TimingIslandStopReason,
     injection_count: u8,
     ignition_count: u8,
     last_injection_start: Option<Micros>,
     last_injection_end: Option<Micros>,
     last_ignition_start: Option<Micros>,
     last_ignition_end: Option<Micros>,
+    output_assembly_counters: OutputAssemblyCounters,
 }
 
 impl SchedulerState {
@@ -56,14 +57,15 @@ impl SchedulerState {
             horizon_start_us: None,
             horizon_end_us: None,
             heartbeat_deadline_us: None,
-            active_permit_mask: FrontierPermitMask::NONE,
-            active_stop_reason: FrontierStopReason::None,
+            active_permit_mask: TimingIslandPermitMask::NONE,
+            active_stop_reason: TimingIslandStopReason::None,
             injection_count: 0,
             ignition_count: 0,
             last_injection_start: None,
             last_injection_end: None,
             last_ignition_start: None,
             last_ignition_end: None,
+            output_assembly_counters: OutputAssemblyCounters::new(),
         }
     }
 
@@ -83,7 +85,7 @@ impl SchedulerState {
         self.reserved_channels
     }
 
-    pub const fn last_accepted_horizon_id(self) -> Option<FrontierHorizonSequenceId> {
+    pub const fn last_accepted_horizon_id(self) -> Option<TimingIslandHorizonSequenceId> {
         self.last_accepted_horizon_id
     }
 
@@ -95,7 +97,7 @@ impl SchedulerState {
         self.last_accepted_horizon_end_us
     }
 
-    pub const fn active_horizon_id(self) -> Option<FrontierHorizonSequenceId> {
+    pub const fn active_horizon_id(self) -> Option<TimingIslandHorizonSequenceId> {
         self.active_horizon_id
     }
 
@@ -111,16 +113,20 @@ impl SchedulerState {
         self.heartbeat_deadline_us
     }
 
-    pub const fn active_permit_mask(self) -> FrontierPermitMask {
+    pub const fn active_permit_mask(self) -> TimingIslandPermitMask {
         self.active_permit_mask
     }
 
-    pub const fn active_stop_reason(self) -> FrontierStopReason {
+    pub const fn active_stop_reason(self) -> TimingIslandStopReason {
         self.active_stop_reason
     }
 
     pub const fn injection_count(self) -> u8 {
         self.injection_count
+    }
+
+    pub const fn pending_output_count(self) -> usize {
+        self.injection_count() as usize + self.ignition_count() as usize
     }
 
     pub const fn ignition_count(self) -> u8 {
@@ -141,6 +147,10 @@ impl SchedulerState {
 
     pub const fn last_ignition_end(self) -> Option<Micros> {
         self.last_ignition_end
+    }
+
+    pub const fn output_assembly_counters(self) -> OutputAssemblyCounters {
+        self.output_assembly_counters
     }
 
     pub fn arm_group(&mut self, group: OutputGroup) {
@@ -201,7 +211,7 @@ impl SchedulerState {
 
     pub fn cancel_all(&mut self) {
         self.clear_scheduled_ownership();
-        self.clear_live_frontier_state(FrontierStopReason::PermitDenied);
+        self.clear_live_frontier_state(TimingIslandStopReason::PermitDenied);
     }
 
     pub fn suspend(&mut self) {
@@ -210,7 +220,7 @@ impl SchedulerState {
     }
 
     pub fn on_sync_loss(&mut self) {
-        self.clear_live_frontier_state(FrontierStopReason::SyncLost);
+        self.clear_live_frontier_state(TimingIslandStopReason::SyncLost);
         self.suspend();
     }
 
@@ -226,24 +236,22 @@ impl SchedulerState {
     }
 
     pub fn on_hard_safety_shutdown(&mut self) {
-        self.clear_live_frontier_state(FrontierStopReason::TimingFault);
+        self.clear_live_frontier_state(TimingIslandStopReason::TimingFault);
         self.suspend();
     }
 
     pub fn commit_horizon(
         &mut self,
-        horizon_id: FrontierHorizonSequenceId,
+        horizon_id: TimingIslandHorizonSequenceId,
         horizon_start_us: Micros,
         horizon_end_us: Micros,
         heartbeat_deadline_us: Micros,
-        permit_mask: FrontierPermitMask,
+        permit_mask: TimingIslandPermitMask,
     ) -> bool {
         if horizon_end_us.get() <= horizon_start_us.get() {
             return false;
         }
-        if horizon_end_us.get().saturating_sub(horizon_start_us.get())
-            > FRONTIER_MAX_HORIZON_US.get()
-        {
+        if horizon_end_us.get().saturating_sub(horizon_start_us.get()) > MAX_HORIZON_US.get() {
             return false;
         }
         if self
@@ -261,14 +269,14 @@ impl SchedulerState {
         self.horizon_end_us = Some(horizon_end_us);
         self.heartbeat_deadline_us = Some(heartbeat_deadline_us);
         self.active_permit_mask = permit_mask;
-        self.active_stop_reason = FrontierStopReason::None;
+        self.active_stop_reason = TimingIslandStopReason::None;
         true
     }
 
     pub fn note_heartbeat(&mut self, now: Micros) {
         if self.active_horizon_id.is_some() {
             self.heartbeat_deadline_us = Some(Micros::new(
-                now.get().saturating_add(FRONTIER_HEARTBEAT_EXPIRY_US.get()),
+                now.get().saturating_add(HEARTBEAT_EXPIRY_US.get()),
             ));
         }
     }
@@ -278,12 +286,12 @@ impl SchedulerState {
         self.expire_horizon(now);
     }
 
-    pub fn clear_live_frontier_state(&mut self, stop_reason: FrontierStopReason) {
+    pub fn clear_live_frontier_state(&mut self, stop_reason: TimingIslandStopReason) {
         self.active_horizon_id = None;
         self.horizon_start_us = None;
         self.horizon_end_us = None;
         self.heartbeat_deadline_us = None;
-        self.active_permit_mask = FrontierPermitMask::NONE;
+        self.active_permit_mask = TimingIslandPermitMask::NONE;
         self.active_stop_reason = stop_reason;
     }
 
@@ -295,9 +303,9 @@ impl SchedulerState {
             return false;
         }
 
-        self.active_permit_mask = FrontierPermitMask::NONE;
-        if self.active_stop_reason == FrontierStopReason::None {
-            self.active_stop_reason = FrontierStopReason::HeartbeatExpired;
+        self.active_permit_mask = TimingIslandPermitMask::NONE;
+        if self.active_stop_reason == TimingIslandStopReason::None {
+            self.active_stop_reason = TimingIslandStopReason::HeartbeatExpired;
         }
         true
     }
@@ -311,7 +319,7 @@ impl SchedulerState {
         }
 
         self.clear_live_frontier_state(match self.active_stop_reason {
-            FrontierStopReason::None => FrontierStopReason::HorizonExpired,
+            TimingIslandStopReason::None => TimingIslandStopReason::HorizonExpired,
             reason => reason,
         });
         true
@@ -324,9 +332,26 @@ impl SchedulerState {
         end_at: Micros,
         plan: InjectionPlan,
     ) -> Result<TimedInjectionPlan, ScheduleError> {
-        self.ensure_schedulable()?;
-        let timed = Self::convert_deadline(now, start_at, end_at)?;
-        self.reserve_window(plan.output, timed.0, timed.1)?;
+        if let Err(err) = self.ensure_schedulable() {
+            self.record_output_admission(StageOutcome::Rejected, now);
+            return Err(err);
+        }
+        let timed = match Self::convert_deadline(now, start_at, end_at) {
+            Ok(timed) => timed,
+            Err(err) => {
+                let outcome = match err {
+                    ScheduleError::StaleDeadline => StageOutcome::Stale,
+                    _ => StageOutcome::Rejected,
+                };
+                self.record_output_admission(outcome, now);
+                return Err(err);
+            }
+        };
+        if let Err(err) = self.reserve_window(plan.output, timed.0, timed.1) {
+            self.record_output_admission(StageOutcome::Rejected, now);
+            return Err(err);
+        }
+        self.record_output_admission(StageOutcome::Admitted, now);
         self.last_injection_start = Some(timed.0);
         self.last_injection_end = Some(timed.1);
         Ok(TimedInjectionPlan {
@@ -343,9 +368,26 @@ impl SchedulerState {
         end_at: Micros,
         plan: IgnitionPlan,
     ) -> Result<TimedIgnitionPlan, ScheduleError> {
-        self.ensure_schedulable()?;
-        let timed = Self::convert_deadline(now, start_at, end_at)?;
-        self.reserve_window(plan.output, timed.0, timed.1)?;
+        if let Err(err) = self.ensure_schedulable() {
+            self.record_output_admission(StageOutcome::Rejected, now);
+            return Err(err);
+        }
+        let timed = match Self::convert_deadline(now, start_at, end_at) {
+            Ok(timed) => timed,
+            Err(err) => {
+                let outcome = match err {
+                    ScheduleError::StaleDeadline => StageOutcome::Stale,
+                    _ => StageOutcome::Rejected,
+                };
+                self.record_output_admission(outcome, now);
+                return Err(err);
+            }
+        };
+        if let Err(err) = self.reserve_window(plan.output, timed.0, timed.1) {
+            self.record_output_admission(StageOutcome::Rejected, now);
+            return Err(err);
+        }
+        self.record_output_admission(StageOutcome::Admitted, now);
         self.last_ignition_start = Some(timed.0);
         self.last_ignition_end = Some(timed.1);
         Ok(TimedIgnitionPlan {
@@ -450,6 +492,17 @@ impl SchedulerState {
             self.reserved_channels[OutputGroup::Injector.index()].count_ones() as u8;
         self.ignition_count =
             self.reserved_channels[OutputGroup::Ignition.index()].count_ones() as u8;
+    }
+
+    fn record_output_admission(&mut self, outcome: StageOutcome, now: Micros) {
+        self.output_assembly_counters.record(
+            OutputStage::OutputAdmission,
+            outcome,
+            TraceId::default(),
+            0,
+            now,
+            0,
+        );
     }
 }
 

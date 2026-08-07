@@ -3,19 +3,22 @@ name = "ecu-spec"
 version = "0.1.0"
 edition = "2021"
 
-[lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)', 'cfg(verus)'] }
 
 [lib]
 path = "src/lib.rs"
 
 [dependencies]
+ecu-control = { path = "../control" }
+ecu-domain = { path = "../domain" }
 
 [dev-dependencies]
 criterion = "0.4"
 kani = "0.0.1"
 proptest = "1.4"
 
+
+[lints]
+workspace = true
 [[bench]]
 name = "spec_bench"
 harness = false

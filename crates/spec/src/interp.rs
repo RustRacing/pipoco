@@ -66,12 +66,12 @@ pub fn bilerp_u16(table: &Table2D16<u16>, rpm: Rpm, load: Kpa10) -> u16 {
     let rpm_len = table.rpm_axis.len as usize;
     let load_len = table.load_axis.len as usize;
     let rpm_clip = clip_u16(
-        rpm.0,
+        rpm.get(),
         table.rpm_axis.values[0],
         table.rpm_axis.values[rpm_len - 1],
     );
     let load_clip = clip_u16(
-        load.0,
+        load.get(),
         table.load_axis.values[0],
         table.load_axis.values[load_len - 1],
     );
@@ -97,12 +97,12 @@ pub fn bilerp_i16(table: &Table2D16<i16>, rpm: Rpm, load: Kpa10) -> i16 {
     let rpm_len = table.rpm_axis.len as usize;
     let load_len = table.load_axis.len as usize;
     let rpm_clip = clip_u16(
-        rpm.0,
+        rpm.get(),
         table.rpm_axis.values[0],
         table.rpm_axis.values[rpm_len - 1],
     );
     let load_clip = clip_u16(
-        load.0,
+        load.get(),
         table.load_axis.values[0],
         table.load_axis.values[load_len - 1],
     );
@@ -209,10 +209,10 @@ mod tests {
         values[1][0] = 30;
         values[1][1] = 40;
         let table = table_u16(values);
-        assert_eq!(bilerp_u16(&table, Rpm(100), Kpa10(10)), 10);
-        assert_eq!(bilerp_u16(&table, Rpm(200), Kpa10(10)), 20);
-        assert_eq!(bilerp_u16(&table, Rpm(100), Kpa10(20)), 30);
-        assert_eq!(bilerp_u16(&table, Rpm(200), Kpa10(20)), 40);
+        assert_eq!(bilerp_u16(&table, Rpm::new(100), Kpa10::new(10)), 10);
+        assert_eq!(bilerp_u16(&table, Rpm::new(200), Kpa10::new(10)), 20);
+        assert_eq!(bilerp_u16(&table, Rpm::new(100), Kpa10::new(20)), 30);
+        assert_eq!(bilerp_u16(&table, Rpm::new(200), Kpa10::new(20)), 40);
     }
 
     #[test]
@@ -223,10 +223,10 @@ mod tests {
         values[1][0] = 10;
         values[1][1] = 20;
         let table = table_i16(values);
-        assert_eq!(bilerp_i16(&table, Rpm(100), Kpa10(10)), -10);
-        assert_eq!(bilerp_i16(&table, Rpm(200), Kpa10(10)), 0);
-        assert_eq!(bilerp_i16(&table, Rpm(100), Kpa10(20)), 10);
-        assert_eq!(bilerp_i16(&table, Rpm(200), Kpa10(20)), 20);
+        assert_eq!(bilerp_i16(&table, Rpm::new(100), Kpa10::new(10)), -10);
+        assert_eq!(bilerp_i16(&table, Rpm::new(200), Kpa10::new(10)), 0);
+        assert_eq!(bilerp_i16(&table, Rpm::new(100), Kpa10::new(20)), 10);
+        assert_eq!(bilerp_i16(&table, Rpm::new(200), Kpa10::new(20)), 20);
     }
 
     #[test]
@@ -242,7 +242,7 @@ mod tests {
         values[2][1] = 400;
         values[2][2] = 500;
         let table = table_u16(values);
-        assert_eq!(bilerp_u16(&table, Rpm(50), Kpa10(5)), 100);
-        assert_eq!(bilerp_u16(&table, Rpm(500), Kpa10(500)), 500);
+        assert_eq!(bilerp_u16(&table, Rpm::new(50), Kpa10::new(5)), 100);
+        assert_eq!(bilerp_u16(&table, Rpm::new(500), Kpa10::new(500)), 500);
     }
 }

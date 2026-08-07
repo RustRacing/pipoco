@@ -6,7 +6,7 @@ impl EcuState {
     pub fn update_flood_clear(&mut self) -> bool {
         safety::update_flood_clear(
             self.trigger_inputs().rpm,
-            self.tps_percent,
+            self.tps_percent(),
             &mut self.flood_clear_state,
         )
     }
@@ -22,8 +22,7 @@ impl EcuState {
     /// # Returns
     /// `true` if engine should shut down, `false` if should attempt recovery
     pub fn record_sync_loss(&mut self, current_time_us: u32) -> bool {
-        self.synced = false;
-        self.inputs.synced = false;
+        self.set_synced(false);
         self.sync_loss_tracker.record_sync_loss(current_time_us)
     }
 
@@ -31,8 +30,7 @@ impl EcuState {
     ///
     /// Call this when sync is successfully re-established after a loss.
     pub fn record_sync_recovery(&mut self) {
-        self.synced = true;
-        self.inputs.synced = true;
+        self.set_synced(true);
         self.sync_loss_tracker.record_recovery();
     }
 
@@ -199,8 +197,8 @@ impl EcuState {
         let plausibility_config = *self.plausibility_config();
 
         let fault = self.plausibility_state.check(
-            self.tps_percent,
-            self.map_kpa_x10,
+            self.tps_percent(),
+            self.map_kpa_x10(),
             self.trigger_inputs().rpm,
             &plausibility_config,
             now_us,
@@ -208,7 +206,7 @@ impl EcuState {
 
         // Log event when fault is first confirmed
         if self.plausibility_state.has_fault() && !old_has_fault {
-            let tps_percent = self.tps_percent as u32;
+            let tps_percent = self.tps_percent() as u32;
             self.diag_log_mut().push(diag::DiagEvent {
                 code: diag::DiagCode::TpsMapPlausibility,
                 timestamp: Micros::new(now_us),

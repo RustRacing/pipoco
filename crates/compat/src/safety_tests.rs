@@ -1,5 +1,56 @@
 use super::*;
 
+/// Drift pin (review 001): the compat `CrankingGate` must BE the control
+/// `CrankingGate` (re-export, not a copy), and the compat-side thresholds
+/// must match control's canonical constants.
+#[test]
+fn cranking_gate_is_control_definition_with_matching_thresholds() {
+    assert_eq!(
+        crate::constants::safety::CRANKING_RPM_THRESHOLD,
+        ecu_control::CRANKING_RPM_THRESHOLD
+    );
+    assert_eq!(
+        crate::constants::safety::CRANKING_EXIT_RPM,
+        ecu_control::CRANKING_EXIT_RPM
+    );
+
+    // Compile-time identity: a compat gate is assignable to the control type.
+    fn require_control_gate(_gate: ecu_control::CrankingGate) {}
+    let mut gate = CrankingGate::new();
+    require_control_gate(gate);
+
+    // Behavior pin: hysteresis entry/exit around the canonical constants.
+    assert!(gate.update(ecu_control::CRANKING_RPM_THRESHOLD - 1));
+    assert!(gate.update(ecu_control::CRANKING_RPM_THRESHOLD + 50));
+    assert!(!gate.update(ecu_control::CRANKING_EXIT_RPM));
+    assert!(gate.update(ecu_control::CRANKING_RPM_THRESHOLD - 1));
+}
+
+/// Drift pin (review 001): the compat `DfcoState` must BE the control
+/// `DecelFuelCutState` (re-export, not a copy), and both must agree on the
+/// enter-delay / resume-hysteresis verdicts for an identical input stream.
+#[test]
+fn dfco_state_is_control_definition_and_matches_verdicts() {
+    let cfg = crate::dfco::DfcoConfig::DEFAULT;
+
+    // Compile-time identity: a compat DFCO state is the control type.
+    fn require_control_dfco(_state: ecu_control::DecelFuelCutState) {}
+    require_control_dfco(crate::dfco::DfcoState::new());
+
+    // Identical verdict stream through the shared definition.
+    let mut st = crate::dfco::DfcoState::new();
+    assert!(!st.update(0, 2000, 0, 20, &cfg)); // delay applies
+    assert!(st.update(cfg.delay_ms * 1000 + 1, 2000, 0, 20, &cfg)); // engaged
+    assert!(st.update(cfg.delay_ms * 1000 + 50_000, 2000, 10, 20, &cfg)); // hysteresis hold
+    assert!(!st.update(
+        cfg.delay_ms * 1000 + cfg.resume_hyst_ms * 1000 + 2,
+        2000,
+        10,
+        20,
+        &cfg
+    ));
+}
+
 #[test]
 fn cranking_gate_hysteresis() {
     let mut cg = CrankingGate::new();

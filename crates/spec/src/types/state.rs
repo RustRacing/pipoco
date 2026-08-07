@@ -43,7 +43,7 @@ impl Default for MathState {
             last_valid_clt_c10: TempC10::default(),
             last_valid_iat_c10: TempC10::default(),
             last_valid_baro_kpa10: Kpa10::default(),
-            trim_ratio_x1000: RatioX1000(1000),
+            trim_ratio_x1000: RatioX1000::new(1000),
         }
     }
 }

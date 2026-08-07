@@ -9,7 +9,7 @@ use super::{
     write_enrichment_page, ActuatorPageStore, AeSetup, AnglesPageStore, AnglesSetup, AseSetup,
     ClSetup, DfcoSetup, DiagnosticLogEntry, DiagnosticPageStore, DiagnosticSnapshot,
     ExpertTriggerPageState, FanSetup, FuelIgnPageStore, FuelTunePageStore, IdleSetup,
-    LimitsPageStore, LimitsSetup, SensorsPageStore, SensorsSetup, SnapshotPageStore,
+    LimitsPageStore, LimitsSetup, SensorsPageStore, SensorsSetup, SnapshotPage, SnapshotPageStore,
     VeTunePageLimits, VeTuneSetup, WueSetup, DIAG_LOG_ENTRY_COUNT, PAGE_AE, PAGE_AFR_TABLE,
     PAGE_ANGLES, PAGE_ASE, PAGE_CL, PAGE_DFCO, PAGE_DIAG, PAGE_DIAG_LOG, PAGE_EXPERT_TRIGGER,
     PAGE_FAN, PAGE_FUEL, PAGE_IDLE, PAGE_IGN, PAGE_LIMITS, PAGE_SENSORS, PAGE_SNAPSHOT,
@@ -23,7 +23,7 @@ use ecu_calibration::sensors::SensorsCal;
 use ecu_domain::{Micros, Rpm, SyncState};
 
 const MIN_PULSE_WIDTH_US: u16 = 500;
-const MAX_PULSE_WIDTH_US: u16 = 20000;
+use ecu_domain::MAX_PULSE_WIDTH_US;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct SystemSnapshot {
@@ -68,7 +68,7 @@ pub struct EcuPageStore<'a> {
     pub emerg_trig_tps: &'a mut bool,
     pub diag_log_entries: [Option<DiagnosticLogEntry>; DIAG_LOG_ENTRY_COUNT],
     pub snapshot: &'a SystemSnapshot,
-    pub tooth_count: &'a u8,
+    pub tooth_count: u8,
     pub sync_loss_counter: u16,
     pub current_fault_code: u8,
     pub current_fault_severity: u8,
@@ -98,7 +98,7 @@ impl<'a> EcuPageStore<'a> {
         };
 
         DiagnosticSnapshot {
-            current_tooth_count: *self.tooth_count,
+            current_tooth_count: self.tooth_count,
             cam_seen: matches!(self.snapshot.sync, SyncState::Locked { cam_ref: true }),
             sync_state,
             phase_state,
@@ -276,19 +276,21 @@ impl<'a> PageStore for EcuPageStore<'a> {
                 };
                 SnapshotPageStore::read_page_from(
                     page,
-                    self.snapshot.rpm.raw(),
-                    sync_code,
-                    self.snapshot.cancel_reason,
-                    self.snapshot.base_pw.raw(),
-                    self.snapshot.enrich_mult_x100,
-                    self.snapshot.stft_x10,
-                    self.snapshot.fuel_mult_x100,
-                    self.snapshot.final_pw.raw(),
-                    self.snapshot.last_fault_code,
-                    self.snapshot.fault_severity,
-                    self.snapshot.isr_count,
-                    self.snapshot.isr_max_us,
-                    self.snapshot.isr_avg_us,
+                    &SnapshotPage {
+                        rpm: self.snapshot.rpm.raw(),
+                        sync_code,
+                        cancel_reason: self.snapshot.cancel_reason,
+                        base_pw_us: self.snapshot.base_pw.raw(),
+                        enrich_mult_x100: self.snapshot.enrich_mult_x100,
+                        stft_x10: self.snapshot.stft_x10,
+                        fuel_mult_x100: self.snapshot.fuel_mult_x100,
+                        final_pw_us: self.snapshot.final_pw.raw(),
+                        fault_code: self.snapshot.last_fault_code,
+                        fault_severity: self.snapshot.fault_severity,
+                        isr_count: self.snapshot.isr_count,
+                        isr_max_us: self.snapshot.isr_max_us,
+                        isr_avg_us: self.snapshot.isr_avg_us,
+                    },
                     out,
                 )
             }

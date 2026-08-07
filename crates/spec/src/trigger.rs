@@ -207,7 +207,7 @@ fn step_sync_and_angle(input: SyncTransitionInput) -> (TriggerSyncState, u8, Deg
                 (
                     TriggerSyncState::Synced,
                     next_index as u8,
-                    Degrees10::new(angle),
+                    Degrees10::new(angle as i16),
                     gap_fault_windows,
                 )
             }

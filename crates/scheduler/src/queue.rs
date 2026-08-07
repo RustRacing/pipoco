@@ -185,6 +185,12 @@ impl<const N: usize> ScheduledTransitionQueue<N> {
         &mut self,
         export: &ScheduleExport<M>,
     ) -> Result<(), ScheduleError> {
+        if export.len == 0 {
+            return Ok(());
+        }
+        if !Self::metadata_capacity_supported() {
+            return Err(ScheduleError::QueueFull);
+        }
         if self.free_slots() < export.len as usize {
             return Err(ScheduleError::QueueFull);
         }
@@ -481,5 +487,33 @@ impl TimedIgnitionPlan {
             len: 2,
             transitions,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn transition(at_us: u32, kind: ScheduledTransitionKind) -> ScheduledTransition {
+        ScheduledTransition {
+            at_us: Micros::new(at_us),
+            kind,
+            channel: ChannelId::new(0),
+            level: ScheduledLevel::High,
+        }
+    }
+
+    #[test]
+    fn enqueue_export_rejects_atomically_when_capacity_is_insufficient() {
+        let mut queue = ScheduledTransitionQueue::<1>::new();
+
+        let mut export = ScheduleExport::<2> {
+            len: 2,
+            transitions: [None; 2],
+        };
+        export.transitions[0] = Some(transition(10, ScheduledTransitionKind::Injector));
+        export.transitions[1] = Some(transition(20, ScheduledTransitionKind::Ignition));
+
+        assert_eq!(queue.enqueue_export(&export), Err(ScheduleError::QueueFull));
+        assert_eq!(queue.active_count(), 0);
     }
 }

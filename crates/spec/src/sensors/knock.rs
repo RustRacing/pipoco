@@ -1,15 +1,7 @@
+use crate::numeric::clamp_u16;
+
 const KNOCK_WINDOW_GAIN_X100: u16 = 100;
 const KNOCK_INTENSITY_MAX_X100: u16 = 10_000;
-
-const fn clamp_u16(value: u16, lo: u16, hi: u16) -> u16 {
-    if value < lo {
-        lo
-    } else if value > hi {
-        hi
-    } else {
-        value
-    }
-}
 
 pub fn knock_from_window(window_energy: u16) -> u16 {
     let scaled = (window_energy as u32 * KNOCK_WINDOW_GAIN_X100 as u32) / 100;

@@ -13,3 +13,6 @@ ecu-domain = { path = "../domain" }
 
 [features]
 default = []
+
+[lints]
+workspace = true

@@ -227,38 +227,11 @@ pub fn should_allow_injection(flood_clear_active: bool, sync_shutdown: bool) -> 
     true
 }
 
-/// Cranking gate with simple hysteresis to avoid flapping around the threshold.
-#[derive(Debug, Clone, Copy)]
-pub struct CrankingGate {
-    cranking: bool,
-}
-
-impl CrankingGate {
-    pub const fn new() -> Self {
-        Self { cranking: false }
-    }
-    /// Update internal state based on current RPM and return `true` if cranking.
-    pub fn update(&mut self, rpm: u16) -> bool {
-        if self.cranking {
-            // stay cranking until safely above exit threshold
-            if rpm >= CRANKING_EXIT_RPM {
-                self.cranking = false;
-            }
-        } else if rpm < CRANKING_RPM_THRESHOLD {
-            self.cranking = true;
-        }
-        self.cranking
-    }
-    pub fn is_cranking(&self) -> bool {
-        self.cranking
-    }
-}
-
-impl Default for CrankingGate {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+/// Canonical cranking gate, owned by `ecu-control`.
+///
+/// Compatibility shell keeps the control definition (with `CRANKING_EXIT_RPM`
+/// hysteresis) as the single source of truth; see review 001.
+pub use ecu_control::CrankingGate;
 
 /// Output latch and helpers for fail-safe states
 #[derive(Debug, Clone, Copy)]

@@ -200,17 +200,14 @@ impl EcuState {
     }
 
     pub fn set_rpm(&mut self, rpm: u16) {
-        self.rpm = rpm;
         self.inputs.rpm = rpm;
     }
 
     pub fn set_synced(&mut self, synced: bool) {
-        self.synced = synced;
         self.inputs.synced = synced;
     }
 
     pub fn set_tooth_count(&mut self, tooth_count: u8) {
-        self.tooth_count = tooth_count;
         self.inputs.tooth_count = tooth_count;
     }
 
@@ -332,9 +329,6 @@ impl EcuState {
     }
 
     pub fn set_trigger_inputs(&mut self, rpm: u16, synced: bool, tooth_count: u8) {
-        self.rpm = rpm;
-        self.synced = synced;
-        self.tooth_count = tooth_count;
         self.inputs.rpm = rpm;
         self.inputs.synced = synced;
         self.inputs.tooth_count = tooth_count;
@@ -349,12 +343,10 @@ impl EcuState {
     }
 
     pub fn set_clt_x10(&mut self, clt_x10: i16) {
-        self.clt_x10 = clt_x10;
         self.inputs.clt_x10 = clt_x10;
     }
 
     pub fn set_iat_x10(&mut self, iat_x10: i16) {
-        self.iat_x10 = iat_x10;
         self.inputs.iat_x10 = iat_x10;
     }
 
@@ -367,12 +359,10 @@ impl EcuState {
     }
 
     pub fn set_tps_percent(&mut self, tps_percent: u8) {
-        self.tps_percent = tps_percent;
         self.inputs.tps_percent = tps_percent;
     }
 
     pub fn set_map_kpa_x10(&mut self, map_kpa_x10: u16) {
-        self.map_kpa_x10 = map_kpa_x10;
         self.inputs.map_kpa_x10 = map_kpa_x10;
     }
 }

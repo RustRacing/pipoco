@@ -7,6 +7,7 @@ mod enrichment;
 mod fuel;
 mod ignition;
 mod lambda;
+pub mod sensors;
 #[cfg(test)]
 mod tests;
 mod torque;
@@ -25,6 +26,10 @@ pub use ignition::{
 pub use lambda::{
     LambdaDisableReason, LambdaMode, LambdaTrimConfig, LambdaTrimInputs, LambdaTrimPlanner,
     LambdaTrimResult,
+};
+pub use sensors::{
+    plausibility_step, slew_step, PlausibilityInput, PlausibilityResult, PlausibilityState,
+    SlewInput, SlewResult, SlewState, PLAUSIBILITY_DEBOUNCE_US, PLAUSIBILITY_MIN_RPM,
 };
 pub use torque::{AllowedTorque, TorqueArbiter, TorqueInputs, TorqueLimitReason};
 pub use types::{

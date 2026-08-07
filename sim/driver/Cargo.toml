@@ -17,3 +17,6 @@ ecu-trigger = { path = "../../crates/trigger" }
 
 [dev-dependencies]
 ecu-sim-ffi = { path = "../ffi", features = ["test-support"] }
+
+[lints]
+workspace = true

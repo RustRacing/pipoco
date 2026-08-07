@@ -8,15 +8,15 @@ use ecu_spec::{
 
 fn canonical_input() -> InputSnapshot {
     InputSnapshot {
-        t_us: ecu_spec::Micros(0),
-        rpm: ecu_spec::Rpm(1000),
-        map_kpa10: Kpa10(1000),
-        load_kpa10: Kpa10(1000),
+        t_us: ecu_spec::Micros::new(0),
+        rpm: ecu_spec::Rpm::new(1000),
+        map_kpa10: Kpa10::new(1000),
+        load_kpa10: Kpa10::new(1000),
         tps_x100: 0,
-        clt_c10: ecu_spec::TempC10(800),
-        iat_c10: ecu_spec::TempC10(250),
-        baro_kpa10: Kpa10(1000),
-        vbatt_mv: Millivolts(12_000),
+        clt_c10: ecu_spec::TempC10::new(800),
+        iat_c10: ecu_spec::TempC10::new(250),
+        baro_kpa10: Kpa10::new(1000),
+        vbatt_mv: Millivolts::new(12_000),
         knock_intensity_x100: 0,
         launch_armed: false,
         flat_shift_armed: false,
@@ -227,6 +227,35 @@ fn scheduler_state_transitions_between_modes() {
     state.cancel_group(OutputGroup::Injector);
     assert_eq!(state.mode(), SchedulerMode::Idle);
     assert!(!state.is_armed());
+}
+
+#[test]
+fn scheduler_state_pending_output_count_tracks_scheduled_windows() {
+    let mut state = SchedulerState::new();
+
+    assert_eq!(state.pending_output_count(), 0);
+    state
+        .reserve_window(
+            ExclusiveChannel::new(OutputGroup::Injector, ChannelId::new(0)),
+            Micros::new(100),
+            Micros::new(200),
+        )
+        .expect("reserve injector window");
+    state
+        .reserve_window(
+            ExclusiveChannel::new(OutputGroup::Ignition, ChannelId::new(0)),
+            Micros::new(100),
+            Micros::new(300),
+        )
+        .expect("reserve ignition window");
+
+    assert_eq!(state.pending_output_count(), 2);
+
+    state.cancel_group(OutputGroup::Injector);
+    assert_eq!(state.pending_output_count(), 1);
+
+    state.cancel_group(OutputGroup::Ignition);
+    assert_eq!(state.pending_output_count(), 0);
 }
 
 #[test]
@@ -476,6 +505,33 @@ fn schedule_rejects_stale_and_impossible_windows() {
 }
 
 #[test]
+fn scheduler_state_records_output_admission_outcomes() {
+    let mut state = SchedulerState::new();
+    let inj = InjectionPlan {
+        output: ExclusiveChannel::new(OutputGroup::Injector, ChannelId::new(1)),
+        pulse_width: PulseWidthUs::new(1200),
+    };
+    let ign = IgnitionPlan {
+        output: ExclusiveChannel::new(OutputGroup::Ignition, ChannelId::new(0)),
+        dwell: DwellUs::new(1200),
+        advance: Degrees10::new(120),
+    };
+
+    state
+        .schedule_injection(Micros::new(100), Micros::new(150), Micros::new(350), inj)
+        .expect("valid injection schedule");
+    assert_eq!(
+        state.schedule_ignition(Micros::new(100), Micros::new(100), Micros::new(150), ign),
+        Err(ScheduleError::StaleDeadline)
+    );
+
+    let counters = state.output_assembly_counters();
+    assert_eq!(counters.output_admission.seen, 2);
+    assert_eq!(counters.output_admission.accepted, 1);
+    assert_eq!(counters.output_admission.stale, 1);
+}
+
+#[test]
 fn suspended_state_rejects_scheduling() {
     let mut state = SchedulerState::new();
     state.on_sync_loss();
@@ -625,7 +681,7 @@ fn scheduler_differential_mapping_matches_oracle_angles() {
         &default_reference_calibration(),
         input,
         ecu_spec::FuelOutput {
-            pw_corr_us: ecu_spec::PulseWidthUs(3200),
+            pw_corr_us: ecu_spec::PulseWidthUs::new(3200),
         },
     );
 

@@ -180,34 +180,3 @@ pub struct EcuFaults {
     pub emergency_mode: bool,
     pub diag_log: diag::DiagLog<16>,
 }
-
-impl EcuInputs {
-    #[allow(clippy::too_many_arguments)]
-    pub const fn new(
-        rpm: u16,
-        synced: bool,
-        tooth_count: u8,
-        battery_voltage_mv: u16,
-        clt_x10: i16,
-        iat_x10: i16,
-        tps_percent: u8,
-        map_kpa_x10: u16,
-        last_enrichment_update_us: u32,
-        last_enrichment_tps_percent: u8,
-        last_enrichment_map_kpa_x10: u16,
-    ) -> Self {
-        Self {
-            rpm,
-            synced,
-            tooth_count,
-            battery_voltage_mv,
-            clt_x10,
-            iat_x10,
-            tps_percent,
-            map_kpa_x10,
-            last_enrichment_update_us,
-            last_enrichment_tps_percent,
-            last_enrichment_map_kpa_x10,
-        }
-    }
-}

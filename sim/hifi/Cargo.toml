@@ -10,3 +10,6 @@ path = "src/lib.rs"
 [dependencies]
 ecu-domain = { path = "../../crates/domain" }
 ecu-io = { path = "../../crates/io" }
+
+[lints]
+workspace = true

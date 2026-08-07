@@ -425,22 +425,22 @@ fn target_common_factory_reset_sets_current_schema_and_zero_payload() {
 #[test]
 fn unsynced_state_represented_correctly() {
     let mut state = EcuState::new();
-    state.synced = false;
-    assert!(!state.synced);
+    state.set_synced(false);
+    assert!(!state.synced());
 }
 
 #[test]
 fn ecu_state_public_fields_exist() {
     fn check(s: &EcuState) {
-        let _ = &s.rpm;
-        let _ = &s.synced;
-        let _ = &s.tooth_count;
+        let _ = s.rpm();
+        let _ = s.synced();
+        let _ = s.tooth_count();
         let _ = &s.config;
         let _ = &s.rev_limiter_state;
-        let _ = &s.clt_x10;
-        let _ = &s.iat_x10;
-        let _ = &s.tps_percent;
-        let _ = &s.map_kpa_x10;
+        let _ = s.clt_x10();
+        let _ = s.iat_x10();
+        let _ = s.tps_percent();
+        let _ = s.map_kpa_x10();
         let _ = &s.flood_clear_state;
         let _ = &s.sync_loss_tracker;
         let _ = &s.diag_map;

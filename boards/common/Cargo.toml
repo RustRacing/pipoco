@@ -9,7 +9,6 @@ path = "src/lib.rs"
 
 [dependencies]
 ecu-calibration = { path = "../../crates/calibration" }
-ecu-compat = { path = "../../crates/compat", default-features = false, optional = true }
 ecu-spec = { path = "../../crates/spec" }
 ecu-transport = { path = "../../crates/transport", default-features = false, optional = true }
 ecu-ts = { path = "../../crates/ts", default-features = false, features = ["runtime"] }
@@ -27,10 +26,13 @@ embedded-hal-1 = { package = "embedded-hal", version = "1.0" }
 [features]
 default = []
 transport-bbqueue = ["dep:ecu-transport", "ecu-transport/transport-bbqueue"]
-transport-can = ["dep:ecu-compat", "dep:ecu-transport", "ecu-compat/transport-can", "ecu-transport/transport-can"]
-transport-can-fd = ["transport-can", "ecu-compat/transport-can-fd", "ecu-transport/transport-can-fd"]
+transport-can = ["dep:ecu-transport", "ecu-transport/transport-can"]
+transport-can-fd = ["transport-can", "ecu-transport/transport-can-fd"]
 ts-usb = ["dep:usb-device", "dep:usbd-serial"]
 test-support = []
 
 [dev-dependencies]
 ecu-compat = { path = "../../crates/compat", default-features = false }
+
+[lints]
+workspace = true

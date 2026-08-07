@@ -20,12 +20,14 @@ use ecu_target_common::kv::ab::{
     self, store_integrity_from_boot_scan, BootScan, SlotContents, StoreIntegrityStatus,
     SLOT_USED_LEN,
 };
+#[cfg(any(test, feature = "transport-can"))]
+use ecu_target_common::transport_service::prepare_retained_history_snapshot_rewrite;
 use ecu_target_common::transport_service::{
     apply_retained_history_page_update,
     install_optional_obd2_retained_history_snapshot_halfwords_with,
     persist_retained_history_flash_rewrite, prepare_retained_history_preserved_page_rewrite,
-    prepare_retained_history_snapshot_rewrite, read_obd2_retained_history_snapshot_with,
-    Obd2RetainedDiagnosticHistorySnapshot, Obd2RetainedHistoryPageUpdateError,
+    read_obd2_retained_history_snapshot_with, Obd2RetainedDiagnosticHistorySnapshot,
+    Obd2RetainedHistoryPageUpdateError,
 };
 #[cfg(test)]
 use ecu_target_common::transport_service::{
@@ -168,6 +170,7 @@ impl FlashKv {
         }
     }
 
+    #[cfg(feature = "transport-can")]
     pub fn load_retained_obd2_history_snapshot(
         &self,
     ) -> Option<Obd2RetainedDiagnosticHistorySnapshot> {
@@ -241,6 +244,7 @@ impl FlashKv {
         )
     }
 
+    #[cfg(feature = "transport-can")]
     pub fn save_retained_obd2_history_snapshot(
         &mut self,
         snapshot: &Obd2RetainedDiagnosticHistorySnapshot,

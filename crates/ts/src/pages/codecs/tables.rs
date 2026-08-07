@@ -1,8 +1,8 @@
 use super::*;
 
-pub fn encode_fuel_table_page(table: &FuelTable, out: &mut [u8]) -> Result<usize, PageCodecError> {
+pub fn encode_fuel_table_page(table: &FuelTable, out: &mut [u8]) -> Result<usize, PageError> {
     if out.len() < TABLE_PAGE_BYTES {
-        return Err(PageCodecError::WrongSize);
+        return Err(PageError::WrongSize);
     }
 
     let mut idx = 0;
@@ -15,18 +15,15 @@ pub fn encode_fuel_table_page(table: &FuelTable, out: &mut [u8]) -> Result<usize
     Ok(TABLE_PAGE_BYTES)
 }
 
-pub fn decode_fuel_table_page(data: &[u8]) -> Result<FuelPage, PageCodecError> {
+pub fn decode_fuel_table_page(data: &[u8]) -> Result<FuelPage, PageError> {
     let mut cells = [[0u16; TABLE_AXIS_LEN]; TABLE_AXIS_LEN];
     decode_fuel_table_page_into(data, &mut cells)?;
     Ok(FuelPage { cells })
 }
 
-pub fn decode_fuel_table_page_into(
-    data: &[u8],
-    table: &mut FuelTable,
-) -> Result<(), PageCodecError> {
+pub fn decode_fuel_table_page_into(data: &[u8], table: &mut FuelTable) -> Result<(), PageError> {
     if data.len() != TABLE_PAGE_BYTES {
-        return Err(PageCodecError::WrongSize);
+        return Err(PageError::WrongSize);
     }
 
     let mut idx = 0;
@@ -42,9 +39,9 @@ pub fn decode_fuel_table_page_into(
 pub fn encode_ignition_table_page(
     table: &IgnitionTable,
     out: &mut [u8],
-) -> Result<usize, PageCodecError> {
+) -> Result<usize, PageError> {
     if out.len() < TABLE_PAGE_BYTES {
-        return Err(PageCodecError::WrongSize);
+        return Err(PageError::WrongSize);
     }
 
     let mut idx = 0;
@@ -57,7 +54,7 @@ pub fn encode_ignition_table_page(
     Ok(TABLE_PAGE_BYTES)
 }
 
-pub fn decode_ignition_table_page(data: &[u8]) -> Result<IgnitionPage, PageCodecError> {
+pub fn decode_ignition_table_page(data: &[u8]) -> Result<IgnitionPage, PageError> {
     let mut cells = [[0i16; TABLE_AXIS_LEN]; TABLE_AXIS_LEN];
     decode_ignition_table_page_into(data, &mut cells)?;
     Ok(IgnitionPage { cells })
@@ -66,9 +63,9 @@ pub fn decode_ignition_table_page(data: &[u8]) -> Result<IgnitionPage, PageCodec
 pub fn decode_ignition_table_page_into(
     data: &[u8],
     table: &mut IgnitionTable,
-) -> Result<(), PageCodecError> {
+) -> Result<(), PageError> {
     if data.len() != TABLE_PAGE_BYTES {
-        return Err(PageCodecError::WrongSize);
+        return Err(PageError::WrongSize);
     }
 
     let mut idx = 0;
@@ -81,9 +78,9 @@ pub fn decode_ignition_table_page_into(
     Ok(())
 }
 
-pub fn encode_ve_table_page(table: &VeTable, out: &mut [u8]) -> Result<usize, PageCodecError> {
+pub fn encode_ve_table_page(table: &VeTable, out: &mut [u8]) -> Result<usize, PageError> {
     if out.len() < TABLE_PAGE_BYTES {
-        return Err(PageCodecError::WrongSize);
+        return Err(PageError::WrongSize);
     }
 
     let mut idx = 0;
@@ -96,15 +93,15 @@ pub fn encode_ve_table_page(table: &VeTable, out: &mut [u8]) -> Result<usize, Pa
     Ok(TABLE_PAGE_BYTES)
 }
 
-pub fn decode_ve_table_page(data: &[u8]) -> Result<VePage, PageCodecError> {
+pub fn decode_ve_table_page(data: &[u8]) -> Result<VePage, PageError> {
     let mut cells = [[0u16; TABLE_AXIS_LEN]; TABLE_AXIS_LEN];
     decode_ve_table_page_into(data, &mut cells)?;
     Ok(VePage { cells })
 }
 
-pub fn decode_ve_table_page_into(data: &[u8], table: &mut VeTable) -> Result<(), PageCodecError> {
+pub fn decode_ve_table_page_into(data: &[u8], table: &mut VeTable) -> Result<(), PageError> {
     if data.len() != TABLE_PAGE_BYTES {
-        return Err(PageCodecError::WrongSize);
+        return Err(PageError::WrongSize);
     }
 
     let mut idx = 0;
@@ -117,9 +114,9 @@ pub fn decode_ve_table_page_into(data: &[u8], table: &mut VeTable) -> Result<(),
     Ok(())
 }
 
-pub fn encode_afr_table_page(table: &AfrTable, out: &mut [u8]) -> Result<usize, PageCodecError> {
+pub fn encode_afr_table_page(table: &AfrTable, out: &mut [u8]) -> Result<usize, PageError> {
     if out.len() < TABLE_PAGE_BYTES {
-        return Err(PageCodecError::WrongSize);
+        return Err(PageError::WrongSize);
     }
 
     let mut idx = 0;
@@ -132,15 +129,15 @@ pub fn encode_afr_table_page(table: &AfrTable, out: &mut [u8]) -> Result<usize, 
     Ok(TABLE_PAGE_BYTES)
 }
 
-pub fn decode_afr_table_page(data: &[u8]) -> Result<AfrPage, PageCodecError> {
+pub fn decode_afr_table_page(data: &[u8]) -> Result<AfrPage, PageError> {
     let mut cells = [[0u16; TABLE_AXIS_LEN]; TABLE_AXIS_LEN];
     decode_afr_table_page_into(data, &mut cells)?;
     Ok(AfrPage { cells })
 }
 
-pub fn decode_afr_table_page_into(data: &[u8], table: &mut AfrTable) -> Result<(), PageCodecError> {
+pub fn decode_afr_table_page_into(data: &[u8], table: &mut AfrTable) -> Result<(), PageError> {
     if data.len() != TABLE_PAGE_BYTES {
-        return Err(PageCodecError::WrongSize);
+        return Err(PageError::WrongSize);
     }
 
     let mut idx = 0;
@@ -148,7 +145,7 @@ pub fn decode_afr_table_page_into(data: &[u8], table: &mut AfrTable) -> Result<(
         for cell in row {
             let target = u16::from_le_bytes([data[idx], data[idx + 1]]);
             if !(AFR_TARGET_MIN_X10..=AFR_TARGET_MAX_X10).contains(&target) {
-                return Err(PageCodecError::Invalid);
+                return Err(PageError::Invalid);
             }
             *cell = target;
             idx += 2;

@@ -61,7 +61,7 @@ pub(crate) const fn m50b25tu_full_cop_runtime_profile() -> FullEcuOutputProfile 
     m50_runtime_output_profile(M50B25TU_FULL_COP)
 }
 
-pub(crate) const fn m50b25tu_speeduino_m5x_rev23_board_profile() -> Atmega2560BoardProfile {
+pub const fn m50b25tu_speeduino_m5x_rev23_board_profile() -> Atmega2560BoardProfile {
     speeduino_m5x_rev23_board_profile_for_full_ecu(m50b25tu_full_cop_runtime_profile())
 }
 

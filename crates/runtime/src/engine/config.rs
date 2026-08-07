@@ -45,6 +45,8 @@ impl EngineRuntime {
             },
             scheduler: SchedulerState::new(),
             planners: ControlPlannerState::default(),
+            signal_assembly_counters: SignalAssemblyCounters::default(),
+            output_assembly_counters: OutputAssemblyCounters::default(),
             runtime_snapshot: RuntimeSnapshot {
                 engine: EngineState {
                     sync: SyncState::Unsynced,

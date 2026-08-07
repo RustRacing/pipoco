@@ -206,17 +206,17 @@ pub fn decode_safety_gate_input(bytes: &[u8]) -> Result<SafetyGateInput, TimingI
     if flags & !0b0011_1111 != 0 {
         return Err(TimingIslandCodecError::InvalidField);
     }
-    Ok(SafetyGateInput::new(
-        Micros::new(get_u32(&bytes[2..6])),
-        flags & (1 << 0) != 0,
-        flags & (1 << 1) != 0,
-        flags & (1 << 2) != 0,
-        flags & (1 << 3) != 0,
-        flags & (1 << 4) != 0,
-        flags & (1 << 5) != 0,
-        get_u32(&bytes[6..10]),
-        SafetyPermitMask::new(get_u32(&bytes[10..14])),
-    ))
+    Ok(SafetyGateInput {
+        now_us: Micros::new(get_u32(&bytes[2..6])),
+        kill_n: flags & (1 << 0) != 0,
+        power_good: flags & (1 << 1) != 0,
+        watchdog_ok: flags & (1 << 2) != 0,
+        timing_backend_alive: flags & (1 << 3) != 0,
+        backend_alive: flags & (1 << 4) != 0,
+        sync_authority_ok: flags & (1 << 5) != 0,
+        driver_faults: get_u32(&bytes[6..10]),
+        requested_permit_mask: SafetyPermitMask::new(get_u32(&bytes[10..14])),
+    })
 }
 
 pub fn encode_safety_gate_status(

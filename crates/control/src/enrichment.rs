@@ -173,13 +173,7 @@ impl EnrichmentResult {
     }
 
     pub fn apply_to(self, base: PulseWidthUs) -> PulseWidthUs {
-        let scaled = (base.get() as u32 * self.total_x100() as u32) / 100;
-        let clamped = if scaled > u16::MAX as u32 {
-            u16::MAX
-        } else {
-            scaled as u16
-        };
-        PulseWidthUs::new(clamped)
+        PulseWidthUs::new((base.get() * self.total_x100() as u32) / 100)
     }
 }
 

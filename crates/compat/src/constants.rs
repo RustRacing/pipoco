@@ -43,16 +43,17 @@ pub mod timing {
 
 /// Fuel table configuration
 pub mod fuel {
-    /// RPM axis bins for IPW table (16 points)
-    pub const RPM_BINS: [u16; 16] = [
-        500, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 4500, 5000, 5500, 6000, 6500, 7000, 7500,
-        8000,
-    ];
+    /// RPM axis bins for IPW table (16 points).
+    ///
+    /// Single source of truth: `ecu_calibration::FUEL_RUNTIME_RPM_BINS`
+    /// (review 014).
+    pub use ecu_calibration::FUEL_RUNTIME_RPM_BINS as RPM_BINS;
 
-    /// Load axis bins for IPW table (16 points, in kPa)
-    pub const LOAD_BINS: [u16; 16] = [
-        20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 170,
-    ];
+    /// Load axis bins for IPW table (16 points, in kPa).
+    ///
+    /// Single source of truth: `ecu_calibration::FUEL_RUNTIME_LOAD_BINS`
+    /// (review 014).
+    pub use ecu_calibration::FUEL_RUNTIME_LOAD_BINS as LOAD_BINS;
 
     /// Default pulse width (microseconds)
     pub const DEFAULT_PULSE_WIDTH_US: u16 = 1000; // 1ms
@@ -60,8 +61,10 @@ pub mod fuel {
     /// Minimum pulse width (microseconds)
     pub const MIN_PULSE_WIDTH_US: u16 = 500; // 0.5ms
 
-    /// Maximum pulse width (microseconds)
-    pub const MAX_PULSE_WIDTH_US: u16 = 20000; // 20ms
+    /// Maximum pulse width (microseconds).
+    ///
+    /// Single source of truth: `ecu_domain::MAX_PULSE_WIDTH_US` (review 008).
+    pub use ecu_domain::MAX_PULSE_WIDTH_US;
 
     /// Default load value for MVP testing (kPa)
     pub const DEFAULT_LOAD_KPA: u16 = 80;
@@ -78,16 +81,11 @@ pub mod corrections {
 /// RPM calculation constants
 pub mod rpm {
     /// Numerator for RPM calculation from missing tooth period
-    /// RPM = RPM_CALC_NUMERATOR / period_us
+    /// RPM = RPM_CALC_NUMERATOR / period_us.
     ///
-    /// Derivation:
-    /// - 60-2 wheel has 58 teeth per revolution
-    /// - Missing gap = 2 teeth worth of time
-    /// - Full revolution = 29 * gap_period (58 teeth / 2)
-    /// - RPM = 60,000,000 us/min / (gap_period * 29)
-    /// - RPM = 2,068,966 / gap_period
-    /// - Rounded to 2,000,000 for fast integer division (~3% error)
-    pub const RPM_CALC_NUMERATOR: u32 = 2_000_000;
+    /// Single source of truth: `ecu_domain::RPM_CALC_NUMERATOR_FAST`
+    /// (review 008); the exact numerator is `ecu_domain::RPM_CALC_NUMERATOR_EXACT`.
+    pub use ecu_domain::RPM_CALC_NUMERATOR_FAST as RPM_CALC_NUMERATOR;
 
     /// Minimum period for valid RPM calculation (microseconds)
     /// Periods longer than this result in RPM = 0
@@ -193,7 +191,7 @@ pub mod load_failure {
 pub mod voltage {
     /// Critical low voltage (millivolts) - cut fuel to prevent damage
     /// Below 8V, injectors and coils behave erratically
-    pub const BROWNOUT_CRITICAL_MV: u16 = 8000;
+    pub use ecu_domain::voltage::BROWNOUT_CRITICAL_MV;
 
     /// Warning low voltage (millivolts) - enter limp mode
     /// Below 10V, reduce load on electrical system
@@ -201,7 +199,7 @@ pub mod voltage {
 
     /// Overvoltage threshold (millivolts) - load dump detection
     /// Above 16.5V indicates alternator load dump or jump start
-    pub const OVERVOLTAGE_MV: u16 = 16500;
+    pub use ecu_domain::voltage::OVERVOLTAGE_MV;
 
     /// Recovery voltage (millivolts) - exit limp mode
     /// Must be above this for sustained period to exit limp

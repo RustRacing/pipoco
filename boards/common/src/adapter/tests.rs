@@ -36,7 +36,7 @@ use ecu_runtime::{
     AllowedTorque, ControlPlan, EnrichmentResult, FuelIntent, FuelObservations,
     IgnitionLimitReason, IgnitionPlan, LambdaMode, LambdaTrimResult, RuntimeFuelStrategy,
     RuntimeSemanticCalibration, RuntimeSemanticState, StepResult, TorqueLimitReason,
-    TorqueObservations, ValidatedInputs, RUNTIME_ACTION_CAP,
+    TorqueObservations, ValidatedInputs, RUNTIME_ACTION_CAP, RUNTIME_AUX_COMMAND_CAP,
 };
 use ecu_runtime::{EnrichmentInputs, FaultState, IgnitionInputs, LambdaTrimInputs, TorqueInputs};
 use ecu_scheduler::{
@@ -7196,6 +7196,8 @@ fn board_adapter_observability_snapshot_defaults_cleanly() {
         logical_sensor_capture: None,
         logical_sensor_snapshot: None,
         trigger_edge: adapter.trigger_edge_telemetry(),
+        signal_assembly_counters: SignalAssemblyCounters::default(),
+        output_assembly_counters: OutputAssemblyCounters::default(),
     };
 
     let snapshot = adapter.observability_snapshot();
@@ -8365,6 +8367,8 @@ fn board_adapter_observability_snapshot_matches_individual_accessors() {
             logical_sensor_capture: adapter.logical_sensor_capture(),
             logical_sensor_snapshot: adapter.logical_sensor_snapshot(),
             trigger_edge: adapter.trigger_edge_telemetry(),
+            signal_assembly_counters: adapter.signal_assembly_counters(),
+            output_assembly_counters: adapter.output_assembly_counters(),
         }
     );
 }
@@ -8705,6 +8709,157 @@ fn board_adapter_action_telemetry_tracks_successful_tick_result() {
     assert!(expected.persist_calibration);
     assert!(expected.persist_calibration_count > 0);
     assert_eq!(adapter.action_telemetry(), expected);
+}
+
+#[test]
+fn board_adapter_signal_and_output_assembly_counters_track_accepted_events() {
+    let sensor = MockSensor(CaptureSample::default());
+    let capture = MockCapture::default();
+    let actions = ScheduledActionExecutor::<4>::new();
+    let watchdog = MockWatchdog::default();
+    let transport = MockTransport::default();
+    let store = MockStore::default();
+    let mut adapter = BoardAdapter::new(sensor, capture, actions, watchdog, transport, store);
+
+    assert_eq!(
+        adapter.signal_assembly_counters(),
+        SignalAssemblyCounters::default()
+    );
+    assert_eq!(
+        adapter.output_assembly_counters(),
+        OutputAssemblyCounters::default()
+    );
+
+    let capture = BoardSensorSnapshotCapture {
+        at_us: Micros::new(11),
+        angle_x10: Degrees10::new(12),
+        snapshot: BoardSensorSnapshot {
+            rpm: Rpm::new(1200),
+            map_kpa10: Kpa10::new(450),
+            ..BoardSensorSnapshot::default()
+        },
+    };
+
+    adapter
+        .apply_event(BoardEvent::SensorSnapshotCapture { capture })
+        .unwrap();
+    adapter
+        .apply_event(BoardEvent::TriggerEdge {
+            at_us: Micros::new(12),
+            rpm: Rpm::new(1200),
+            angle_x10: Degrees10::new(12),
+            authority: primary_locked_authority(),
+            synced: true,
+        })
+        .unwrap();
+    adapter
+        .apply_event(BoardEvent::CamEdge {
+            at_us: Micros::new(13),
+            cam_seen: true,
+        })
+        .unwrap();
+
+    let step = adapter
+        .apply_event(BoardEvent::Tick {
+            now_us: Micros::new(20),
+            control: control_inputs(),
+        })
+        .unwrap()
+        .expect("tick should yield a step result");
+
+    let signal_counters = adapter.signal_assembly_counters();
+    assert_eq!(signal_counters.signal_capture.seen, 2);
+    assert_eq!(signal_counters.signal_capture.accepted, 2);
+    assert_eq!(signal_counters.signal_normalizer.seen, 0);
+    assert_eq!(signal_counters.signal_normalizer.accepted, 0);
+    assert_eq!(signal_counters.observation_validator.seen, 1);
+    assert_eq!(signal_counters.observation_publisher.seen, 0);
+    assert_eq!(signal_counters.observation_reader.seen, 0);
+    assert_eq!(signal_counters.observation_reader.accepted, 0);
+    assert_eq!(
+        signal_counters.observation_reader.last_timestamp,
+        Micros::default()
+    );
+    assert_eq!(signal_counters.runtime_snapshot_builder.seen, 1);
+    assert_eq!(signal_counters.policy_consumer.seen, 1);
+    let output_counters = adapter.output_assembly_counters();
+    assert!(output_counters.output_intent.seen > 0);
+    assert!(output_counters.output_planner.seen > 0);
+    assert!(output_counters.output_admission.seen > 0);
+    assert!(output_counters.output_armer.seen > 0);
+    assert_eq!(output_counters.output_executor.seen, 0);
+    assert_eq!(output_counters.output_observer.seen, 0);
+    assert_eq!(
+        adapter.trigger_edge_telemetry(),
+        CommonTriggerEdgeTelemetry {
+            seen: true,
+            at_us: Micros::new(12),
+            rpm: Rpm::new(1200),
+            angle_x10: Degrees10::new(12),
+            authority: primary_locked_authority(),
+            synced: true,
+        }
+    );
+    assert_eq!(
+        adapter.cam_edge_telemetry(),
+        CommonCamEdgeTelemetry {
+            seen: true,
+            at_us: Micros::new(13),
+            cam_seen: true,
+        }
+    );
+    assert_eq!(
+        adapter.validated_input_telemetry(),
+        CommonValidatedInputTelemetry {
+            rpm: step.validated.rpm,
+            load_kpa10: step.validated.load_kpa10,
+            angle_x10: step.validated.angle_x10,
+            clamped: step.validated.clamped,
+        }
+    );
+    assert_eq!(
+        adapter.capture_sample(),
+        Some(CaptureSample {
+            at_us: Micros::new(12),
+            rpm: Rpm::new(1200),
+            load_kpa10: Kpa10::new(450),
+            angle_x10: capture.angle_x10,
+        })
+    );
+    assert_eq!(adapter.logical_sensor_capture(), Some(capture));
+    assert_eq!(adapter.logical_sensor_snapshot(), Some(capture.snapshot));
+}
+
+#[test]
+fn board_adapter_action_telemetry_tracks_class_a_admitted_and_class_c_supervisory_actions() {
+    let mut actions = ActionBatch::<RUNTIME_ACTION_CAP>::new();
+    assert!(actions.push(Action::ArmScheduler {
+        injection: timed_injection(50, 100),
+        ignition: timed_ignition(60, 120),
+    }));
+    assert!(actions.push(Action::ArmInjection(timed_injection(70, 110))));
+    assert!(actions.push(Action::ArmIgnition(timed_ignition(80, 130))));
+
+    let mut aux_commands = ecu_board_api::AuxCommandBatch::<RUNTIME_AUX_COMMAND_CAP>::new();
+    aux_commands
+        .push(ecu_board_api::AuxCommand::new(
+            ecu_board_api::AuxOutput::SafetyRelay(0),
+            ecu_board_api::AuxValue::Level(ecu_board_api::OutputLevel::High),
+        ))
+        .unwrap();
+    assert!(actions.push(Action::ApplyAux(aux_commands)));
+    assert!(actions.push(Action::PublishSnapshot));
+
+    let telemetry = super::common_action_telemetry(&synthetic_step_result(actions));
+
+    assert_eq!(telemetry.total_action_count, 5);
+    assert_eq!(telemetry.arm_scheduler_count, 1);
+    assert_eq!(telemetry.arm_injection_count, 1);
+    assert_eq!(telemetry.arm_ignition_count, 1);
+    assert_eq!(telemetry.apply_aux_count, 1);
+    assert_eq!(telemetry.apply_aux_command_count, 1);
+    assert_eq!(telemetry.publish_snapshot_count, 1);
+    assert!(telemetry.publish_snapshot);
 }
 
 #[test]
@@ -12863,7 +13018,7 @@ fn timed_injection(start_at: u32, end_at: u32) -> TimedInjectionPlan {
     TimedInjectionPlan {
         plan: SchedulerInjectionPlan {
             output: ExclusiveChannel::new(OutputGroup::Injector, ChannelId::new(0)),
-            pulse_width: PulseWidthUs::new((end_at - start_at) as u16),
+            pulse_width: PulseWidthUs::new((end_at - start_at) as u32),
         },
         start_at: Micros::new(start_at),
         end_at: Micros::new(end_at),

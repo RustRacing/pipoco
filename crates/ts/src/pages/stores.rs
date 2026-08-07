@@ -141,13 +141,6 @@ pub const fn ts_diag_source_code(source: ecu_domain::diag::DiagSource) -> u8 {
     }
 }
 
-fn page_codec_error_to_page_error(err: PageCodecError) -> PageError {
-    match err {
-        PageCodecError::WrongSize => PageError::WrongSize,
-        PageCodecError::Invalid => PageError::Invalid,
-    }
-}
-
 /// Core-free page store for the setup tables that are just TS wire tables.
 pub struct FuelIgnPageStore<'a> {
     pub fuel: &'a mut FuelTable,

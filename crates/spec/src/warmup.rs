@@ -3,11 +3,11 @@ use crate::numeric::clamp_u16;
 use crate::{Curve16, PulseWidthUs, RatioX1000, TempC10};
 
 pub fn warmup_correction(warmup_curve: &Curve16, clt_c10: TempC10) -> RatioX1000 {
-    RatioX1000(lookup_curve_u16(warmup_curve, temp_curve_input(clt_c10)))
+    RatioX1000::new(lookup_curve_u16(warmup_curve, temp_curve_input(clt_c10)))
 }
 
 pub fn apply_warmup_pw(pw_afterstart_us: PulseWidthUs, corr_x1000: RatioX1000) -> PulseWidthUs {
-    PulseWidthUs(crate::mul_ratio_x1000(pw_afterstart_us.0, corr_x1000))
+    PulseWidthUs::new(crate::mul_ratio_x1000(pw_afterstart_us.get(), corr_x1000))
 }
 
 fn lookup_curve_u16(curve: &Curve16, x: u16) -> u16 {
@@ -24,10 +24,10 @@ fn lookup_curve_u16(curve: &Curve16, x: u16) -> u16 {
 }
 
 fn temp_curve_input(temp: TempC10) -> u16 {
-    if temp.0 < 0 {
+    if temp.get() < 0 {
         0
     } else {
-        temp.0 as u16
+        temp.get() as u16
     }
 }
 
@@ -52,19 +52,19 @@ mod tests {
 
     #[test]
     fn warmup_cold_edge_uses_cold_correction() {
-        let corr = warmup_correction(&warmup_curve(), TempC10(-400));
-        assert_eq!(corr, RatioX1000(1300));
+        let corr = warmup_correction(&warmup_curve(), TempC10::new(-400));
+        assert_eq!(corr, RatioX1000::new(1300));
     }
 
     #[test]
     fn warmup_midpoint_interpolates_with_floor() {
-        let corr = warmup_correction(&warmup_curve(), TempC10(300));
-        assert_eq!(corr, RatioX1000(1200));
+        let corr = warmup_correction(&warmup_curve(), TempC10::new(300));
+        assert_eq!(corr, RatioX1000::new(1200));
     }
 
     #[test]
     fn warmup_warm_edge_uses_warm_identity() {
-        let corr = warmup_correction(&warmup_curve(), TempC10(1000));
-        assert_eq!(corr, RatioX1000(1000));
+        let corr = warmup_correction(&warmup_curve(), TempC10::new(1000));
+        assert_eq!(corr, RatioX1000::new(1000));
     }
 }

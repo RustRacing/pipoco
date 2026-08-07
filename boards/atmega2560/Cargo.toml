@@ -12,4 +12,8 @@ path = "src/lib.rs"
 ecu-board-api = { path = "../../crates/board-api" }
 ecu-board-profiles = { path = "../../crates/board-profiles" }
 ecu-domain = { path = "../../crates/domain" }
+ecu-io = { path = "../../crates/io" }
 ecu-runtime = { path = "../../crates/runtime" }
+
+[lints]
+workspace = true

@@ -25,13 +25,13 @@ pub struct FuelParts {
 }
 
 pub fn lookup_ve(cal: &ValidatedCalibration, input: crate::InputSnapshot) -> VePctX100 {
-    VePctX100(bilerp_u16(&cal.0.ve_table, input.rpm, input.load_kpa10))
+    VePctX100::new(bilerp_u16(&cal.0.ve_table, input.rpm, input.load_kpa10))
 }
 
 pub fn lookup_target_afr(cal: &ValidatedCalibration, input: crate::InputSnapshot) -> AfrX100 {
     match clamp_target_afr_override(input) {
         AfrOverride::Some(value) => value,
-        AfrOverride::None => AfrX100(bilerp_u16(
+        AfrOverride::None => AfrX100::new(bilerp_u16(
             &cal.0.afr_target_table,
             input.rpm,
             input.load_kpa10,
@@ -47,7 +47,7 @@ pub fn lookup_clt_corr_x1000(
     cal: &ValidatedCalibration,
     input: crate::InputSnapshot,
 ) -> RatioX1000 {
-    RatioX1000(lookup_curve_u16(
+    RatioX1000::new(lookup_curve_u16(
         &cal.0.clt_corr_curve,
         temp_curve_input(input.clt_c10),
     ))
@@ -57,7 +57,7 @@ pub fn lookup_iat_corr_x1000(
     cal: &ValidatedCalibration,
     input: crate::InputSnapshot,
 ) -> RatioX1000 {
-    RatioX1000(lookup_curve_u16(
+    RatioX1000::new(lookup_curve_u16(
         &cal.0.iat_corr_curve,
         temp_curve_input(input.iat_c10),
     ))
@@ -108,9 +108,9 @@ pub fn lookup_warmup_corr_x1000(
 }
 
 pub fn compute_pw_base_us(cal: &ValidatedCalibration, ve: VePctX100) -> PulseWidthUs {
-    PulseWidthUs(mul_div_floor_u32(
+    PulseWidthUs::new(mul_div_floor_u32(
         cal.0.required_fuel_us,
-        ve.0 as u32,
+        ve.get() as u32,
         NonZeroU32::new(10_000).unwrap_or(NonZeroU32::MIN),
     ))
 }
@@ -121,15 +121,15 @@ pub fn compute_pw_air_us(
     map: Kpa10,
 ) -> PulseWidthUs {
     let pref_kpa10 = NonZeroU32::new(cal.0.pref_kpa10 as u32).unwrap_or(NonZeroU32::MIN);
-    PulseWidthUs(mul_div_floor_u32(base.0, map.0 as u32, pref_kpa10))
+    PulseWidthUs::new(mul_div_floor_u32(base.get(), map.get() as u32, pref_kpa10))
 }
 
 pub fn compute_afr_corr_x1000(cal: &ValidatedCalibration, target: AfrX100) -> RatioX1000 {
-    if target.0 == 0 {
-        return RatioX1000(0);
+    if target.get() == 0 {
+        return RatioX1000::new(0);
     }
-    let target = NonZeroU32::new(target.0 as u32).unwrap_or(NonZeroU32::MIN);
-    RatioX1000(mul_div_floor_u32(cal.0.stoich_afr_x100 as u32, 1000, target) as u16)
+    let target = NonZeroU32::new(target.get() as u32).unwrap_or(NonZeroU32::MIN);
+    RatioX1000::new(mul_div_floor_u32(cal.0.stoich_afr_x100 as u32, 1000, target) as u16)
 }
 
 pub fn compute_pw_corr_us(
@@ -139,7 +139,7 @@ pub fn compute_pw_corr_us(
     parts: FuelParts,
 ) -> PulseWidthUs {
     let trim_corr_x1000 = trim_corr_x1000(state);
-    let mut pw = parts.pw_air_us.0;
+    let mut pw = parts.pw_air_us.get();
     pw = mul_ratio_x1000(pw, parts.cranking_corr_x1000);
     pw = mul_ratio_x1000(pw, parts.afterstart_corr_x1000);
     pw = mul_ratio_x1000(pw, parts.warmup_corr_x1000);
@@ -150,10 +150,10 @@ pub fn compute_pw_corr_us(
     pw = mul_ratio_x1000(pw, parts.afr_corr_x1000);
     pw = mul_ratio_x1000(pw, parts.lambda_corr_x1000);
     pw = mul_ratio_x1000(pw, trim_corr_x1000);
-    pw = pw.saturating_add(parts.ae_pulse_us.0);
-    pw = pw.saturating_add(parts.deadtime_us.0);
+    pw = pw.saturating_add(parts.ae_pulse_us.get());
+    pw = pw.saturating_add(parts.deadtime_us.get());
     if input.fuel_cut {
-        return PulseWidthUs(0);
+        return PulseWidthUs::new(0);
     }
     apply_pw_max(pw, cal)
 }
@@ -172,10 +172,10 @@ fn lookup_curve_u16(curve: &crate::Curve16, x: u16) -> u16 {
 }
 
 fn temp_curve_input(temp: crate::TempC10) -> u16 {
-    if temp.0 < 0 {
+    if temp.get() < 0 {
         0
     } else {
-        temp.0 as u16
+        temp.get() as u16
     }
 }
 
@@ -285,14 +285,14 @@ mod tests {
 
     fn make_input() -> InputSnapshot {
         InputSnapshot {
-            rpm: Rpm(150),
-            load_kpa10: crate::Kpa10(15),
+            rpm: Rpm::new(150),
+            load_kpa10: Kpa10::new(15),
             tps_x100: 0,
-            map_kpa10: crate::Kpa10(120),
-            clt_c10: TempC10(150),
-            iat_c10: TempC10(150),
-            baro_kpa10: crate::Kpa10(150),
-            vbatt_mv: Millivolts(12_600),
+            map_kpa10: Kpa10::new(120),
+            clt_c10: TempC10::new(150),
+            iat_c10: TempC10::new(150),
+            baro_kpa10: Kpa10::new(150),
+            vbatt_mv: Millivolts::new(12_600),
             sync: SyncState::Synced,
             mode: EngineMode::Running,
             ..InputSnapshot::default()
@@ -303,10 +303,10 @@ mod tests {
     fn clamps_target_override() {
         let cal = calibration();
         let mut input = make_input();
-        input.target_afr_override_x100 = AfrOverride::Some(crate::AfrX100(400));
-        assert_eq!(lookup_target_afr(&cal, input).0, 500);
-        input.target_afr_override_x100 = AfrOverride::Some(crate::AfrX100(3200));
-        assert_eq!(lookup_target_afr(&cal, input).0, 3000);
+        input.target_afr_override_x100 = AfrOverride::Some(AfrX100::new(400));
+        assert_eq!(lookup_target_afr(&cal, input).get(), 500);
+        input.target_afr_override_x100 = AfrOverride::Some(AfrX100::new(3200));
+        assert_eq!(lookup_target_afr(&cal, input).get(), 3000);
     }
 
     #[test]
@@ -333,13 +333,13 @@ mod tests {
             ),
             warmup_corr_x1000: lookup_warmup_corr_x1000(&cal, input),
             afr_corr_x1000: compute_afr_corr_x1000(&cal, target),
-            lambda_corr_x1000: RatioX1000(1000),
+            lambda_corr_x1000: RatioX1000::new(1000),
         };
         let pw = compute_pw_corr_us(&cal, &LogicalState::default(), input, parts);
-        assert_eq!(ve.0, 2500);
-        assert_eq!(base.0, 2500);
-        assert_eq!(air.0, 3000);
-        assert_eq!(pw.0, 3100);
+        assert_eq!(ve.get(), 2500);
+        assert_eq!(base.get(), 2500);
+        assert_eq!(air.get(), 3000);
+        assert_eq!(pw.get(), 3100);
     }
 
     #[test]
@@ -351,21 +351,21 @@ mod tests {
             ..make_input()
         };
         let parts = FuelParts {
-            pw_air_us: PulseWidthUs(9999),
+            pw_air_us: PulseWidthUs::new(9999),
             ae_pulse_us: ae_step(&cal, input, &LogicalState::default()).ae_pulse_us,
-            deadtime_us: PulseWidthUs(9999),
-            clt_corr_x1000: RatioX1000(3000),
-            iat_corr_x1000: RatioX1000(3000),
-            baro_corr_x1000: RatioX1000(3000),
-            vbat_corr_x1000: RatioX1000(3000),
-            cranking_corr_x1000: RatioX1000(3000),
-            afterstart_corr_x1000: RatioX1000(3000),
-            warmup_corr_x1000: RatioX1000(3000),
-            afr_corr_x1000: RatioX1000(3000),
-            lambda_corr_x1000: RatioX1000(3000),
+            deadtime_us: PulseWidthUs::new(9999),
+            clt_corr_x1000: RatioX1000::new(3000),
+            iat_corr_x1000: RatioX1000::new(3000),
+            baro_corr_x1000: RatioX1000::new(3000),
+            vbat_corr_x1000: RatioX1000::new(3000),
+            cranking_corr_x1000: RatioX1000::new(3000),
+            afterstart_corr_x1000: RatioX1000::new(3000),
+            warmup_corr_x1000: RatioX1000::new(3000),
+            afr_corr_x1000: RatioX1000::new(3000),
+            lambda_corr_x1000: RatioX1000::new(3000),
         };
         assert_eq!(
-            compute_pw_corr_us(&cal, &LogicalState::default(), input, parts).0,
+            compute_pw_corr_us(&cal, &LogicalState::default(), input, parts).get(),
             0
         );
 
@@ -374,7 +374,7 @@ mod tests {
             ..make_input()
         };
         assert_eq!(
-            compute_pw_corr_us(&cal, &LogicalState::default(), input, parts).0,
+            compute_pw_corr_us(&cal, &LogicalState::default(), input, parts).get(),
             1000
         );
     }
@@ -383,11 +383,11 @@ mod tests {
     fn negative_temperatures_clip_to_low_curve_endpoint() {
         let cal = calibration();
         let mut input = make_input();
-        input.clt_c10 = TempC10(-100);
-        input.iat_c10 = TempC10(-100);
+        input.clt_c10 = TempC10::new(-100);
+        input.iat_c10 = TempC10::new(-100);
 
-        assert_eq!(lookup_clt_corr_x1000(&cal, input), RatioX1000(1000));
-        assert_eq!(lookup_iat_corr_x1000(&cal, input), RatioX1000(1000));
+        assert_eq!(lookup_clt_corr_x1000(&cal, input), RatioX1000::new(1000));
+        assert_eq!(lookup_iat_corr_x1000(&cal, input), RatioX1000::new(1000));
     }
 
     #[test]
@@ -395,9 +395,15 @@ mod tests {
         let cal = calibration();
         let mut input = make_input();
         input.mode = EngineMode::Cranking;
-        input.clt_c10 = TempC10(100);
-        assert_eq!(lookup_cranking_corr_x1000(&cal, input), RatioX1000(2000));
+        input.clt_c10 = TempC10::new(100);
+        assert_eq!(
+            lookup_cranking_corr_x1000(&cal, input),
+            RatioX1000::new(2000)
+        );
         input.mode = EngineMode::Running;
-        assert_eq!(lookup_cranking_corr_x1000(&cal, input), RatioX1000(1000));
+        assert_eq!(
+            lookup_cranking_corr_x1000(&cal, input),
+            RatioX1000::new(1000)
+        );
     }
 }

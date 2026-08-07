@@ -1,4 +1,4 @@
-use crate::{AfrX100, Calibration, O2SensorMode};
+use crate::{numeric::clamp_u16, AfrX100, Calibration, O2SensorMode};
 
 const ADC_MIN: u16 = 0;
 const ADC_MAX: u16 = 4095;
@@ -9,16 +9,6 @@ const AFR_MAX_X100: u16 = 3000;
 pub struct O2SensorReading {
     pub afr_x100: AfrX100,
     pub rich: bool,
-}
-
-const fn clamp_u16(value: u16, lo: u16, hi: u16) -> u16 {
-    if value < lo {
-        lo
-    } else if value > hi {
-        hi
-    } else {
-        value
-    }
 }
 
 pub fn o2_from_counts(
@@ -40,7 +30,7 @@ fn wideband_reading(calibration: &Calibration, counts: u16) -> O2SensorReading {
     let scaled = (counts as u32 * span) / ADC_MAX as u32;
     let afr = clamp_u16((min_afr + scaled) as u16, AFR_MIN_X100, AFR_MAX_X100);
     O2SensorReading {
-        afr_x100: AfrX100(afr),
+        afr_x100: AfrX100::new(afr),
         rich: afr <= calibration.stoich_afr_x100,
     }
 }
@@ -61,7 +51,7 @@ fn narrowband_reading(calibration: &Calibration, counts: u16, was_rich: bool) ->
         calibration.o2_narrowband_lean_afr_x100
     };
     O2SensorReading {
-        afr_x100: AfrX100(clamp_u16(afr, AFR_MIN_X100, AFR_MAX_X100)),
+        afr_x100: AfrX100::new(clamp_u16(afr, AFR_MIN_X100, AFR_MAX_X100)),
         rich,
     }
 }
@@ -94,14 +84,20 @@ mod tests {
     #[test]
     fn wideband_clamps_at_adc_endpoints() {
         let cal = calibration_wideband();
-        assert_eq!(o2_from_counts(&cal, 0, false).afr_x100, AfrX100(1000));
-        assert_eq!(o2_from_counts(&cal, 4095, false).afr_x100, AfrX100(2000));
+        assert_eq!(o2_from_counts(&cal, 0, false).afr_x100, AfrX100::new(1000));
+        assert_eq!(
+            o2_from_counts(&cal, 4095, false).afr_x100,
+            AfrX100::new(2000)
+        );
     }
 
     #[test]
     fn wideband_midpoint_uses_floor_linear_interpolation() {
         let cal = calibration_wideband();
-        assert_eq!(o2_from_counts(&cal, 2048, false).afr_x100, AfrX100(1500));
+        assert_eq!(
+            o2_from_counts(&cal, 2048, false).afr_x100,
+            AfrX100::new(1500)
+        );
     }
 
     #[test]
@@ -109,14 +105,14 @@ mod tests {
         let cal = calibration_narrowband();
         let toggled_lean = o2_from_counts(&cal, 2200, true);
         assert!(!toggled_lean.rich);
-        assert_eq!(toggled_lean.afr_x100, AfrX100(1550));
+        assert_eq!(toggled_lean.afr_x100, AfrX100::new(1550));
 
         let held_lean = o2_from_counts(&cal, 1950, false);
         assert!(!held_lean.rich);
-        assert_eq!(held_lean.afr_x100, AfrX100(1550));
+        assert_eq!(held_lean.afr_x100, AfrX100::new(1550));
 
         let toggled_rich = o2_from_counts(&cal, 1899, false);
         assert!(toggled_rich.rich);
-        assert_eq!(toggled_rich.afr_x100, AfrX100(1350));
+        assert_eq!(toggled_rich.afr_x100, AfrX100::new(1350));
     }
 }

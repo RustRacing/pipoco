@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 ecu-board-api = { path = "../board-api" }
+ecu-io = { path = "../io" }
 ecu-domain = { path = "../domain" }
 ecu-calibration = { path = "../calibration" }
 ecu-scheduler = { path = "../scheduler" }
@@ -13,7 +14,11 @@ ecu-control = { path = "../control" }
 [dev-dependencies]
 criterion = "0.4"
 ecu-spec = { path = "../spec" }
+ecu-test-fixtures = { path = "../test-fixtures" }
 
+
+[lints]
+workspace = true
 [[bench]]
 name = "runtime_bench"
 harness = false

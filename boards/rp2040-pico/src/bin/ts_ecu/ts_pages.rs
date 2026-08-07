@@ -159,11 +159,11 @@ fn board_page_store(
     state.snapshot = build_system_snapshot(SnapshotInputs {
         rpm: runtime_snapshot.engine.rpm.get(),
         sync: runtime_snapshot.engine.sync,
-        base_pw_us: runtime_snapshot.control.fuel_pulse_width.get() as u32,
+        base_pw_us: runtime_snapshot.control.fuel_pulse_width.get(),
         enrich_mult_x100: 100,
         stft_x10: 0,
         fuel_mult_x100: 100,
-        final_pw: ecu_domain::Micros::new(runtime_snapshot.control.fuel_pulse_width.get() as u32),
+        final_pw: ecu_domain::Micros::new(runtime_snapshot.control.fuel_pulse_width.get()),
         last_fault_code: current_fault_code,
         fault_severity: current_fault_severity,
         cancel_reason: current_cancel_reason,
@@ -185,7 +185,7 @@ fn board_page_store(
         config,
         PageRuntime {
             snapshot,
-            tooth_count,
+            tooth_count: *tooth_count,
             sync_loss_counter: *sync_loss_counter,
             current_fault_code,
             current_fault_severity,

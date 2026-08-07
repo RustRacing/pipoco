@@ -4,9 +4,9 @@ pub fn encode_ve_tune_page(
     page: &VeTunePage,
     limits: VeTunePageLimits,
     out: &mut [u8],
-) -> Result<usize, PageCodecError> {
+) -> Result<usize, PageError> {
     if out.len() < VE_TUNE_PAGE_BYTES {
-        return Err(PageCodecError::WrongSize);
+        return Err(PageError::WrongSize);
     }
     limits.validate()?;
 
@@ -22,9 +22,9 @@ pub fn encode_ve_tune_page(
     Ok(VE_TUNE_PAGE_BYTES)
 }
 
-pub fn decode_ve_tune_page(data: &[u8]) -> Result<VeTunePage, PageCodecError> {
+pub fn decode_ve_tune_page(data: &[u8]) -> Result<VeTunePage, PageError> {
     if data.len() < VE_TUNE_PAGE_BYTES {
-        return Err(PageCodecError::WrongSize);
+        return Err(PageError::WrongSize);
     }
 
     let page = VeTunePage {
@@ -37,10 +37,10 @@ pub fn decode_ve_tune_page(data: &[u8]) -> Result<VeTunePage, PageCodecError> {
     };
 
     if !(AFR_TARGET_MIN_X10..=AFR_TARGET_MAX_X10).contains(&page.target_afr_x10) {
-        return Err(PageCodecError::Invalid);
+        return Err(PageError::Invalid);
     }
     if page.ve_load_source > VE_TUNE_LOAD_SOURCE_MAX {
-        return Err(PageCodecError::Invalid);
+        return Err(PageError::Invalid);
     }
 
     Ok(page)

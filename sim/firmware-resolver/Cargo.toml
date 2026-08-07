@@ -8,3 +8,6 @@ publish = false
 ecu-board-api = { path = "../../crates/board-api" }
 ecu-board-profiles = { path = "../../crates/board-profiles" }
 ecu-ts = { path = "../../crates/ts" }
+
+[lints]
+workspace = true

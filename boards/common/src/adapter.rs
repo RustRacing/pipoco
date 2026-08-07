@@ -29,12 +29,15 @@ use ecu_calibration::{
     CalibrationPackageIdentity, PersistedCalibrationBlob, PersistedCalibrationStore,
 };
 #[cfg(feature = "transport-can")]
-use ecu_compat::constants::voltage::{BROWNOUT_CRITICAL_MV, OVERVOLTAGE_MV};
-#[cfg(feature = "transport-can")]
 use ecu_domain::diag::{DiagCode, DiagSource};
 use ecu_domain::diag::{DiagEvent, DiagLog};
+#[cfg(feature = "transport-can")]
+use ecu_domain::voltage::{BROWNOUT_CRITICAL_MV, OVERVOLTAGE_MV};
 use ecu_domain::EngineTimeAuthority;
 use ecu_domain::{ControlMode, Degrees10, Kpa10, Micros, Rpm};
+use ecu_io::{
+    OutputAssemblyCounters, OutputStage, SignalAssemblyCounters, SignalStage, StageOutcome, TraceId,
+};
 use ecu_runtime::{
     Action, ActionExecutor, AuthorityStepInputs, ControlInputs, DecoderObservation, EngineRuntime,
     RuntimeFuelStrategy, RuntimeSemanticCalibration, RuntimeSemanticState, RuntimeSnapshot,
@@ -296,6 +299,8 @@ pub struct CommonObservabilitySnapshot {
     pub capture_sample: Option<CaptureSample>,
     pub logical_sensor_capture: Option<BoardSensorSnapshotCapture>,
     pub logical_sensor_snapshot: Option<BoardSensorSnapshot>,
+    pub signal_assembly_counters: SignalAssemblyCounters,
+    pub output_assembly_counters: OutputAssemblyCounters,
 }
 
 /// Timestamped read-only observability sample for common logging and inspection.
@@ -303,6 +308,16 @@ pub struct CommonObservabilitySnapshot {
 pub struct CommonObservabilitySample {
     pub at_us: Micros,
     pub snapshot: CommonObservabilitySnapshot,
+}
+
+impl CommonObservabilitySnapshot {
+    pub fn signal_assembly_counters(&self) -> SignalAssemblyCounters {
+        self.signal_assembly_counters
+    }
+
+    pub fn output_assembly_counters(&self) -> OutputAssemblyCounters {
+        self.output_assembly_counters
+    }
 }
 
 /// Logical board event tag for a common observability record.
@@ -1297,6 +1312,18 @@ pub(super) fn common_action_telemetry(result: &StepResult) -> CommonActionTeleme
     action_telemetry
 }
 
+fn common_action_output_count(action: Action) -> u32 {
+    match action {
+        Action::ArmScheduler { .. } => 2,
+        Action::ArmInjection(_) | Action::ArmIgnition(_) => 1,
+        Action::ApplyAux(commands) => commands.len() as u32,
+        Action::CancelScheduler(_)
+        | Action::PublishSnapshot
+        | Action::PersistCalibration
+        | Action::Idle => 0,
+    }
+}
+
 fn initial_inputs() -> AuthorityStepInputs {
     AuthorityStepInputs {
         now_us: Micros::new(0),
@@ -1341,6 +1368,8 @@ pub struct BoardAdapter<S, C, A, W, T, P> {
     trigger_edge: CommonTriggerEdgeTelemetry,
     cam_edge: CommonCamEdgeTelemetry,
     validated: CommonValidatedInputTelemetry,
+    signal_assembly_counters: SignalAssemblyCounters,
+    output_assembly_counters: OutputAssemblyCounters,
     capture_sample: Option<CaptureSample>,
     logical_sensor_capture: Option<BoardSensorSnapshotCapture>,
     diag_log: DiagLog<DIAG_LOG_ENTRY_COUNT>,
@@ -1393,6 +1422,8 @@ where
             trigger_edge: CommonTriggerEdgeTelemetry::default(),
             cam_edge: CommonCamEdgeTelemetry::default(),
             validated: CommonValidatedInputTelemetry::default(),
+            signal_assembly_counters: SignalAssemblyCounters::default(),
+            output_assembly_counters: OutputAssemblyCounters::default(),
             capture_sample: None,
             logical_sensor_capture: None,
             diag_log: DiagLog::new(),
@@ -1602,6 +1633,18 @@ where
 
     pub fn cam_edge_telemetry(&self) -> CommonCamEdgeTelemetry {
         self.cam_edge
+    }
+
+    pub fn signal_assembly_counters(&self) -> SignalAssemblyCounters {
+        let mut counters = self.signal_assembly_counters;
+        counters.merge_from(self.runtime.signal_assembly_counters());
+        counters
+    }
+
+    pub fn output_assembly_counters(&self) -> OutputAssemblyCounters {
+        let mut counters = self.output_assembly_counters;
+        counters.merge_from(self.runtime.output_assembly_counters());
+        counters
     }
 
     pub fn fuel_observation_telemetry(&self) -> CommonFuelObservationTelemetry {
@@ -1953,6 +1996,34 @@ where
         self.pending_inputs.flat_shift_armed = flat_shift_armed;
     }
 
+    fn record_signal_assembly_stage(&mut self, stage: SignalStage, timestamp: Micros) {
+        self.signal_assembly_counters.record(
+            stage,
+            StageOutcome::Accepted,
+            TraceId::default(),
+            0,
+            timestamp,
+            0,
+        );
+    }
+
+    fn record_output_assembly_stage(
+        &mut self,
+        stage: OutputStage,
+        outcome: StageOutcome,
+        command_id: u32,
+        timestamp: Micros,
+    ) {
+        self.output_assembly_counters.record(
+            stage,
+            outcome,
+            TraceId::default(),
+            command_id,
+            timestamp,
+            0,
+        );
+    }
+
     pub fn sensor(&mut self) -> &mut S {
         &mut self.sensor
     }
@@ -2030,6 +2101,7 @@ where
                 self.capture
                     .capture(sample)
                     .map_err(BoardAdapterError::Capture)?;
+                self.record_signal_assembly_stage(SignalStage::SignalCapture, at_us);
                 self.runtime.apply_sensor_sample(
                     rpm,
                     self.runtime.snapshot().engine.load_kpa10,
@@ -2066,6 +2138,7 @@ where
                 self.capture
                     .capture(sample)
                     .map_err(BoardAdapterError::Capture)?;
+                self.record_signal_assembly_stage(SignalStage::SignalCapture, sample.at_us);
                 Ok(None)
             }
             BoardEvent::PressureSnapshot {
@@ -2272,6 +2345,7 @@ where
         &mut self,
         result: &StepResult,
     ) -> AdapterResult<S::Error, C::Error, A::Error, W::Error, T::Error, P::Error, ()> {
+        let mut output_command_id = 0;
         for action in result.actions.iter() {
             match action {
                 Action::PublishSnapshot => self
@@ -2285,10 +2359,22 @@ where
                     ))
                     .map_err(BoardAdapterError::Persistence)?,
                 Action::Idle => {}
-                other => self
-                    .actions
-                    .execute(other)
-                    .map_err(BoardAdapterError::Action)?,
+                other => {
+                    let output_count = common_action_output_count(other);
+                    let at_us = self.pending_inputs.now_us;
+                    self.actions
+                        .execute(other)
+                        .map_err(BoardAdapterError::Action)?;
+                    for _ in 0..output_count {
+                        output_command_id += 1;
+                        self.record_output_assembly_stage(
+                            OutputStage::OutputArmer,
+                            StageOutcome::Armed,
+                            output_command_id,
+                            at_us,
+                        );
+                    }
+                }
             }
         }
 
@@ -2651,6 +2737,8 @@ where
             capture_sample: self.capture_sample(),
             logical_sensor_capture: self.logical_sensor_capture(),
             logical_sensor_snapshot: self.logical_sensor_snapshot(),
+            signal_assembly_counters: self.signal_assembly_counters(),
+            output_assembly_counters: self.output_assembly_counters(),
         }
     }
 

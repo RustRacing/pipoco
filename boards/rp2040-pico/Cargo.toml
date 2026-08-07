@@ -33,6 +33,9 @@ embedded-storage = "0.3"
 # optional backends; we keep storage abstract and feature-gated
 sequential-storage = { version = "0.3", optional = true }
 
+
+[lints]
+workspace = true
 [[bin]]
 name = "ts-gauges"
 path = "src/bin/ts_gauges.rs"
@@ -50,7 +53,7 @@ required-features = ["example-bins", "capture-pio"]
 [features]
 default = []
 # Enable flash-backed KV persistence (uses RP2040 ROM flash routines)
-flash-kv = ["sequential-storage"]
+flash-kv = ["sequential-storage", "ecu-target-common/transport-can"]
 # Enable PIO-based trigger capture in ts-ecu
 capture-pio = []
 # Explicit no-hardware trigger demo for `ts-ecu`; never use for flashable firmware.

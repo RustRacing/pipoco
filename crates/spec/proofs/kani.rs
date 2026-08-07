@@ -67,7 +67,7 @@ fn any_engine_mode() -> EngineMode {
 fn any_afr_override() -> AfrOverride {
     let use_override: bool = kani::any();
     if use_override {
-        AfrOverride::Some(crate::AfrX100(kani::any()))
+        AfrOverride::Some(crate::AfrX100::new(kani::any()))
     } else {
         AfrOverride::None
     }
@@ -100,15 +100,15 @@ fn any_outpc_frame() -> OutpcFrame {
 
 fn symbolic_input_snapshot() -> InputSnapshot {
     InputSnapshot {
-        t_us: Micros(kani::any()),
-        rpm: Rpm(kani::any()),
-        map_kpa10: Kpa10(kani::any()),
-        load_kpa10: Kpa10(kani::any()),
+        t_us: Micros::new(kani::any()),
+        rpm: Rpm::new(kani::any()),
+        map_kpa10: Kpa10::new(kani::any()),
+        load_kpa10: Kpa10::new(kani::any()),
         tps_x100: kani::any(),
-        clt_c10: TempC10(kani::any()),
-        iat_c10: TempC10(kani::any()),
-        baro_kpa10: Kpa10(kani::any()),
-        vbatt_mv: Millivolts(kani::any()),
+        clt_c10: TempC10::new(kani::any()),
+        iat_c10: TempC10::new(kani::any()),
+        baro_kpa10: Kpa10::new(kani::any()),
+        vbatt_mv: Millivolts::new(kani::any()),
         knock_intensity_x100: kani::any(),
         launch_armed: kani::any(),
         flat_shift_armed: kani::any(),
@@ -140,12 +140,12 @@ fn expected_step_diagnostic(
         // accept either None or SensorPlausibilityFault for the else branch.
         // This harness is for step() totality; kani_sensor_curves_total
         // separately verifies sensor curve bounds.
-        let clt_out_of_range = input.clt_c10.0 < -400 || input.clt_c10.0 > 1500;
-        let iat_out_of_range = input.iat_c10.0 < -400 || input.iat_c10.0 > 1000;
-        let map_out_of_range = input.map_kpa10.0 < 100 || input.map_kpa10.0 > 1200;
+        let clt_out_of_range = input.clt_c10.get() < -400 || input.clt_c10.get() > 1500;
+        let iat_out_of_range = input.iat_c10.get() < -400 || input.iat_c10.get() > 1000;
+        let map_out_of_range = input.map_kpa10.get() < 100 || input.map_kpa10.get() > 1200;
         let tps_out_of_range = input.tps_x100 > 10000;
-        let baro_out_of_range = input.baro_kpa10.0 < 500 || input.baro_kpa10.0 > 1200;
-        let vbat_out_of_range = input.vbatt_mv.0 < 6000 || input.vbatt_mv.0 > 18000;
+        let baro_out_of_range = input.baro_kpa10.get() < 500 || input.baro_kpa10.get() > 1200;
+        let vbat_out_of_range = input.vbatt_mv.get() < 6000 || input.vbatt_mv.get() > 18000;
         if clt_out_of_range
             || iat_out_of_range
             || map_out_of_range
@@ -161,14 +161,14 @@ fn expected_step_diagnostic(
 }
 
 fn assume_valid_diagnostic_priority_domain(input: &mut InputSnapshot) {
-    input.rpm.0 %= 9_001;
-    input.map_kpa10 = Kpa10(1_000);
-    input.load_kpa10 = Kpa10(1_000);
+    input.rpm = Rpm::new(input.rpm.get() % 9_001);
+    input.map_kpa10 = Kpa10::new(1_000);
+    input.load_kpa10 = Kpa10::new(1_000);
     input.tps_x100 = 2_500;
-    input.clt_c10 = TempC10(800);
-    input.iat_c10 = TempC10(250);
-    input.baro_kpa10 = Kpa10(1_000);
-    input.vbatt_mv = Millivolts(12_000);
+    input.clt_c10 = TempC10::new(800);
+    input.iat_c10 = TempC10::new(250);
+    input.baro_kpa10 = Kpa10::new(1_000);
+    input.vbatt_mv = Millivolts::new(12_000);
     input.knock_intensity_x100 = 0;
     input.launch_armed = false;
     input.flat_shift_armed = false;
@@ -178,7 +178,8 @@ fn assume_valid_diagnostic_priority_domain(input: &mut InputSnapshot) {
 fn kani_norm7200_range() {
     let x: i32 = kani::any();
     let result = norm7200(x);
-    assert!(result.0 < 7200);
+    assert!(result.get() >= 0);
+    assert!(result.get() < 7200);
 }
 
 #[kani::proof]
@@ -187,8 +188,8 @@ fn kani_cyc7200_distance_bound() {
     let b: u16 = kani::any();
     kani::assume(a < 7200);
     kani::assume(b < 7200);
-    let a = crate::Degrees10(a);
-    let b = crate::Degrees10(b);
+    let a = crate::Degrees10::new(a as i16);
+    let b = crate::Degrees10::new(b as i16);
     let ab = cyc7200_distance(a, b);
     let ba = cyc7200_distance(b, a);
     assert!(ab <= 3600);
@@ -270,7 +271,7 @@ fn kani_bilerp_u16_no_overflow() {
         values,
     };
 
-    let result = crate::interp::bilerp_u16(&table, Rpm(kani::any()), Kpa10(kani::any()));
+    let result = crate::interp::bilerp_u16(&table, Rpm::new(kani::any()), Kpa10::new(kani::any()));
     let mut lo = c00;
     if c01 < lo {
         lo = c01;
@@ -316,7 +317,7 @@ fn kani_bilerp_i16_no_overflow() {
         values,
     };
 
-    let result = crate::interp::bilerp_i16(&table, Rpm(kani::any()), Kpa10(kani::any()));
+    let result = crate::interp::bilerp_i16(&table, Rpm::new(kani::any()), Kpa10::new(kani::any()));
     let mut lo = c00;
     if c01 < lo {
         lo = c01;
@@ -365,8 +366,9 @@ fn kani_duration_us_to_deg10_in_cycle_bound() {
     let rpm: u16 = kani::any();
     kani::assume(pw_us <= 25_000);
     kani::assume(rpm <= 4_799);
-    let result = duration_us_to_deg10(PulseWidthUs(pw_us), Rpm(rpm));
-    assert!(result.0 < 7200);
+    let result = duration_us_to_deg10(PulseWidthUs::new(pw_us), Rpm::new(rpm));
+    assert!(result.get() >= 0);
+    assert!(result.get() < 7200);
 }
 
 #[kani::proof]
@@ -375,7 +377,7 @@ fn kani_duration_us_to_deg10_no_overflow() {
     let rpm: u16 = kani::any();
     kani::assume(pw_us <= 25_000);
     kani::assume(rpm <= 12_000);
-    let _ = duration_us_to_deg10(PulseWidthUs(pw_us), Rpm(rpm));
+    let _ = duration_us_to_deg10(PulseWidthUs::new(pw_us), Rpm::new(rpm));
 }
 
 #[kani::proof]
@@ -388,34 +390,34 @@ fn kani_compute_pw_corr_clamped() {
     input.fuel_cut = false;
 
     let parts = FuelParts {
-        pw_air_us: PulseWidthUs(kani::any()),
-        ae_pulse_us: PulseWidthUs(kani::any()),
-        deadtime_us: PulseWidthUs(kani::any()),
-        clt_corr_x1000: RatioX1000(kani::any()),
-        iat_corr_x1000: RatioX1000(kani::any()),
-        baro_corr_x1000: RatioX1000(kani::any()),
-        vbat_corr_x1000: RatioX1000(kani::any()),
-        cranking_corr_x1000: RatioX1000(kani::any()),
-        afterstart_corr_x1000: RatioX1000(kani::any()),
-        warmup_corr_x1000: RatioX1000(kani::any()),
-        afr_corr_x1000: RatioX1000(kani::any()),
-        lambda_corr_x1000: RatioX1000(kani::any()),
+        pw_air_us: PulseWidthUs::new(kani::any()),
+        ae_pulse_us: PulseWidthUs::new(kani::any()),
+        deadtime_us: PulseWidthUs::new(kani::any()),
+        clt_corr_x1000: RatioX1000::new(kani::any()),
+        iat_corr_x1000: RatioX1000::new(kani::any()),
+        baro_corr_x1000: RatioX1000::new(kani::any()),
+        vbat_corr_x1000: RatioX1000::new(kani::any()),
+        cranking_corr_x1000: RatioX1000::new(kani::any()),
+        afterstart_corr_x1000: RatioX1000::new(kani::any()),
+        warmup_corr_x1000: RatioX1000::new(kani::any()),
+        afr_corr_x1000: RatioX1000::new(kani::any()),
+        lambda_corr_x1000: RatioX1000::new(kani::any()),
     };
-    kani::assume(parts.pw_air_us.0 <= 25_000);
-    kani::assume(parts.ae_pulse_us.0 <= 20_000);
-    kani::assume(parts.deadtime_us.0 <= 20_000);
-    kani::assume(parts.clt_corr_x1000.0 <= 4_000);
-    kani::assume(parts.iat_corr_x1000.0 <= 4_000);
-    kani::assume(parts.baro_corr_x1000.0 <= 4_000);
-    kani::assume(parts.vbat_corr_x1000.0 <= 4_000);
-    kani::assume(parts.cranking_corr_x1000.0 <= 4_000);
-    kani::assume(parts.afterstart_corr_x1000.0 <= 4_000);
-    kani::assume(parts.warmup_corr_x1000.0 <= 4_000);
-    kani::assume(parts.afr_corr_x1000.0 <= 4_000);
-    kani::assume(parts.lambda_corr_x1000.0 <= 4_000);
+    kani::assume(parts.pw_air_us.get() <= 25_000);
+    kani::assume(parts.ae_pulse_us.get() <= 20_000);
+    kani::assume(parts.deadtime_us.get() <= 20_000);
+    kani::assume(parts.clt_corr_x1000.get() <= 4_000);
+    kani::assume(parts.iat_corr_x1000.get() <= 4_000);
+    kani::assume(parts.baro_corr_x1000.get() <= 4_000);
+    kani::assume(parts.vbat_corr_x1000.get() <= 4_000);
+    kani::assume(parts.cranking_corr_x1000.get() <= 4_000);
+    kani::assume(parts.afterstart_corr_x1000.get() <= 4_000);
+    kani::assume(parts.warmup_corr_x1000.get() <= 4_000);
+    kani::assume(parts.afr_corr_x1000.get() <= 4_000);
+    kani::assume(parts.lambda_corr_x1000.get() <= 4_000);
 
     let result = compute_pw_corr_us(&cal, &LogicalState::default(), input, parts);
-    assert!(result.0 <= cal.0.pw_max_us);
+    assert!(result.get() <= cal.0.pw_max_us);
 }
 
 #[kani::proof]
@@ -574,7 +576,7 @@ fn kani_fuel_cut_suppresses_injection() {
     input.fuel_cut = forced;
 
     let fuel = FuelOutput {
-        pw_corr_us: PulseWidthUs(1000),
+        pw_corr_us: PulseWidthUs::new(1000),
     };
     let schedule = schedule_all_cylinders(&cal, input, fuel);
     let mut idx = 0usize;
@@ -595,7 +597,7 @@ fn kani_spark_cut_suppresses_spark() {
     input.spark_cut = forced;
 
     let fuel = FuelOutput {
-        pw_corr_us: PulseWidthUs(1000),
+        pw_corr_us: PulseWidthUs::new(1000),
     };
     let schedule = schedule_all_cylinders(&cal, input, fuel);
     let mut idx = 0usize;
@@ -616,10 +618,10 @@ fn kani_deadtime_lookup_total() {
     kani::assume(fuel_pressure_kpa10 <= 10_000);
     let out = deadtime_lookup(
         &cal.0.deadtime_table_us,
-        Millivolts(vbat_mv),
-        Kpa10(fuel_pressure_kpa10),
+        Millivolts::new(vbat_mv),
+        Kpa10::new(fuel_pressure_kpa10),
     );
-    assert!(out.0 <= u16::MAX as u32);
+    assert!(out.get() <= u16::MAX as u32);
 }
 
 #[kani::proof]
@@ -627,8 +629,8 @@ fn kani_vbat_correction_total() {
     let cal = canonical_calibration();
     let vbat_mv: u16 = kani::any();
     kani::assume(vbat_mv <= 18_000);
-    let out = vbat_correction(&cal.0.vbat_corr_curve, Millivolts(vbat_mv));
-    assert!(out.0 <= 4_000);
+    let out = vbat_correction(&cal.0.vbat_corr_curve, Millivolts::new(vbat_mv));
+    assert!(out.get() <= 4_000);
 }
 
 #[kani::proof]
@@ -636,8 +638,8 @@ fn kani_baro_correction_total() {
     let cal = canonical_calibration();
     let baro_kpa10: u16 = kani::any();
     kani::assume(baro_kpa10 <= 3_000);
-    let out = baro_correction(&cal.0.baro_corr_curve, Kpa10(baro_kpa10));
-    assert!(out.0 <= 4_000);
+    let out = baro_correction(&cal.0.baro_corr_curve, Kpa10::new(baro_kpa10));
+    assert!(out.get() <= 4_000);
 }
 
 #[kani::proof]
@@ -645,8 +647,8 @@ fn kani_cranking_total() {
     let cal = canonical_calibration();
     let clt_c10: i16 = kani::any();
     let mode = any_engine_mode();
-    let out = cranking_corr_x1000(&cal.0.cranking_curve, mode, TempC10(clt_c10));
-    assert!(out.0 <= 4_000);
+    let out = cranking_corr_x1000(&cal.0.cranking_curve, mode, TempC10::new(clt_c10));
+    assert!(out.get() <= 4_000);
 }
 
 #[kani::proof]
@@ -660,17 +662,17 @@ fn kani_afterstart_total() {
         cal.0.afterstart_window_cycles,
         mode,
         cycles_since_start,
-        TempC10(clt_c10),
+        TempC10::new(clt_c10),
     );
-    assert!(out.0 <= 4_000);
+    assert!(out.get() <= 4_000);
 }
 
 #[kani::proof]
 fn kani_warmup_total() {
     let cal = canonical_calibration();
     let clt_c10: i16 = kani::any();
-    let out = warmup_correction(&cal.0.warmup_curve, TempC10(clt_c10));
-    assert!(out.0 <= 4_000);
+    let out = warmup_correction(&cal.0.warmup_curve, TempC10::new(clt_c10));
+    assert!(out.get() <= 4_000);
 }
 
 #[kani::proof]
@@ -790,7 +792,7 @@ fn kani_cuts_arbiter_total() {
 #[kani::proof]
 fn kani_idle_pi_total() {
     let mut cal = canonical_calibration();
-    cal.0.idle_target_rpm = Rpm(2_000);
+    cal.0.idle_target_rpm = Rpm::new(2_000);
     cal.0.idle_base_duty_x1000 = 500;
     cal.0.idle_kp_x1000 = 1000;
     cal.0.idle_ki_x1000 = 1000;
@@ -799,8 +801,8 @@ fn kani_idle_pi_total() {
     kani::assume((-4_000..=4_000).contains(&rpm_error));
 
     let input = InputSnapshot {
-        rpm: Rpm((2_000i32 - rpm_error as i32).clamp(0, u16::MAX as i32) as u16),
-        clt_c10: TempC10(800),
+        rpm: Rpm::new((2_000i32 - rpm_error as i32).clamp(0, u16::MAX as i32) as u16),
+        clt_c10: TempC10::new(800),
         ..InputSnapshot::default()
     };
 
@@ -818,7 +820,7 @@ fn kani_lambda_pi_total() {
     let lambda_error_x1000: i16 = kani::any();
     kani::assume((-1_000..=1_000).contains(&lambda_error_x1000));
     let input = InputSnapshot {
-        clt_c10: TempC10(800),
+        clt_c10: TempC10::new(800),
         fuel_cut: kani::any(),
         spark_cut: kani::any(),
         ..InputSnapshot::default()
@@ -840,24 +842,24 @@ fn kani_sensor_curves_total() {
     kani::assume(adc0 <= 4095);
     kani::assume(adc1 <= 4095);
 
-    let clt0 = crate::clt_from_counts(adc0).0;
-    let clt1 = crate::clt_from_counts(adc1).0;
+    let clt0 = crate::clt_from_counts(adc0).get();
+    let clt1 = crate::clt_from_counts(adc1).get();
     assert!((-400..=1500).contains(&clt0));
     assert!((-400..=1500).contains(&clt1));
     if adc0 <= adc1 {
         assert!(clt0 >= clt1);
     }
 
-    let iat0 = crate::iat_from_counts(adc0).0;
-    let iat1 = crate::iat_from_counts(adc1).0;
+    let iat0 = crate::iat_from_counts(adc0).get();
+    let iat1 = crate::iat_from_counts(adc1).get();
     assert!((-400..=1200).contains(&iat0));
     assert!((-400..=1200).contains(&iat1));
     if adc0 <= adc1 {
         assert!(iat0 >= iat1);
     }
 
-    let map0 = crate::map_from_counts(adc0).0;
-    let map1 = crate::map_from_counts(adc1).0;
+    let map0 = crate::map_from_counts(adc0).get();
+    let map1 = crate::map_from_counts(adc1).get();
     assert!((100..=3000).contains(&map0));
     assert!((100..=3000).contains(&map1));
     if adc0 <= adc1 {
@@ -887,10 +889,10 @@ fn kani_sensor_curves_total() {
     o2_wideband_cal.o2_sensor_mode = crate::O2SensorMode::WidebandLinear;
     let o2_wide0 = crate::o2_from_counts(&o2_wideband_cal, adc0, false)
         .afr_x100
-        .0;
+        .get();
     let o2_wide1 = crate::o2_from_counts(&o2_wideband_cal, adc1, false)
         .afr_x100
-        .0;
+        .get();
     assert!((500..=3000).contains(&o2_wide0));
     assert!((500..=3000).contains(&o2_wide1));
     if adc0 <= adc1 {
@@ -901,10 +903,10 @@ fn kani_sensor_curves_total() {
     o2_narrowband_cal.o2_sensor_mode = crate::O2SensorMode::NarrowbandSwitch;
     let o2_narrow0 = crate::o2_from_counts(&o2_narrowband_cal, adc0, kani::any())
         .afr_x100
-        .0;
+        .get();
     let o2_narrow1 = crate::o2_from_counts(&o2_narrowband_cal, adc1, kani::any())
         .afr_x100
-        .0;
+        .get();
     assert!((500..=3000).contains(&o2_narrow0));
     assert!((500..=3000).contains(&o2_narrow1));
 
@@ -916,16 +918,16 @@ fn kani_sensor_curves_total() {
         assert!(knock0 <= knock1);
     }
 
-    let baro0 = crate::baro_from_counts(adc0).0;
-    let baro1 = crate::baro_from_counts(adc1).0;
+    let baro0 = crate::baro_from_counts(adc0).get();
+    let baro1 = crate::baro_from_counts(adc1).get();
     assert!((500..=1200).contains(&baro0));
     assert!((500..=1200).contains(&baro1));
     if adc0 <= adc1 {
         assert!(baro0 <= baro1);
     }
 
-    let vbat0 = crate::vbat_from_counts(adc0).0;
-    let vbat1 = crate::vbat_from_counts(adc1).0;
+    let vbat0 = crate::vbat_from_counts(adc0).get();
+    let vbat1 = crate::vbat_from_counts(adc1).get();
     assert!((6000..=18000).contains(&vbat0));
     assert!((6000..=18000).contains(&vbat1));
     if adc0 <= adc1 {
@@ -1111,8 +1113,8 @@ fn kani_exec_interp_matches_contract() {
         load_axis: valid_axis([10, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], 2),
         values: vals,
     };
-    let rpm = Rpm(kani::any());
-    let map_kpa = Kpa10(kani::any());
+    let rpm = Rpm::new(kani::any());
+    let map_kpa = Kpa10::new(kani::any());
     let bp = crate::interp::bilerp_u16(&tbl, rpm, map_kpa);
     let all_vals = [c00, c01, c10, c11];
     let bmin = *all_vals.iter().min().unwrap();
@@ -1145,26 +1147,26 @@ fn kani_exec_fuel_pipeline_matches_contract() {
     let map_val: u16 = kani::any();
     kani::assume(map_val <= 300);
     let input = InputSnapshot {
-        rpm: Rpm(rpm_val),
-        map_kpa10: Kpa10(map_val),
+        rpm: Rpm::new(rpm_val),
+        map_kpa10: Kpa10::new(map_val),
         ..Default::default()
     };
 
     // 1. VE lookup
     let ve = crate::fuel::lookup_ve(&cal, input);
-    assert!(ve.0 <= 20000); // VE in [0, 200%]
+    assert!(ve.get() <= 20000); // VE in [0, 200%]
 
     // 2. Target AFR lookup
     let afr = crate::fuel::lookup_target_afr(&cal, input);
-    assert!(afr.0 >= 500 && afr.0 <= 2500); // AFR range
+    assert!(afr.get() >= 500 && afr.get() <= 2500); // AFR range
 
     // 3. Base PW
     let base_pw: PulseWidthUs = crate::fuel::compute_pw_base_us(&cal, ve);
-    assert!(base_pw.0 <= 50_000); // max ~50ms
+    assert!(base_pw.get() <= 50_000); // max ~50ms
 
     // 4. Air PW
-    let air_pw: PulseWidthUs = crate::fuel::compute_pw_air_us(&cal, base_pw, Kpa10(map_val));
-    assert!(air_pw.0 <= u32::MAX as u64 as u32); // bounded by u32
+    let air_pw: PulseWidthUs = crate::fuel::compute_pw_air_us(&cal, base_pw, Kpa10::new(map_val));
+    assert!(air_pw.get() <= u32::MAX as u64 as u32); // bounded by u32
 
     // 5. Full corrected PW (uses the existing harness pattern)
     // This is exercised by kani_compute_pw_corr_clamped which already passes.
@@ -1198,39 +1200,41 @@ fn kani_exec_schedule_matches_contract() {
     // Safe bound: us <= 10_000 always gives deg10 <= 12000 at rpm >= 600.
     let us: u32 = kani::any();
     kani::assume(us <= 10_000);
-    let deg: Degrees10 = crate::numeric::duration_us_to_deg10(PulseWidthUs(us), Rpm(rpm_val));
-    assert!(deg.0 <= 7200 * 2); // at most 2 full cycles
+    let deg: Degrees10 =
+        crate::numeric::duration_us_to_deg10(PulseWidthUs::new(us), Rpm::new(rpm_val));
+    assert!(deg.get() >= 0);
+    assert!(deg.get() <= 7200 * 2); // at most 2 full cycles
 
     // Build InputSnapshot for schedule functions
     let sched_input = InputSnapshot {
-        rpm: Rpm(rpm_val),
-        map_kpa10: Kpa10(map_val),
+        rpm: Rpm::new(rpm_val),
+        map_kpa10: Kpa10::new(map_val),
         sync,
         ..Default::default()
     };
 
     // 2. Spark advance lookup
     let spark: SignedDegrees10 = crate::schedule::compute_spark_advance_deg10(&cal, sched_input);
-    assert!(spark.0 >= -720 && spark.0 <= 720); // bounded range
+    assert!(spark.get() >= -720 && spark.get() <= 720); // bounded range
 
     // 3. Dwell computation
     let dwell: PulseWidthUs = crate::schedule::compute_dwell_us(&cal, sched_input);
-    assert!(dwell.0 <= 30_000); // max 30ms dwell
+    assert!(dwell.get() <= 30_000); // max 30ms dwell
 
     // 4. Full cylinder schedule (no-cut case) — Synced + nonzero PW
     // Provide complete InputSnapshot so engine_enabled=true.
     let input = InputSnapshot {
         sync,
-        rpm: Rpm(rpm_val),
-        map_kpa10: Kpa10(map_val),
-        load_kpa10: Kpa10(map_val),
-        tps_x100: 5000,              // > 0 so not cranking
-        vbatt_mv: Millivolts(12000), // > 6V
+        rpm: Rpm::new(rpm_val),
+        map_kpa10: Kpa10::new(map_val),
+        load_kpa10: Kpa10::new(map_val),
+        tps_x100: 5000,                   // > 0 so not cranking
+        vbatt_mv: Millivolts::new(12000), // > 6V
         mode: EngineMode::Running,
         ..Default::default()
     };
     let fuel = FuelOutput {
-        pw_corr_us: PulseWidthUs(2000),
+        pw_corr_us: PulseWidthUs::new(2000),
     };
     let sched = crate::schedule::schedule_cylinder(&cal, input, fuel, 0);
     // Synced + enabled + not cut + nonzero PW must produce events
@@ -1239,8 +1243,8 @@ fn kani_exec_schedule_matches_contract() {
     // 5. Cut-suppression: fuel_cut=true must suppress fuel events
     let cut_input = InputSnapshot {
         sync,
-        rpm: Rpm(rpm_val),
-        map_kpa10: Kpa10(map_val),
+        rpm: Rpm::new(rpm_val),
+        map_kpa10: Kpa10::new(map_val),
         fuel_cut: true,
         tps_x100: 0,
         ..Default::default()

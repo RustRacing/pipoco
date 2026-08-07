@@ -97,7 +97,7 @@ impl TriggerTiming {
 
         // Exact calculation: 60,000,000 / (gap_period * 29)
         // Simplified: 2,068,966 / gap_period
-        let exact_numerator = 2_068_966_u32;
+        let exact_numerator = ecu_domain::RPM_CALC_NUMERATOR_EXACT;
         (exact_numerator / self.gap_period_us) as u16
     }
 

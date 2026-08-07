@@ -1,6 +1,8 @@
 //! TunerStudio server: minimal handler for SIG/OUTPC/PING and page R/W (Phase 2)
 use super::{outpc::Outpc, proto};
+pub use crate::pages::PageError;
 use crate::pages::{ts_page_schema_version, TsPageDescriptor, TS_PAGE_COUNT, TS_PAGE_DESCRIPTORS};
+pub use ecu_calibration::kv::PersistError;
 
 /// Provider for OUTPC data (decoupled from EcuState)
 pub trait OutpcProvider {
@@ -16,7 +18,7 @@ pub trait PageStore {
     fn read_page(&self, page: u8, out: &mut [u8]) -> Option<usize>;
     fn write_page(&mut self, page: u8, data: &[u8]) -> Result<(), PageError>;
     fn burn(&mut self) -> Result<(), PersistError> {
-        Err(PersistError::Unsupported)
+        Err(PersistError::Fail)
     }
     fn export_package_wire(&self, _out: &mut [u8]) -> Result<usize, PageError> {
         Err(PageError::Invalid)
@@ -263,18 +265,6 @@ pub fn encode_page_crc_info_reply(entries: &[PageCrcInfoEntry], out: &mut [u8]) 
         offset += PAGE_CRC_INFO_ENTRY_WIRE_LEN;
     }
     proto::encode_reply(proto::Cmd::PageCrcInfo, &payload[..payload_len], out)
-}
-
-#[derive(Debug, Copy, Clone)]
-pub enum PageError {
-    Invalid,
-    WrongSize,
-}
-#[derive(Debug, Copy, Clone)]
-pub enum PersistError {
-    Unsupported,
-    Fail,
-    EngineRunning,
 }
 
 const PERSIST_ERR_RUNNING: &[u8] = &[1, b'R', b'U', b'N'];

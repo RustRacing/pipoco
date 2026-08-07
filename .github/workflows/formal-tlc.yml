@@ -77,3 +77,21 @@ jobs:
 
       - name: Assert Rust implementations use the model constants
         run: cargo test -p ecu-trigger -p ecu-scheduler
+
+  kani-proofs:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Kani
+        run: |
+          cargo install kani-verifier --locked
+          cargo kani --version
+
+      - name: Run Kani proofs against the real CRC
+        run: cargo kani -p ecu-spec

@@ -8,14 +8,14 @@ use ecu_spec::{
 fn input_snapshot(rpm: u16, tps_x100: u16, clt_c10: i16, map_kpa10: u16) -> InputSnapshot {
     InputSnapshot {
         mode: EngineMode::Running,
-        rpm: Rpm(rpm),
+        rpm: Rpm::new(rpm),
         tps_x100,
-        clt_c10: TempC10(clt_c10),
-        map_kpa10: Kpa10(map_kpa10),
-        load_kpa10: Kpa10(map_kpa10),
-        vbatt_mv: Millivolts(12000),
-        iat_c10: TempC10(250),
-        baro_kpa10: Kpa10(1010),
+        clt_c10: TempC10::new(clt_c10),
+        map_kpa10: Kpa10::new(map_kpa10),
+        load_kpa10: Kpa10::new(map_kpa10),
+        vbatt_mv: Millivolts::new(12000),
+        iat_c10: TempC10::new(250),
+        baro_kpa10: Kpa10::new(1010),
         knock_intensity_x100: 0,
         launch_armed: false,
         flat_shift_armed: false,
@@ -23,7 +23,7 @@ fn input_snapshot(rpm: u16, tps_x100: u16, clt_c10: i16, map_kpa10: u16) -> Inpu
         fuel_cut: false,
         spark_cut: false,
         target_afr_override_x100: ecu_spec::AfrOverride::None,
-        t_us: ecu_spec::Micros(100_000),
+        t_us: ecu_spec::Micros::new(100_000),
     }
 }
 

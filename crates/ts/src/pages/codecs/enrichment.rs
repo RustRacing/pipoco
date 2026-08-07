@@ -1,8 +1,8 @@
 use super::*;
 
-pub fn encode_ae_page(page: &AePage, out: &mut [u8]) -> Result<usize, PageCodecError> {
+pub fn encode_ae_page(page: &AePage, out: &mut [u8]) -> Result<usize, PageError> {
     if out.len() < AE_PAGE_BYTES {
-        return Err(PageCodecError::WrongSize);
+        return Err(PageError::WrongSize);
     }
 
     out[0..2].copy_from_slice(&page.tpsdot_thresh_pct_s.to_le_bytes());
@@ -16,9 +16,9 @@ pub fn encode_ae_page(page: &AePage, out: &mut [u8]) -> Result<usize, PageCodecE
     Ok(AE_PAGE_BYTES)
 }
 
-pub fn decode_ae_page(data: &[u8]) -> Result<AePage, PageCodecError> {
+pub fn decode_ae_page(data: &[u8]) -> Result<AePage, PageError> {
     if data.len() < AE_PAGE_BYTES {
-        return Err(PageCodecError::WrongSize);
+        return Err(PageError::WrongSize);
     }
 
     let page = AePage {
@@ -30,15 +30,15 @@ pub fn decode_ae_page(data: &[u8]) -> Result<AePage, PageCodecError> {
     };
 
     if page.percent_gain > 100 || page.decay_time_ms == 0 {
-        return Err(PageCodecError::Invalid);
+        return Err(PageError::Invalid);
     }
 
     Ok(page)
 }
 
-pub fn encode_dfco_page(page: &DfcoPage, out: &mut [u8]) -> Result<usize, PageCodecError> {
+pub fn encode_dfco_page(page: &DfcoPage, out: &mut [u8]) -> Result<usize, PageError> {
     if out.len() < DFCO_PAGE_BYTES {
-        return Err(PageCodecError::WrongSize);
+        return Err(PageError::WrongSize);
     }
 
     out[0] = page.tps_max_pct;
@@ -51,9 +51,9 @@ pub fn encode_dfco_page(page: &DfcoPage, out: &mut [u8]) -> Result<usize, PageCo
     Ok(DFCO_PAGE_BYTES)
 }
 
-pub fn decode_dfco_page(data: &[u8]) -> Result<DfcoPage, PageCodecError> {
+pub fn decode_dfco_page(data: &[u8]) -> Result<DfcoPage, PageError> {
     if data.len() < DFCO_PAGE_BYTES {
-        return Err(PageCodecError::WrongSize);
+        return Err(PageError::WrongSize);
     }
 
     let page = DfcoPage {
@@ -66,15 +66,15 @@ pub fn decode_dfco_page(data: &[u8]) -> Result<DfcoPage, PageCodecError> {
     };
 
     if page.tps_max_pct > 100 || page.rpm_min == 0 || page.rpm_max < page.rpm_min {
-        return Err(PageCodecError::Invalid);
+        return Err(PageError::Invalid);
     }
 
     Ok(page)
 }
 
-pub fn encode_wue_page(page: &WuePage, out: &mut [u8]) -> Result<usize, PageCodecError> {
+pub fn encode_wue_page(page: &WuePage, out: &mut [u8]) -> Result<usize, PageError> {
     if out.len() < WUE_PAGE_BYTES {
-        return Err(PageCodecError::WrongSize);
+        return Err(PageError::WrongSize);
     }
 
     out[0] = page.max_percent;
@@ -86,9 +86,9 @@ pub fn encode_wue_page(page: &WuePage, out: &mut [u8]) -> Result<usize, PageCode
     Ok(WUE_PAGE_BYTES)
 }
 
-pub fn decode_wue_page(data: &[u8]) -> Result<WuePage, PageCodecError> {
+pub fn decode_wue_page(data: &[u8]) -> Result<WuePage, PageError> {
     if data.len() < WUE_PAGE_BYTES {
-        return Err(PageCodecError::WrongSize);
+        return Err(PageError::WrongSize);
     }
 
     let page = WuePage {
@@ -99,15 +99,15 @@ pub fn decode_wue_page(data: &[u8]) -> Result<WuePage, PageCodecError> {
     };
 
     if page.max_percent > 100 || page.min_percent > 100 || page.start_c >= page.end_c {
-        return Err(PageCodecError::Invalid);
+        return Err(PageError::Invalid);
     }
 
     Ok(page)
 }
 
-pub fn encode_ase_page(page: &AsePage, out: &mut [u8]) -> Result<usize, PageCodecError> {
+pub fn encode_ase_page(page: &AsePage, out: &mut [u8]) -> Result<usize, PageError> {
     if out.len() < ASE_PAGE_BYTES {
-        return Err(PageCodecError::WrongSize);
+        return Err(PageError::WrongSize);
     }
 
     out[0] = page.percent;
@@ -117,9 +117,9 @@ pub fn encode_ase_page(page: &AsePage, out: &mut [u8]) -> Result<usize, PageCode
     Ok(ASE_PAGE_BYTES)
 }
 
-pub fn decode_ase_page(data: &[u8]) -> Result<AsePage, PageCodecError> {
+pub fn decode_ase_page(data: &[u8]) -> Result<AsePage, PageError> {
     if data.len() < ASE_PAGE_BYTES {
-        return Err(PageCodecError::WrongSize);
+        return Err(PageError::WrongSize);
     }
 
     let page = AsePage {
@@ -129,15 +129,15 @@ pub fn decode_ase_page(data: &[u8]) -> Result<AsePage, PageCodecError> {
     };
 
     if page.percent > 100 || page.taper_time_ms == 0 {
-        return Err(PageCodecError::Invalid);
+        return Err(PageError::Invalid);
     }
 
     Ok(page)
 }
 
-pub fn encode_idle_page(page: &IdlePage, out: &mut [u8]) -> Result<usize, PageCodecError> {
+pub fn encode_idle_page(page: &IdlePage, out: &mut [u8]) -> Result<usize, PageError> {
     if out.len() < IDLE_PAGE_BYTES {
-        return Err(PageCodecError::WrongSize);
+        return Err(PageError::WrongSize);
     }
 
     out[0] = page.enable as u8;
@@ -147,9 +147,9 @@ pub fn encode_idle_page(page: &IdlePage, out: &mut [u8]) -> Result<usize, PageCo
     Ok(IDLE_PAGE_BYTES)
 }
 
-pub fn decode_idle_page(data: &[u8]) -> Result<IdlePage, PageCodecError> {
+pub fn decode_idle_page(data: &[u8]) -> Result<IdlePage, PageError> {
     if data.len() < IDLE_PAGE_BYTES {
-        return Err(PageCodecError::WrongSize);
+        return Err(PageError::WrongSize);
     }
 
     let page = IdlePage {
@@ -159,15 +159,15 @@ pub fn decode_idle_page(data: &[u8]) -> Result<IdlePage, PageCodecError> {
     };
 
     if page.duty_x10 > IDLE_DUTY_MAX_X10 || page.freq_hz == 0 {
-        return Err(PageCodecError::Invalid);
+        return Err(PageError::Invalid);
     }
 
     Ok(page)
 }
 
-pub fn encode_fan_page(page: &FanPage, out: &mut [u8]) -> Result<usize, PageCodecError> {
+pub fn encode_fan_page(page: &FanPage, out: &mut [u8]) -> Result<usize, PageError> {
     if out.len() < FAN_PAGE_BYTES {
-        return Err(PageCodecError::WrongSize);
+        return Err(PageError::WrongSize);
     }
 
     out[0] = page.enable as u8;
@@ -177,9 +177,9 @@ pub fn encode_fan_page(page: &FanPage, out: &mut [u8]) -> Result<usize, PageCode
     Ok(FAN_PAGE_BYTES)
 }
 
-pub fn decode_fan_page(data: &[u8]) -> Result<FanPage, PageCodecError> {
+pub fn decode_fan_page(data: &[u8]) -> Result<FanPage, PageError> {
     if data.len() < FAN_PAGE_BYTES {
-        return Err(PageCodecError::WrongSize);
+        return Err(PageError::WrongSize);
     }
 
     let page = FanPage {
@@ -189,18 +189,15 @@ pub fn decode_fan_page(data: &[u8]) -> Result<FanPage, PageCodecError> {
     };
 
     if page.on_c <= page.off_c {
-        return Err(PageCodecError::Invalid);
+        return Err(PageError::Invalid);
     }
 
     Ok(page)
 }
 
-pub fn encode_closed_loop_page(
-    page: &ClosedLoopPage,
-    out: &mut [u8],
-) -> Result<usize, PageCodecError> {
+pub fn encode_closed_loop_page(page: &ClosedLoopPage, out: &mut [u8]) -> Result<usize, PageError> {
     if out.len() < CLOSED_LOOP_PAGE_BYTES {
-        return Err(PageCodecError::WrongSize);
+        return Err(PageError::WrongSize);
     }
 
     out[0] = page.enable as u8;
@@ -211,9 +208,9 @@ pub fn encode_closed_loop_page(
     Ok(CLOSED_LOOP_PAGE_BYTES)
 }
 
-pub fn decode_closed_loop_page(data: &[u8]) -> Result<ClosedLoopPage, PageCodecError> {
+pub fn decode_closed_loop_page(data: &[u8]) -> Result<ClosedLoopPage, PageError> {
     if data.len() < CLOSED_LOOP_PAGE_BYTES {
-        return Err(PageCodecError::WrongSize);
+        return Err(PageError::WrongSize);
     }
 
     let page = ClosedLoopPage {
@@ -224,7 +221,7 @@ pub fn decode_closed_loop_page(data: &[u8]) -> Result<ClosedLoopPage, PageCodecE
     };
 
     if !(AFR_TARGET_MIN_X10..=AFR_TARGET_MAX_X10).contains(&page.target_afr_x10) {
-        return Err(PageCodecError::Invalid);
+        return Err(PageError::Invalid);
     }
 
     Ok(page)

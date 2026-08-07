@@ -18,393 +18,20 @@
 
 #![cfg(test)]
 
-use ecu_domain::{Degrees10, DwellUs, Micros, PulseWidthUs, Rpm};
+use ecu_domain::{Degrees10, DwellUs, Micros, PulseWidthUs};
+use ecu_runtime::semantic::{
+    conformance::runtime_semantic_evaluate_schedule, runtime_semantic_evaluate_fuel,
+    RuntimeSemanticFuelObservations, RuntimeSemanticScheduleEventKind,
+};
 use ecu_scheduler::test_support::{observe_scheduler, SchedulerObservedSurface};
 use ecu_scheduler::{
     ChannelId, ExclusiveChannel, IgnitionPlan, InjectionPlan, OutputGroup, SchedulerMode,
     SchedulerState,
 };
-
-mod fm0016_fixture_matrix {
-    #![allow(dead_code)]
-    include!("../../compat/tests/formal/fm0016_fixture_matrix.rs");
-}
-
-// Re-export runtime semantic types needed for product observation building
-use ecu_runtime::{
-    semantic::{
-        conformance::runtime_semantic_evaluate_schedule, runtime_semantic_evaluate_fuel,
-        RuntimeSemanticAxis16, RuntimeSemanticCalibration, RuntimeSemanticCurve16U16,
-        RuntimeSemanticCylinderArrayU16, RuntimeSemanticDeadtimeTableU16,
-        RuntimeSemanticEngineMode, RuntimeSemanticFuelObservations,
-        RuntimeSemanticInjectionAngleMode, RuntimeSemanticInputSnapshot,
-        RuntimeSemanticScheduleCalibration, RuntimeSemanticScheduleEventKind, RuntimeSemanticState,
-        RuntimeSemanticTable2dI16, RuntimeSemanticTable2dU16, RuntimeSemanticTable2dU32,
-    },
-    RuntimeSemanticAfrOverride,
+use ecu_test_fixtures::semantic::{
+    build_semantic_calibration, build_semantic_schedule_calibration, semantic_state_for_fixture,
+    to_semantic_input,
 };
-
-// --------------------------------------------------------------------------
-// Calibration builders (copied from ecu-runtime/tests/fm0016_runtime_conformance.rs)
-// --------------------------------------------------------------------------
-
-/// Convert a ValidatedCalibration to RuntimeSemanticCalibration for the
-/// v9 semantic evaluator.
-#[allow(clippy::indexing_slicing, clippy::needless_range_loop)]
-fn build_semantic_calibration(cal: &ecu_spec::ValidatedCalibration) -> RuntimeSemanticCalibration {
-    fn copy_table_2d(src: &ecu_spec::Table2D16<u16>) -> RuntimeSemanticTable2dU16 {
-        let rpm_len = src.rpm_axis.len as usize;
-        let load_len = src.load_axis.len as usize;
-        let mut rpm_axis = RuntimeSemanticAxis16 {
-            len: src.rpm_axis.len,
-            values: [0; 16],
-        };
-        let mut load_axis = RuntimeSemanticAxis16 {
-            len: src.load_axis.len,
-            values: [0; 16],
-        };
-        let mut values = [[0u16; 16]; 16];
-
-        for i in 0..16 {
-            if i < rpm_len {
-                rpm_axis.values[i] = src.rpm_axis.values[i];
-            }
-        }
-        for i in 0..16 {
-            if i < load_len {
-                load_axis.values[i] = src.load_axis.values[i];
-            }
-        }
-        for r in 0..16 {
-            for c in 0..16 {
-                let cal_load = r.min(load_len.saturating_sub(1));
-                let cal_rpm = c.min(rpm_len.saturating_sub(1));
-                values[r][c] = src.values[cal_load][cal_rpm];
-            }
-        }
-
-        RuntimeSemanticTable2dU16 {
-            rpm_axis,
-            load_axis,
-            values,
-        }
-    }
-
-    fn copy_curve(src: &ecu_spec::Curve16) -> RuntimeSemanticCurve16U16 {
-        let len = src.axis.len as usize;
-        let mut axis = RuntimeSemanticAxis16 {
-            len: src.axis.len,
-            values: [0; 16],
-        };
-        let mut values = [0u16; 16];
-
-        for i in 0..16 {
-            if i < len {
-                axis.values[i] = src.axis.values[i];
-            }
-        }
-        for i in 0..16 {
-            if i < len {
-                values[i] = src.values[i];
-            }
-        }
-
-        RuntimeSemanticCurve16U16 { axis, values }
-    }
-
-    fn copy_deadtime_table(src: &ecu_spec::Table2D16<u16>) -> RuntimeSemanticDeadtimeTableU16 {
-        let generic = copy_table_2d(src);
-        RuntimeSemanticDeadtimeTableU16 {
-            vbat_mv_axis: generic.rpm_axis,
-            pressure_kpa10_axis: generic.load_axis,
-            values: generic.values,
-        }
-    }
-
-    let c = &cal.0;
-    RuntimeSemanticCalibration {
-        ve_table: copy_table_2d(&c.ve_table),
-        afr_target_table: copy_table_2d(&c.afr_target_table),
-        deadtime_table_us: copy_deadtime_table(&c.deadtime_table_us),
-        clt_corr_curve: copy_curve(&c.clt_corr_curve),
-        iat_corr_curve: copy_curve(&c.iat_corr_curve),
-        baro_corr_curve: copy_curve(&c.baro_corr_curve),
-        vbat_corr_curve: copy_curve(&c.vbat_corr_curve),
-        cranking_curve: copy_curve(&c.cranking_curve),
-        afterstart_table: copy_table_2d(&c.afterstart_table),
-        warmup_curve: copy_curve(&c.warmup_curve),
-        ae_tps_threshold_curve: copy_curve(&c.ae_tps_threshold_curve),
-        ae_map_threshold_curve: copy_curve(&c.ae_map_threshold_curve),
-        ae_shot_curve_us: copy_curve(&c.ae_shot_curve_us),
-        ae_decay_steps_curve: copy_curve(&c.ae_decay_steps_curve),
-        ae_decay_ratio_curve_x1000: copy_curve(&c.ae_decay_ratio_curve_x1000),
-        required_fuel_us: c.required_fuel_us,
-        pref_kpa10: c.pref_kpa10,
-        stoich_afr_x100: c.stoich_afr_x100,
-        pw_max_us: c.pw_max_us,
-        afterstart_window_cycles: c.afterstart_window_cycles,
-        dfco_entry_rpm: c.dfco_entry_rpm.0,
-        dfco_exit_rpm: c.dfco_exit_rpm.0,
-        dfco_entry_tps_x100: c.dfco_entry_tps_x100,
-        dfco_exit_tps_x100: c.dfco_exit_tps_x100,
-        dfco_entry_map_kpa10: c.dfco_entry_map_kpa10.0,
-        dfco_delay_cycles: c.dfco_delay_cycles,
-        soft_rev_rpm: c.soft_rev_rpm.0,
-        hard_rev_rpm: c.hard_rev_rpm.0,
-        rev_hysteresis_rpm: c.rev_hysteresis_rpm.0,
-        soft_retard_max_deg10: c.soft_retard_max_deg10,
-        idle_target_rpm: c.idle_target_rpm.0,
-        idle_base_duty_x1000: c.idle_base_duty_x1000,
-        idle_kp_x1000: c.idle_kp_x1000,
-        idle_ki_x1000: c.idle_ki_x1000,
-        launch_rpm_limit: c.launch_rpm_limit.0,
-        launch_cut_cycles: c.launch_cut_cycles,
-        flat_shift_rpm_min: c.flat_shift_rpm_min.0,
-        flat_shift_cut_cycles: c.flat_shift_cut_cycles,
-        knock_threshold_x100: c.knock_threshold_x100,
-        knock_retard_step_deg10: c.knock_retard_step_deg10,
-        knock_retard_max_deg10: c.knock_retard_max_deg10,
-        knock_recovery_step_deg10: c.knock_recovery_step_deg10,
-        knock_recovery_delay_cycles: c.knock_recovery_delay_cycles,
-        lambda_kp_x1000: c.lambda_kp_x1000,
-        lambda_ki_x1000: c.lambda_ki_x1000,
-    }
-}
-
-/// Convert a ValidatedCalibration to RuntimeSemanticScheduleCalibration for
-/// the v10 semantic schedule evaluator.
-#[allow(clippy::indexing_slicing, clippy::needless_range_loop)]
-fn build_semantic_schedule_calibration(
-    cal: &ecu_spec::ValidatedCalibration,
-) -> RuntimeSemanticScheduleCalibration {
-    fn copy_table_2d_u16(src: &ecu_spec::Table2D16<u16>) -> RuntimeSemanticTable2dU16 {
-        let rpm_len = src.rpm_axis.len as usize;
-        let load_len = src.load_axis.len as usize;
-        let mut rpm_axis = RuntimeSemanticAxis16 {
-            len: src.rpm_axis.len,
-            values: [0; 16],
-        };
-        let mut load_axis = RuntimeSemanticAxis16 {
-            len: src.load_axis.len,
-            values: [0; 16],
-        };
-        let mut values = [[0u16; 16]; 16];
-
-        for i in 0..16 {
-            if i < rpm_len {
-                rpm_axis.values[i] = src.rpm_axis.values[i];
-            }
-        }
-        for i in 0..16 {
-            if i < load_len {
-                load_axis.values[i] = src.load_axis.values[i];
-            }
-        }
-        for r in 0..16 {
-            for c in 0..16 {
-                let cal_load = r.min(load_len.saturating_sub(1));
-                let cal_rpm = c.min(rpm_len.saturating_sub(1));
-                values[r][c] = src.values[cal_load][cal_rpm];
-            }
-        }
-
-        RuntimeSemanticTable2dU16 {
-            rpm_axis,
-            load_axis,
-            values,
-        }
-    }
-
-    fn copy_table_2d_i16(src: &ecu_spec::Table2D16<i16>) -> RuntimeSemanticTable2dI16 {
-        let rpm_len = src.rpm_axis.len as usize;
-        let load_len = src.load_axis.len as usize;
-        let mut rpm_axis = RuntimeSemanticAxis16 {
-            len: src.rpm_axis.len,
-            values: [0; 16],
-        };
-        let mut load_axis = RuntimeSemanticAxis16 {
-            len: src.load_axis.len,
-            values: [0; 16],
-        };
-        let mut values = [[0i16; 16]; 16];
-
-        for i in 0..16 {
-            if i < rpm_len {
-                rpm_axis.values[i] = src.rpm_axis.values[i];
-            }
-        }
-        for i in 0..16 {
-            if i < load_len {
-                load_axis.values[i] = src.load_axis.values[i];
-            }
-        }
-        for r in 0..16 {
-            for c in 0..16 {
-                let cal_load = r.min(load_len.saturating_sub(1));
-                let cal_rpm = c.min(rpm_len.saturating_sub(1));
-                values[r][c] = src.values[cal_load][cal_rpm];
-            }
-        }
-
-        RuntimeSemanticTable2dI16 {
-            rpm_axis,
-            load_axis,
-            values,
-        }
-    }
-
-    fn copy_table_2d_u32(src: &ecu_spec::Table2D16<u32>) -> RuntimeSemanticTable2dU32 {
-        let rpm_len = src.rpm_axis.len as usize;
-        let load_len = src.load_axis.len as usize;
-        let mut rpm_axis = RuntimeSemanticAxis16 {
-            len: src.rpm_axis.len,
-            values: [0; 16],
-        };
-        let mut load_axis = RuntimeSemanticAxis16 {
-            len: src.load_axis.len,
-            values: [0; 16],
-        };
-        let mut values = [[0u32; 16]; 16];
-
-        for i in 0..16 {
-            if i < rpm_len {
-                rpm_axis.values[i] = src.rpm_axis.values[i];
-            }
-        }
-        for i in 0..16 {
-            if i < load_len {
-                load_axis.values[i] = src.load_axis.values[i];
-            }
-        }
-        for r in 0..16 {
-            for c in 0..16 {
-                let cal_load = r.min(load_len.saturating_sub(1));
-                let cal_rpm = c.min(rpm_len.saturating_sub(1));
-                values[r][c] = src.values[cal_load][cal_rpm];
-            }
-        }
-
-        RuntimeSemanticTable2dU32 {
-            rpm_axis,
-            load_axis,
-            values,
-        }
-    }
-
-    fn copy_cylinder_array(src: &ecu_spec::CylinderArrayU16) -> RuntimeSemanticCylinderArrayU16 {
-        let mut values = [0u16; 16];
-        for i in 0..16 {
-            if i < src.count as usize {
-                values[i] = src.values[i];
-            }
-        }
-        RuntimeSemanticCylinderArrayU16 {
-            count: src.count,
-            values,
-        }
-    }
-
-    let c = &cal.0;
-    RuntimeSemanticScheduleCalibration {
-        spark_advance_table_deg10: copy_table_2d_i16(&c.spark_advance_table_deg10),
-        dwell_table_us: copy_table_2d_u32(&c.dwell_table_us),
-        injection_target_table_deg10: copy_table_2d_u16(&c.injection_target_table_deg10),
-        injection_angle_mode: match c.injection_angle_mode {
-            ecu_spec::InjectionAngleMode::StartOfInjection => {
-                RuntimeSemanticInjectionAngleMode::StartOfInjection
-            }
-            ecu_spec::InjectionAngleMode::EndOfInjection => {
-                RuntimeSemanticInjectionAngleMode::EndOfInjection
-            }
-        },
-        cylinder_phase_deg10: copy_cylinder_array(&c.cylinder_phase_deg10),
-    }
-}
-
-/// Convert an InputSnapshot to RuntimeSemanticInputSnapshot for the v9
-/// semantic evaluator.
-fn to_semantic_input(input: &ecu_spec::InputSnapshot) -> RuntimeSemanticInputSnapshot {
-    use ecu_domain::Kpa10;
-    use ecu_spec::EngineMode;
-
-    let mode = match input.mode {
-        EngineMode::Off => RuntimeSemanticEngineMode::Off,
-        EngineMode::Cranking => RuntimeSemanticEngineMode::Cranking,
-        EngineMode::Running => RuntimeSemanticEngineMode::Running,
-        EngineMode::Shutdown => RuntimeSemanticEngineMode::Shutdown,
-    };
-    let target_afr_override = match input.target_afr_override_x100 {
-        ecu_spec::AfrOverride::None => RuntimeSemanticAfrOverride::None,
-        ecu_spec::AfrOverride::Some(afr) => RuntimeSemanticAfrOverride::Some(afr.get()),
-    };
-    RuntimeSemanticInputSnapshot {
-        t_us: Micros::new(input.t_us.0),
-        rpm: Rpm::new(input.rpm.0),
-        map_kpa10: Kpa10::new(input.map_kpa10.0),
-        load_kpa10: Kpa10::new(input.load_kpa10.0),
-        tps_x100: input.tps_x100,
-        clt_c10: input.clt_c10.0,
-        iat_c10: input.iat_c10.0,
-        baro_kpa10: Kpa10::new(input.baro_kpa10.0),
-        vbatt_mv: input.vbatt_mv.0,
-        lambda_valid: true,
-        lambda_measured: ecu_domain::Lambda100::new(100),
-        requested_open_loop: false,
-        knock_intensity_x100: input.knock_intensity_x100,
-        launch_armed: input.launch_armed,
-        flat_shift_armed: input.flat_shift_armed,
-        sync: match input.sync {
-            ecu_spec::SyncState::Synced => ecu_domain::SyncState::Locked { cam_ref: false },
-            ecu_spec::SyncState::Unsynced => ecu_domain::SyncState::Unsynced,
-        },
-        fuel_cut: input.fuel_cut,
-        spark_cut: input.spark_cut,
-        direct_fuel_cut_request: false,
-        direct_spark_cut_request: false,
-        safety_latch_request: false,
-        mode,
-        target_afr_override_x100: target_afr_override,
-    }
-}
-
-fn semantic_state_for_fixture(case: &fm0016_fixture_matrix::FixtureCase) -> RuntimeSemanticState {
-    match (case.fixture, case.variant) {
-        ("lambda_cl_integrator_response", "saturation") => RuntimeSemanticState {
-            lambda_integrator_acc: 400,
-            ..RuntimeSemanticState::default()
-        },
-        ("lambda_cl_integrator_response", "freeze_cut") => RuntimeSemanticState {
-            lambda_integrator_acc: 180,
-            ..RuntimeSemanticState::default()
-        },
-        ("knock_response", "retard") => RuntimeSemanticState {
-            knock_retard_deg10: 40,
-            knock_recovery_counter: 0,
-            ..RuntimeSemanticState::default()
-        },
-        ("knock_response", "recovery") => RuntimeSemanticState {
-            knock_retard_deg10: 60,
-            knock_recovery_counter: 1,
-            ..RuntimeSemanticState::default()
-        },
-        ("launch_control_pattern", "disarmed") => RuntimeSemanticState {
-            launch_active: true,
-            launch_cut_cycle_count: 3,
-            ..RuntimeSemanticState::default()
-        },
-        ("flat_shift_pattern", "disarmed") => RuntimeSemanticState {
-            flat_shift_active: true,
-            flat_shift_cut_cycle_count: 3,
-            ..RuntimeSemanticState::default()
-        },
-        ("safety_latching", "hold_through_clear_attempt")
-        | ("safety_latching", "release_on_clear_condition") => RuntimeSemanticState {
-            safety_latched: true,
-            ..RuntimeSemanticState::default()
-        },
-        _ => RuntimeSemanticState::default(),
-    }
-}
 
 // --------------------------------------------------------------------------
 // Product observation helpers
@@ -447,7 +74,9 @@ fn count_ignition_events_for_cylinder(
 /// Run scheduler for a fixture case using product APIs only.
 /// Fuel and schedule observations come from the runtime semantic evaluators,
 /// not from the spec oracle.
-fn run_scheduler_for_case(case: &fm0016_fixture_matrix::FixtureCase) -> SchedulerObservedSurface {
+fn run_scheduler_for_case(
+    case: &ecu_test_fixtures::fixture_matrix::FixtureCase,
+) -> SchedulerObservedSurface {
     let mut state = SchedulerState::new();
     let input = case.input;
 
@@ -468,8 +97,8 @@ fn run_scheduler_for_case(case: &fm0016_fixture_matrix::FixtureCase) -> Schedule
 
     // Drive scheduler using product events
     // Use timestamps from input
-    let now = Micros::new(input.t_us.0);
-    let start = Micros::new(input.t_us.0.saturating_add(100));
+    let now = Micros::new(input.t_us.get());
+    let start = Micros::new(input.t_us.get().saturating_add(100));
 
     // For each cylinder with injection events, schedule an injection
     // For each cylinder with ignition events, schedule an ignition
@@ -483,7 +112,7 @@ fn run_scheduler_for_case(case: &fm0016_fixture_matrix::FixtureCase) -> Schedule
             let end = Micros::new(start.get().saturating_add(duration));
             let inj_plan = InjectionPlan {
                 output: ExclusiveChannel::new(OutputGroup::Injector, ChannelId::new(cyl as u8 + 1)),
-                pulse_width: PulseWidthUs::new(duration as u16),
+                pulse_width: PulseWidthUs::new(duration),
             };
             let _ = state.schedule_injection(now, start, end, inj_plan);
         }
@@ -509,10 +138,10 @@ fn run_scheduler_for_case(case: &fm0016_fixture_matrix::FixtureCase) -> Schedule
 // Conformance test
 // --------------------------------------------------------------------------
 
-fn conformance_test(case: &fm0016_fixture_matrix::FixtureCase) {
+fn conformance_test(case: &ecu_test_fixtures::fixture_matrix::FixtureCase) {
     // Verify fixture semantics via spec oracle (ONE call for semantic verification only)
-    let spec = fm0016_fixture_matrix::oracle_result(*case);
-    fm0016_fixture_matrix::assert_fixture_semantics(*case, &spec);
+    let spec = ecu_test_fixtures::fixture_matrix::oracle_result(*case);
+    ecu_test_fixtures::fixture_matrix::assert_fixture_semantics(*case, &spec);
 
     // Run product scheduler to get observed data
     let obs = run_scheduler_for_case(case);
@@ -645,35 +274,35 @@ fn conformance_test(case: &fm0016_fixture_matrix::FixtureCase) {
     assert_eq!(cancel_state.mode(), SchedulerMode::Suspended);
 }
 
-fn run_all(cases: &[fm0016_fixture_matrix::FixtureCase]) {
+fn run_all(cases: &[ecu_test_fixtures::fixture_matrix::FixtureCase]) {
     for case in cases {
         conformance_test(case);
     }
 }
 
-fn synced_fixtures() -> Vec<fm0016_fixture_matrix::FixtureCase> {
-    fm0016_fixture_matrix::fixture_cases()
+fn synced_fixtures() -> Vec<ecu_test_fixtures::fixture_matrix::FixtureCase> {
+    ecu_test_fixtures::fixture_matrix::fixture_cases()
         .into_iter()
         .filter(|c| matches!(c.input.sync, ecu_spec::SyncState::Synced))
         .collect()
 }
 
-fn unsynced_fixtures() -> Vec<fm0016_fixture_matrix::FixtureCase> {
-    fm0016_fixture_matrix::fixture_cases()
+fn unsynced_fixtures() -> Vec<ecu_test_fixtures::fixture_matrix::FixtureCase> {
+    ecu_test_fixtures::fixture_matrix::fixture_cases()
         .into_iter()
         .filter(|c| !matches!(c.input.sync, ecu_spec::SyncState::Synced))
         .collect()
 }
 
-fn cut_fixtures() -> Vec<fm0016_fixture_matrix::FixtureCase> {
-    fm0016_fixture_matrix::fixture_cases()
+fn cut_fixtures() -> Vec<ecu_test_fixtures::fixture_matrix::FixtureCase> {
+    ecu_test_fixtures::fixture_matrix::fixture_cases()
         .into_iter()
         .filter(|c| c.fixture.contains("cut"))
         .collect()
 }
 
-fn running_fixtures() -> Vec<fm0016_fixture_matrix::FixtureCase> {
-    fm0016_fixture_matrix::fixture_cases()
+fn running_fixtures() -> Vec<ecu_test_fixtures::fixture_matrix::FixtureCase> {
+    ecu_test_fixtures::fixture_matrix::fixture_cases()
         .into_iter()
         .filter(|c| c.fixture.contains("running") && !c.fixture.contains("cut"))
         .collect()
@@ -709,5 +338,5 @@ fn scheduler_fm0016_synced() {
 
 #[test]
 fn scheduler_fm0016_all() {
-    run_all(&fm0016_fixture_matrix::fixture_cases());
+    run_all(&ecu_test_fixtures::fixture_matrix::fixture_cases());
 }

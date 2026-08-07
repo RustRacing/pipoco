@@ -76,6 +76,7 @@ impl EcuState {
         }
         let sync_loss_counter = self.sync_loss_tracker.total_losses;
         let latest_diag_code = latest_diag_code(self);
+        let tooth_count = self.tooth_count();
         let (
             current_fault_code,
             current_fault_severity,
@@ -104,7 +105,7 @@ impl EcuState {
             emerg_trig_tps: &mut self.faults.emergency_trigger_tps_oob,
             diag_log_entries,
             snapshot: &self.snapshot,
-            tooth_count: &self.tooth_count,
+            tooth_count,
             sync_loss_counter,
             current_fault_code,
             current_fault_severity,
@@ -122,10 +123,11 @@ impl EcuState {
 
     pub fn refresh_snapshot(&mut self) {
         let trigger_inputs = self.trigger_inputs();
-        let base_pw = self.calculate_fuel(trigger_inputs.rpm, self.map_kpa_x10 / 10);
-        let final_pw = self.final_pw(Rpm::new(trigger_inputs.rpm), Kpa10::new(self.map_kpa_x10));
-        let commanded_advance_x10 =
-            self.calculate_ignition_timing_with_limiter(trigger_inputs.rpm, self.map_kpa_x10) * 10;
+        let base_pw = self.calculate_fuel(trigger_inputs.rpm, self.map_kpa_x10() / 10);
+        let final_pw = self.final_pw(Rpm::new(trigger_inputs.rpm), Kpa10::new(self.map_kpa_x10()));
+        let commanded_advance_x10 = self
+            .calculate_ignition_timing_with_limiter(trigger_inputs.rpm, self.map_kpa_x10())
+            * 10;
         self.outputs.final_pw = final_pw;
         self.outputs.commanded_advance_x10 = commanded_advance_x10;
         let enrich_mult_x100 = [

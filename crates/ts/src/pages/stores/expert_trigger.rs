@@ -102,10 +102,8 @@ impl PageStore for ExpertTriggerPageState {
             return Err(PageError::Invalid);
         }
         let current = decode_expert_trigger_record(&self.record)?;
-        let proposed = decode_expert_trigger_page_with_current(data, Some(&current))
-            .map_err(page_codec_error_to_page_error)?;
-        encode_expert_trigger_page(&proposed, &mut self.record)
-            .map_err(page_codec_error_to_page_error)?;
+        let proposed = decode_expert_trigger_page_with_current(data, Some(&current))?;
+        encode_expert_trigger_page(&proposed, &mut self.record)?;
         Ok(())
     }
 
@@ -115,5 +113,5 @@ impl PageStore for ExpertTriggerPageState {
 }
 
 pub fn decode_expert_trigger_record(data: &[u8]) -> Result<ExpertTriggerPage, PageError> {
-    decode_expert_trigger_page(data).map_err(page_codec_error_to_page_error)
+    decode_expert_trigger_page(data)
 }

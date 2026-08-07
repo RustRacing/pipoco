@@ -80,7 +80,11 @@ pub(crate) fn snapshot_from_runtime(
         fault_severity: encode_fault_severity(runtime_snapshot.faults.severity),
         cancel_reason: encode_cancel_reason(runtime_snapshot.faults.cancel_reason),
         control_mode: encode_control_mode(runtime_snapshot.engine.mode),
-        fuel_pulse_width_us: runtime_snapshot.control.fuel_pulse_width.get(),
+        fuel_pulse_width_us: runtime_snapshot
+            .control
+            .fuel_pulse_width
+            .get()
+            .min(u32::from(u16::MAX)) as u16,
         ignition_advance_x10: runtime_snapshot.control.ignition_advance.get(),
         dwell_us: runtime_snapshot.control.dwell.get(),
         lambda_target_x100: runtime_snapshot.control.lambda_target.get(),

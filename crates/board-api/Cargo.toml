@@ -9,3 +9,6 @@ path = "src/lib.rs"
 
 [dependencies]
 ecu-domain = { path = "../domain" }
+
+[lints]
+workspace = true

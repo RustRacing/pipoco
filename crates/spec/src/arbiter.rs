@@ -85,31 +85,31 @@ pub fn arbiter_step(input: ArbiterInputs) -> ArbiterResult {
 mod tests {
     use super::*;
     use crate::{default_reference_calibration, flat_shift_step, knock_step, launch_step};
-    use crate::{dfco_step, rev_limit_step, InputSnapshot, LogicalState, Rpm};
+    use crate::{dfco_step, rev_limit_step, InputSnapshot, LogicalState};
 
     fn base_inputs() -> ArbiterInputs {
         let mut cal = default_reference_calibration();
-        cal.0.dfco_entry_rpm = Rpm(2000);
-        cal.0.dfco_exit_rpm = Rpm(1800);
+        cal.0.dfco_entry_rpm = crate::Rpm::new(2000);
+        cal.0.dfco_exit_rpm = crate::Rpm::new(1800);
         cal.0.dfco_entry_tps_x100 = 0;
         cal.0.dfco_exit_tps_x100 = 0;
-        cal.0.dfco_entry_map_kpa10 = crate::Kpa10(0);
+        cal.0.dfco_entry_map_kpa10 = crate::Kpa10::new(0);
         cal.0.dfco_delay_cycles = 0;
-        cal.0.soft_rev_rpm = Rpm(3000);
-        cal.0.hard_rev_rpm = Rpm(4000);
-        cal.0.rev_hysteresis_rpm = Rpm(100);
-        cal.0.launch_rpm_limit = Rpm(3500);
+        cal.0.soft_rev_rpm = crate::Rpm::new(3000);
+        cal.0.hard_rev_rpm = crate::Rpm::new(4000);
+        cal.0.rev_hysteresis_rpm = crate::Rpm::new(100);
+        cal.0.launch_rpm_limit = crate::Rpm::new(3500);
         cal.0.launch_cut_cycles = 0;
-        cal.0.flat_shift_rpm_min = Rpm(3500);
+        cal.0.flat_shift_rpm_min = crate::Rpm::new(3500);
         cal.0.flat_shift_cut_cycles = 0;
         cal.0.knock_threshold_x100 = 100;
         cal.0.knock_retard_step_deg10 = 50;
         cal.0.knock_retard_max_deg10 = 200;
 
         let input = InputSnapshot {
-            rpm: Rpm(5000),
+            rpm: crate::Rpm::new(5000),
             tps_x100: 0,
-            map_kpa10: crate::Kpa10(0),
+            map_kpa10: crate::Kpa10::new(0),
             launch_armed: true,
             flat_shift_armed: true,
             knock_intensity_x100: 100,

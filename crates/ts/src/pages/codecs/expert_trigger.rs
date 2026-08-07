@@ -3,10 +3,10 @@ use super::*;
 pub fn encode_expert_trigger_page(
     page: &ExpertTriggerPage,
     out: &mut [u8],
-) -> Result<usize, PageCodecError> {
+) -> Result<usize, PageError> {
     validate_expert_trigger_page(page, None, true)?;
     if out.len() < EXPERT_TRIGGER_PAGE_BYTES {
-        return Err(PageCodecError::WrongSize);
+        return Err(PageError::WrongSize);
     }
 
     out[..EXPERT_TRIGGER_PAGE_BYTES].fill(0);
@@ -35,7 +35,7 @@ pub fn encode_expert_trigger_page(
     Ok(EXPERT_TRIGGER_PAGE_BYTES)
 }
 
-pub fn decode_expert_trigger_page(data: &[u8]) -> Result<ExpertTriggerPage, PageCodecError> {
+pub fn decode_expert_trigger_page(data: &[u8]) -> Result<ExpertTriggerPage, PageError> {
     decode_expert_trigger_page_with_current(data, None)
 }
 
@@ -72,7 +72,7 @@ pub fn expert_trigger_page_from_calibration(
 #[cfg(feature = "calibration")]
 pub fn expert_trigger_calibration_from_page(
     page: ExpertTriggerPage,
-) -> Result<ecu_calibration::ExpertTriggerCalibration, PageCodecError> {
+) -> Result<ecu_calibration::ExpertTriggerCalibration, PageError> {
     use ecu_calibration::{
         CalibrationSchemaVersion, ExpertIgnitionMode, ExpertInjectionLayout,
         ExpertTriggerCalibration, ExpertUnlock, FixedTimingMode, PollLevelPolarity,
@@ -82,53 +82,49 @@ pub fn expert_trigger_calibration_from_page(
 
     let cal = ExpertTriggerCalibration {
         schema_version: CalibrationSchemaVersion::new(page.schema_version),
-        expert_unlock: ExpertUnlock::from_code(page.expert_unlock)
-            .ok_or(PageCodecError::Invalid)?,
-        authority: TriggerAuthority::from_code(page.authority).ok_or(PageCodecError::Invalid)?,
+        expert_unlock: ExpertUnlock::from_code(page.expert_unlock).ok_or(PageError::Invalid)?,
+        authority: TriggerAuthority::from_code(page.authority).ok_or(PageError::Invalid)?,
         profile_identity: page.profile_identity,
         profile_hash: page.profile_hash,
         trigger_pattern: TriggerPattern::from_code(page.trigger_pattern)
-            .ok_or(PageCodecError::Invalid)?,
+            .ok_or(PageError::Invalid)?,
         primary_base_teeth: page.primary_base_teeth,
         missing_teeth: page.missing_teeth,
         primary_trigger_speed: PrimaryTriggerSpeed::from_code(page.primary_trigger_speed)
-            .ok_or(PageCodecError::Invalid)?,
+            .ok_or(PageError::Invalid)?,
         trigger_angle_atdc_deg10: page.trigger_angle_atdc_deg10,
         trigger_angle_multiplier: page.trigger_angle_multiplier,
         primary_trigger_edge: TriggerEdge::from_code(page.primary_trigger_edge)
-            .ok_or(PageCodecError::Invalid)?,
+            .ok_or(PageError::Invalid)?,
         secondary_trigger_edge: TriggerEdge::from_code(page.secondary_trigger_edge)
-            .ok_or(PageCodecError::Invalid)?,
+            .ok_or(PageError::Invalid)?,
         secondary_trigger_mode: SecondaryTriggerMode::from_code(page.secondary_trigger_mode)
-            .ok_or(PageCodecError::Invalid)?,
+            .ok_or(PageError::Invalid)?,
         poll_level_polarity: PollLevelPolarity::from_code(page.poll_level_polarity)
-            .ok_or(PageCodecError::Invalid)?,
-        trigger_filter: TriggerFilter::from_code(page.trigger_filter)
-            .ok_or(PageCodecError::Invalid)?,
+            .ok_or(PageError::Invalid)?,
+        trigger_filter: TriggerFilter::from_code(page.trigger_filter).ok_or(PageError::Invalid)?,
         resync_every_cycle: page.resync_every_cycle,
         skip_cycles: page.skip_cycles,
         ignition_mode: ExpertIgnitionMode::from_code(page.ignition_mode)
-            .ok_or(PageCodecError::Invalid)?,
+            .ok_or(PageError::Invalid)?,
         injection_layout: ExpertInjectionLayout::from_code(page.injection_layout)
-            .ok_or(PageCodecError::Invalid)?,
+            .ok_or(PageError::Invalid)?,
         fixed_timing_mode: FixedTimingMode::from_code(page.fixed_timing_mode)
-            .ok_or(PageCodecError::Invalid)?,
+            .ok_or(PageError::Invalid)?,
         fixed_timing_deg10: page.fixed_timing_deg10,
     };
-    cal.validate().map_err(|_| PageCodecError::Invalid)?;
+    cal.validate().map_err(|_| PageError::Invalid)?;
     Ok(cal)
 }
 
-pub fn decode_trusted_expert_trigger_page(
-    data: &[u8],
-) -> Result<ExpertTriggerPage, PageCodecError> {
+pub fn decode_trusted_expert_trigger_page(data: &[u8]) -> Result<ExpertTriggerPage, PageError> {
     decode_expert_trigger_page_inner(data, None, true)
 }
 
 pub fn decode_expert_trigger_page_with_current(
     data: &[u8],
     current: Option<&ExpertTriggerPage>,
-) -> Result<ExpertTriggerPage, PageCodecError> {
+) -> Result<ExpertTriggerPage, PageError> {
     decode_expert_trigger_page_inner(data, current, false)
 }
 
@@ -136,9 +132,9 @@ fn decode_expert_trigger_page_inner(
     data: &[u8],
     current: Option<&ExpertTriggerPage>,
     allow_certified_profile: bool,
-) -> Result<ExpertTriggerPage, PageCodecError> {
+) -> Result<ExpertTriggerPage, PageError> {
     if data.len() != EXPERT_TRIGGER_PAGE_BYTES {
-        return Err(PageCodecError::WrongSize);
+        return Err(PageError::WrongSize);
     }
 
     let page = ExpertTriggerPage {
@@ -174,12 +170,12 @@ fn validate_expert_trigger_page(
     page: &ExpertTriggerPage,
     current: Option<&ExpertTriggerPage>,
     allow_certified_profile: bool,
-) -> Result<(), PageCodecError> {
+) -> Result<(), PageError> {
     if page.schema_version != EXPERT_SCHEMA_VERSION_CURRENT {
-        return Err(PageCodecError::Invalid);
+        return Err(PageError::Invalid);
     }
     if !allow_certified_profile && page.authority == TRIGGER_AUTHORITY_CERTIFIED_PROFILE {
-        return Err(PageCodecError::Invalid);
+        return Err(PageError::Invalid);
     }
     if page.expert_unlock > EXPERT_UNLOCK_UNLOCKED
         || page.authority > 4
@@ -194,70 +190,70 @@ fn validate_expert_trigger_page(
         || page.injection_layout > 4
         || page.fixed_timing_mode > 1
     {
-        return Err(PageCodecError::Invalid);
+        return Err(PageError::Invalid);
     }
 
     if page.authority == TRIGGER_AUTHORITY_EXPERT_MANUAL
         && page.expert_unlock != EXPERT_UNLOCK_UNLOCKED
     {
-        return Err(PageCodecError::Invalid);
+        return Err(PageError::Invalid);
     }
     if page.authority == TRIGGER_AUTHORITY_CERTIFIED_PROFILE {
         if page.profile_identity == 0 || page.profile_hash == 0 {
-            return Err(PageCodecError::Invalid);
+            return Err(PageError::Invalid);
         }
         if page.expert_unlock != EXPERT_UNLOCK_LOCKED {
-            return Err(PageCodecError::Invalid);
+            return Err(PageError::Invalid);
         }
     }
 
     if page.primary_base_teeth == 0 {
-        return Err(PageCodecError::Invalid);
+        return Err(PageError::Invalid);
     }
     if page.trigger_pattern == TRIGGER_PATTERN_MISSING_TOOTH {
         if page.primary_base_teeth < 2
             || page.missing_teeth == 0
             || page.missing_teeth >= page.primary_base_teeth
         {
-            return Err(PageCodecError::Invalid);
+            return Err(PageError::Invalid);
         }
     } else if page.missing_teeth != 0 {
-        return Err(PageCodecError::Invalid);
+        return Err(PageError::Invalid);
     }
 
     if page.trigger_angle_atdc_deg10 > 7200 {
-        return Err(PageCodecError::Invalid);
+        return Err(PageError::Invalid);
     }
     if page.trigger_angle_multiplier == 0 || page.trigger_angle_multiplier > 8 {
-        return Err(PageCodecError::Invalid);
+        return Err(PageError::Invalid);
     }
     if page.resync_every_cycle && page.secondary_trigger_mode == SECONDARY_TRIGGER_NONE {
-        return Err(PageCodecError::Invalid);
+        return Err(PageError::Invalid);
     }
     if (page.ignition_mode == EXPERT_IGNITION_SEQUENTIAL_COP
         || page.injection_layout == EXPERT_INJECTION_SEQUENTIAL)
         && page.secondary_trigger_mode == SECONDARY_TRIGGER_NONE
     {
-        return Err(PageCodecError::Invalid);
+        return Err(PageError::Invalid);
     }
     if page.skip_cycles > 16 {
-        return Err(PageCodecError::Invalid);
+        return Err(PageError::Invalid);
     }
     if page.fixed_timing_mode == FIXED_TIMING_FIXED
         && !(-100..=600).contains(&page.fixed_timing_deg10)
     {
-        return Err(PageCodecError::Invalid);
+        return Err(PageError::Invalid);
     }
 
     if let Some(current) = current {
         if current.authority == TRIGGER_AUTHORITY_CERTIFIED_PROFILE {
             if page.authority == TRIGGER_AUTHORITY_CERTIFIED_PROFILE && page != current {
-                return Err(PageCodecError::Invalid);
+                return Err(PageError::Invalid);
             }
             if page.authority != TRIGGER_AUTHORITY_CERTIFIED_PROFILE
                 && page.expert_unlock != EXPERT_UNLOCK_UNLOCKED
             {
-                return Err(PageCodecError::Invalid);
+                return Err(PageError::Invalid);
             }
         }
     }

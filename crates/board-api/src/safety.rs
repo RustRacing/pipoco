@@ -16,32 +16,7 @@ pub struct SafetyGateInput {
     pub requested_permit_mask: SafetyPermitMask,
 }
 
-impl SafetyGateInput {
-    #[allow(clippy::too_many_arguments)]
-    pub const fn new(
-        now_us: Micros,
-        kill_n: bool,
-        power_good: bool,
-        watchdog_ok: bool,
-        timing_backend_alive: bool,
-        backend_alive: bool,
-        sync_authority_ok: bool,
-        driver_faults: SafetyDriverFaultMask,
-        requested_permit_mask: SafetyPermitMask,
-    ) -> Self {
-        Self {
-            now_us,
-            kill_n,
-            power_good,
-            watchdog_ok,
-            timing_backend_alive,
-            backend_alive,
-            sync_authority_ok,
-            driver_faults,
-            requested_permit_mask,
-        }
-    }
-}
+impl SafetyGateInput {}
 
 pub type SafetyDriverFaultMask = u32;
 

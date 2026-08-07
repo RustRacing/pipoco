@@ -21,7 +21,7 @@ use ecu_ts::pages::{
 /// owns/computes them and passes them in.
 pub struct PageRuntime<'a> {
     pub snapshot: &'a SystemSnapshot,
-    pub tooth_count: &'a u8,
+    pub tooth_count: u8,
     pub sync_loss_counter: u16,
     pub current_fault_code: u8,
     pub current_fault_severity: u8,
@@ -255,7 +255,7 @@ mod tests {
         let mut expert_trigger = ExpertTriggerPageState::new();
         let runtime = PageRuntime {
             snapshot: &snapshot,
-            tooth_count: &tooth_count,
+            tooth_count: tooth_count,
             sync_loss_counter: 2,
             current_fault_code: 0,
             current_fault_severity: TS_FAULT_SEVERITY_NONE,

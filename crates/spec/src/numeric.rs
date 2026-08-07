@@ -1,7 +1,7 @@
-use crate::{Degrees10, PulseWidthUs, RatioX1000, Rpm};
+use crate::RatioX1000;
 use core::num::{NonZeroI32, NonZeroU32};
 
-pub const CYCLE_7200: i32 = 7200;
+pub use ecu_domain::{cyc7200_distance, duration_us_to_deg10, norm7200};
 
 pub const fn clamp_u16(value: u16, min: u16, max: u16) -> u16 {
     if value < min {
@@ -63,39 +63,13 @@ pub const fn mul_ratio_x1000(value: u32, ratio: RatioX1000) -> u32 {
         Some(value) => value,
         None => NonZeroU32::MIN,
     };
-    mul_div_floor_u32(value, ratio.0 as u32, divisor)
-}
-
-pub const fn norm7200(value: i32) -> Degrees10 {
-    let mut normalized = value % CYCLE_7200;
-    if normalized < 0 {
-        normalized += CYCLE_7200;
-    }
-    Degrees10(normalized as u16)
-}
-
-pub const fn cyc7200_distance(a: Degrees10, b: Degrees10) -> u16 {
-    let a = a.0 as i32;
-    let b = b.0 as i32;
-    let forward = (b - a).rem_euclid(CYCLE_7200) as u16;
-    let backward = CYCLE_7200 as u16 - forward;
-    if forward <= backward {
-        forward
-    } else {
-        backward
-    }
-}
-
-pub const fn duration_us_to_deg10(pw_us: PulseWidthUs, rpm: Rpm) -> Degrees10 {
-    let pwm = pw_us.0 as u64;
-    let rpm = rpm.0 as u64;
-    let deg10 = (pwm * rpm * 6) / 100_000;
-    Degrees10(deg10 as u16)
+    mul_div_floor_u32(value, ratio.get() as u32, divisor)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{Degrees10, PulseWidthUs, Rpm};
 
     #[test]
     fn clamps_values() {
@@ -116,7 +90,7 @@ mod tests {
             mul_div_floor_u32(1_000_000, 3, NonZeroU32::new(2).unwrap_or(NonZeroU32::MIN)),
             1_500_000
         );
-        assert_eq!(mul_ratio_x1000(2_500, RatioX1000(1_075)), 2_687);
+        assert_eq!(mul_ratio_x1000(2_500, RatioX1000::new(1_075)), 2_687);
         assert_eq!(
             mul_div_floor_i32(7, 10, NonZeroI32::new(3).unwrap_or(NonZeroI32::MIN)),
             23
@@ -161,31 +135,34 @@ mod tests {
 
     #[test]
     fn normalizes_cycle_angles() {
-        assert_eq!(norm7200(0), Degrees10(0));
-        assert_eq!(norm7200(7199), Degrees10(7199));
-        assert_eq!(norm7200(7200), Degrees10(0));
-        assert_eq!(norm7200(-1), Degrees10(7199));
-        assert_eq!(norm7200(-7201), Degrees10(7199));
+        assert_eq!(norm7200(0), Degrees10::new(0));
+        assert_eq!(norm7200(7199), Degrees10::new(7199));
+        assert_eq!(norm7200(7200), Degrees10::new(0));
+        assert_eq!(norm7200(-1), Degrees10::new(7199));
+        assert_eq!(norm7200(-7201), Degrees10::new(7199));
     }
 
     #[test]
     fn computes_cycle_distance() {
-        assert_eq!(cyc7200_distance(Degrees10(10), Degrees10(20)), 10);
-        assert_eq!(cyc7200_distance(Degrees10(20), Degrees10(10)), 10);
-        assert_eq!(cyc7200_distance(Degrees10(0), Degrees10(7199)), 1);
-        assert_eq!(cyc7200_distance(Degrees10(7199), Degrees10(0)), 1);
+        assert_eq!(cyc7200_distance(Degrees10::new(10), Degrees10::new(20)), 10);
+        assert_eq!(cyc7200_distance(Degrees10::new(20), Degrees10::new(10)), 10);
+        assert_eq!(cyc7200_distance(Degrees10::new(0), Degrees10::new(7199)), 1);
+        assert_eq!(cyc7200_distance(Degrees10::new(7199), Degrees10::new(0)), 1);
     }
 
     #[test]
     fn converts_duration_to_deg10() {
         assert_eq!(
-            duration_us_to_deg10(PulseWidthUs(100_000), Rpm(1_000)).0,
+            duration_us_to_deg10(PulseWidthUs::new(100_000), Rpm::new(1_000)).get(),
             6_000
         );
         assert_eq!(
-            duration_us_to_deg10(PulseWidthUs(50_000), Rpm(2_000)).0,
+            duration_us_to_deg10(PulseWidthUs::new(50_000), Rpm::new(2_000)).get(),
             6_000
         );
-        assert_eq!(duration_us_to_deg10(PulseWidthUs(1), Rpm(1)).0, 0);
+        assert_eq!(
+            duration_us_to_deg10(PulseWidthUs::new(1), Rpm::new(1)).get(),
+            0
+        );
     }
 }

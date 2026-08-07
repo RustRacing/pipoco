@@ -12,11 +12,11 @@ impl FuelPage {
         Self { cells }
     }
 
-    pub fn encode(&self, out: &mut [u8]) -> Result<usize, PageCodecError> {
+    pub fn encode(&self, out: &mut [u8]) -> Result<usize, PageError> {
         encode_fuel_table_page(&self.cells, out)
     }
 
-    pub fn decode(data: &[u8]) -> Result<Self, PageCodecError> {
+    pub fn decode(data: &[u8]) -> Result<Self, PageError> {
         decode_fuel_table_page(data)
     }
 }
@@ -31,11 +31,11 @@ impl IgnitionPage {
         Self { cells }
     }
 
-    pub fn encode(&self, out: &mut [u8]) -> Result<usize, PageCodecError> {
+    pub fn encode(&self, out: &mut [u8]) -> Result<usize, PageError> {
         encode_ignition_table_page(&self.cells, out)
     }
 
-    pub fn decode(data: &[u8]) -> Result<Self, PageCodecError> {
+    pub fn decode(data: &[u8]) -> Result<Self, PageError> {
         decode_ignition_table_page(data)
     }
 }
@@ -50,11 +50,11 @@ impl VePage {
         Self { cells }
     }
 
-    pub fn encode(&self, out: &mut [u8]) -> Result<usize, PageCodecError> {
+    pub fn encode(&self, out: &mut [u8]) -> Result<usize, PageError> {
         encode_ve_table_page(&self.cells, out)
     }
 
-    pub fn decode(data: &[u8]) -> Result<Self, PageCodecError> {
+    pub fn decode(data: &[u8]) -> Result<Self, PageError> {
         decode_ve_table_page(data)
     }
 }
@@ -69,11 +69,11 @@ impl AfrPage {
         Self { cells }
     }
 
-    pub fn encode(&self, out: &mut [u8]) -> Result<usize, PageCodecError> {
+    pub fn encode(&self, out: &mut [u8]) -> Result<usize, PageError> {
         encode_afr_table_page(&self.cells, out)
     }
 
-    pub fn decode(data: &[u8]) -> Result<Self, PageCodecError> {
+    pub fn decode(data: &[u8]) -> Result<Self, PageError> {
         decode_afr_table_page(data)
     }
 }
@@ -104,11 +104,11 @@ impl AePage {
         }
     }
 
-    pub fn encode(&self, out: &mut [u8]) -> Result<usize, PageCodecError> {
+    pub fn encode(&self, out: &mut [u8]) -> Result<usize, PageError> {
         encode_ae_page(self, out)
     }
 
-    pub fn decode(data: &[u8]) -> Result<Self, PageCodecError> {
+    pub fn decode(data: &[u8]) -> Result<Self, PageError> {
         decode_ae_page(data)
     }
 }
@@ -142,11 +142,11 @@ impl DfcoPage {
         }
     }
 
-    pub fn encode(&self, out: &mut [u8]) -> Result<usize, PageCodecError> {
+    pub fn encode(&self, out: &mut [u8]) -> Result<usize, PageError> {
         encode_dfco_page(self, out)
     }
 
-    pub fn decode(data: &[u8]) -> Result<Self, PageCodecError> {
+    pub fn decode(data: &[u8]) -> Result<Self, PageError> {
         decode_dfco_page(data)
     }
 }
@@ -169,11 +169,11 @@ impl WuePage {
         }
     }
 
-    pub fn encode(&self, out: &mut [u8]) -> Result<usize, PageCodecError> {
+    pub fn encode(&self, out: &mut [u8]) -> Result<usize, PageError> {
         encode_wue_page(self, out)
     }
 
-    pub fn decode(data: &[u8]) -> Result<Self, PageCodecError> {
+    pub fn decode(data: &[u8]) -> Result<Self, PageError> {
         decode_wue_page(data)
     }
 }
@@ -194,11 +194,11 @@ impl AsePage {
         }
     }
 
-    pub fn encode(&self, out: &mut [u8]) -> Result<usize, PageCodecError> {
+    pub fn encode(&self, out: &mut [u8]) -> Result<usize, PageError> {
         encode_ase_page(self, out)
     }
 
-    pub fn decode(data: &[u8]) -> Result<Self, PageCodecError> {
+    pub fn decode(data: &[u8]) -> Result<Self, PageError> {
         decode_ase_page(data)
     }
 }
@@ -219,11 +219,11 @@ impl IdlePage {
         }
     }
 
-    pub fn encode(&self, out: &mut [u8]) -> Result<usize, PageCodecError> {
+    pub fn encode(&self, out: &mut [u8]) -> Result<usize, PageError> {
         encode_idle_page(self, out)
     }
 
-    pub fn decode(data: &[u8]) -> Result<Self, PageCodecError> {
+    pub fn decode(data: &[u8]) -> Result<Self, PageError> {
         decode_idle_page(data)
     }
 }
@@ -244,11 +244,11 @@ impl FanPage {
         }
     }
 
-    pub fn encode(&self, out: &mut [u8]) -> Result<usize, PageCodecError> {
+    pub fn encode(&self, out: &mut [u8]) -> Result<usize, PageError> {
         encode_fan_page(self, out)
     }
 
-    pub fn decode(data: &[u8]) -> Result<Self, PageCodecError> {
+    pub fn decode(data: &[u8]) -> Result<Self, PageError> {
         decode_fan_page(data)
     }
 }
@@ -271,11 +271,11 @@ impl ClosedLoopPage {
         }
     }
 
-    pub fn encode(&self, out: &mut [u8]) -> Result<usize, PageCodecError> {
+    pub fn encode(&self, out: &mut [u8]) -> Result<usize, PageError> {
         encode_closed_loop_page(self, out)
     }
 
-    pub fn decode(data: &[u8]) -> Result<Self, PageCodecError> {
+    pub fn decode(data: &[u8]) -> Result<Self, PageError> {
         decode_closed_loop_page(data)
     }
 }
@@ -303,11 +303,11 @@ impl AnglesPage {
         }
     }
 
-    pub fn encode(&self, out: &mut [u8]) -> Result<usize, PageCodecError> {
+    pub fn encode(&self, out: &mut [u8]) -> Result<usize, PageError> {
         encode_angles_page(self, out)
     }
 
-    pub fn decode(data: &[u8]) -> Result<Self, PageCodecError> {
+    pub fn decode(data: &[u8]) -> Result<Self, PageError> {
         decode_angles_page(data)
     }
 }
@@ -329,11 +329,11 @@ pub struct SensorsPage {
 impl SensorsPage {
     /// Encode into the wire layout, leaving reserved tail bytes (108..128)
     /// untouched. Returns the full page length on success.
-    pub fn encode(&self, out: &mut [u8]) -> Result<usize, PageCodecError> {
+    pub fn encode(&self, out: &mut [u8]) -> Result<usize, PageError> {
         encode_sensors_page(self, out)
     }
 
-    pub fn decode(data: &[u8]) -> Result<Self, PageCodecError> {
+    pub fn decode(data: &[u8]) -> Result<Self, PageError> {
         decode_sensors_page(data)
     }
 }
@@ -370,11 +370,11 @@ impl LimitsPage {
         }
     }
 
-    pub fn encode(&self, out: &mut [u8]) -> Result<usize, PageCodecError> {
+    pub fn encode(&self, out: &mut [u8]) -> Result<usize, PageError> {
         encode_limits_page(self, out)
     }
 
-    pub fn decode(data: &[u8]) -> Result<Self, PageCodecError> {
+    pub fn decode(data: &[u8]) -> Result<Self, PageError> {
         decode_limits_page(data)
     }
 }
@@ -408,19 +408,15 @@ impl VeTunePage {
         }
     }
 
-    pub fn encode(
-        &self,
-        out: &mut [u8],
-        limits: VeTunePageLimits,
-    ) -> Result<usize, PageCodecError> {
+    pub fn encode(&self, out: &mut [u8], limits: VeTunePageLimits) -> Result<usize, PageError> {
         encode_ve_tune_page(self, limits, out)
     }
 
-    pub fn decode(data: &[u8]) -> Result<Self, PageCodecError> {
+    pub fn decode(data: &[u8]) -> Result<Self, PageError> {
         decode_ve_tune_page(data)
     }
 
-    pub fn apply_limits(mut self, limits: VeTunePageLimits) -> Result<Self, PageCodecError> {
+    pub fn apply_limits(mut self, limits: VeTunePageLimits) -> Result<Self, PageError> {
         limits.validate()?;
         self.required_fuel_us = self
             .required_fuel_us
@@ -474,58 +470,11 @@ pub struct DiagPage {
 }
 
 impl DiagPage {
-    #[allow(clippy::too_many_arguments)]
-    pub const fn new(
-        current_tooth_count: u8,
-        cam_seen: bool,
-        sync_state: u8,
-        phase_state: u8,
-        absolute_authority: u8,
-        trigger_angle_source: u8,
-        output_gating_reason: u8,
-        last_sync_loss_reason: u8,
-        primary_rpm: u16,
-        detected_gap_ratio: u16,
-        sync_loss_counter: u16,
-        board_pin_map_identity: u16,
-        profile_identity: u32,
-        profile_hash: u32,
-        current_fault_code: u8,
-        current_fault_severity: u8,
-        current_fault_action: u8,
-        current_cancel_reason: u8,
-        fault_flags: u8,
-        latest_diag_code: u8,
-    ) -> Self {
-        Self {
-            current_tooth_count,
-            cam_seen,
-            sync_state,
-            phase_state,
-            absolute_authority,
-            trigger_angle_source,
-            output_gating_reason,
-            last_sync_loss_reason,
-            primary_rpm,
-            detected_gap_ratio,
-            sync_loss_counter,
-            board_pin_map_identity,
-            profile_identity,
-            profile_hash,
-            current_fault_code,
-            current_fault_severity,
-            current_fault_action,
-            current_cancel_reason,
-            fault_flags,
-            latest_diag_code,
-        }
-    }
-
-    pub fn encode(&self, out: &mut [u8]) -> Result<usize, PageCodecError> {
+    pub fn encode(&self, out: &mut [u8]) -> Result<usize, PageError> {
         encode_diag_page(self, out)
     }
 
-    pub fn decode(data: &[u8]) -> Result<Self, PageCodecError> {
+    pub fn decode(data: &[u8]) -> Result<Self, PageError> {
         decode_diag_page(data)
     }
 }
@@ -590,11 +539,11 @@ impl DiagLogPage {
         Self { entries }
     }
 
-    pub fn encode(&self, out: &mut [u8]) -> Result<usize, PageCodecError> {
+    pub fn encode(&self, out: &mut [u8]) -> Result<usize, PageError> {
         encode_diag_log_page(self, out)
     }
 
-    pub fn decode(data: &[u8]) -> Result<Self, PageCodecError> {
+    pub fn decode(data: &[u8]) -> Result<Self, PageError> {
         decode_diag_log_page(data)
     }
 }
@@ -653,50 +602,17 @@ impl ExpertTriggerPage {
         }
     }
 
-    pub fn encode(&self, out: &mut [u8]) -> Result<usize, PageCodecError> {
+    pub fn encode(&self, out: &mut [u8]) -> Result<usize, PageError> {
         encode_expert_trigger_page(self, out)
     }
 
-    pub fn decode(data: &[u8]) -> Result<Self, PageCodecError> {
+    pub fn decode(data: &[u8]) -> Result<Self, PageError> {
         decode_expert_trigger_page(data)
     }
 }
 
 impl SnapshotPage {
-    #[allow(clippy::too_many_arguments)]
-    pub const fn new(
-        rpm: u16,
-        sync_code: u8,
-        cancel_reason: u8,
-        base_pw_us: u32,
-        enrich_mult_x100: u16,
-        stft_x10: i16,
-        fuel_mult_x100: u16,
-        final_pw_us: u32,
-        fault_code: u8,
-        fault_severity: u8,
-        isr_count: u32,
-        isr_max_us: u32,
-        isr_avg_us: u32,
-    ) -> Self {
-        Self {
-            rpm,
-            sync_code,
-            cancel_reason,
-            base_pw_us,
-            enrich_mult_x100,
-            stft_x10,
-            fuel_mult_x100,
-            final_pw_us,
-            fault_code,
-            fault_severity,
-            isr_count,
-            isr_max_us,
-            isr_avg_us,
-        }
-    }
-
-    pub fn encode(&self, out: &mut [u8]) -> Result<usize, PageCodecError> {
+    pub fn encode(&self, out: &mut [u8]) -> Result<usize, PageError> {
         encode_snapshot_page(self, out)
     }
 }
@@ -729,9 +645,9 @@ impl VeTunePageLimits {
         }
     }
 
-    pub(super) fn validate(self) -> Result<(), PageCodecError> {
+    pub(super) fn validate(self) -> Result<(), PageError> {
         if self.min_pulse_width_us > self.max_pulse_width_us {
-            return Err(PageCodecError::Invalid);
+            return Err(PageError::Invalid);
         }
         Ok(())
     }

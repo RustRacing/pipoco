@@ -28,9 +28,7 @@ impl FuelTunePageStore<'_> {
     }
 
     fn write_ve_tune(&mut self, data: &[u8]) -> Result<(), PageError> {
-        let page = decode_ve_tune_page(data)
-            .and_then(|page| page.apply_limits(self.limits))
-            .map_err(page_codec_error_to_page_error)?;
+        let page = decode_ve_tune_page(data).and_then(|page| page.apply_limits(self.limits))?;
         *self.target_afr_x10 = page.target_afr_x10;
         *self.kp_i = page.kp_i;
         *self.ki_i = page.ki_i;
@@ -41,11 +39,11 @@ impl FuelTunePageStore<'_> {
     }
 
     fn write_ve_table(&mut self, data: &[u8]) -> Result<(), PageError> {
-        decode_ve_table_page_into(data, self.ve).map_err(page_codec_error_to_page_error)
+        decode_ve_table_page_into(data, self.ve)
     }
 
     fn write_afr_table(&mut self, data: &[u8]) -> Result<(), PageError> {
-        decode_afr_table_page_into(data, self.afr).map_err(page_codec_error_to_page_error)?;
+        decode_afr_table_page_into(data, self.afr)?;
         *self.target_afr_x10 = self.afr[0][0];
         Ok(())
     }

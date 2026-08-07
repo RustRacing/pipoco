@@ -17,3 +17,6 @@ ecu-board-api = { path = "../../crates/board-api" }
 ecu-calibration = { path = "../../crates/calibration" }
 ecu-target-common = { path = "../../boards/common", features = ["test-support"] }
 smallvec = "1.13"
+
+[lints]
+workspace = true

@@ -1,9 +1,6 @@
 use std::collections::BTreeSet;
 
-#[path = "../../compat/tests/formal/fm0016_fixture_matrix.rs"]
-mod fm0016_fixture_matrix;
-
-use fm0016_fixture_matrix::{fixture_cases, required_fixture_names};
+use ecu_test_fixtures::fixture_matrix::{fixture_cases, required_fixture_names};
 
 /// Verifies that the fixture matrix contains exactly the required fixture families.
 /// This is a corpus inventory test - it does not execute the product or compare
@@ -19,7 +16,7 @@ fn fm0016_reducer_has_required_fixture_names() {
 /// Verifies that the reducer uses the expected plan tolerance constants.
 #[test]
 fn fm0016_reducer_uses_plan_tolerances() {
-    use fm0016_fixture_matrix::{EPS_ANGLE_DEG10, EPS_PW_US, EPS_VE_X100};
+    use ecu_test_fixtures::fixture_matrix::{EPS_ANGLE_DEG10, EPS_PW_US, EPS_VE_X100};
     assert_eq!(EPS_VE_X100, 1);
     assert_eq!(EPS_PW_US, 1);
     assert_eq!(EPS_ANGLE_DEG10, 1);
@@ -51,8 +48,8 @@ fn fm0016_trigger_decoder_tooth_stream_matches_spec_mapping() {
 
             runtime.apply_decoder_observation(DecoderObservation::Trigger(TriggerObservation {
                 at_us: Micros::new(stream[idx]),
-                rpm: Rpm::new(spec.rpm_estimate.0),
-                angle_x10: Degrees10::new(spec.angle_deg10.0 as i16),
+                rpm: Rpm::new(spec.rpm_estimate.get()),
+                angle_x10: Degrees10::new(spec.angle_deg10.get() as i16),
                 synced: spec.sync_state == TriggerSyncState::Synced,
             }));
             let snapshot = runtime.snapshot();
@@ -68,26 +65,26 @@ fn fm0016_trigger_decoder_tooth_stream_matches_spec_mapping() {
             );
             assert_eq!(
                 snapshot.engine.rpm.get(),
-                spec.rpm_estimate.0,
+                spec.rpm_estimate.get(),
                 "stream={label} edge_idx={idx}"
             );
             assert_eq!(
                 snapshot.engine.angle_x10.get(),
-                spec.angle_deg10.0 as i16,
+                spec.angle_deg10.get() as i16,
                 "stream={label} edge_idx={idx}"
             );
 
             let expected_phase = match spec.sync_state {
                 TriggerSyncState::Synced => ecu_domain::EnginePhase::Running,
                 TriggerSyncState::PreSync => {
-                    if spec.rpm_estimate.0 > 0 {
+                    if spec.rpm_estimate.get() > 0 {
                         ecu_domain::EnginePhase::Cranking
                     } else {
                         ecu_domain::EnginePhase::Off
                     }
                 }
                 TriggerSyncState::NoSync | TriggerSyncState::SyncLoss => {
-                    if spec.rpm_estimate.0 > 0 {
+                    if spec.rpm_estimate.get() > 0 {
                         ecu_domain::EnginePhase::Cranking
                     } else {
                         ecu_domain::EnginePhase::Off

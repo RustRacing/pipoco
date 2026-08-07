@@ -1,4 +1,4 @@
-#![allow(unused)]
+// Proof drift must be visible as warnings (review 018): no blanket allow(unused).
 
 use vstd::prelude::*;
 

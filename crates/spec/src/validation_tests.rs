@@ -121,19 +121,19 @@ fn calibration() -> Calibration {
         ae_shot_curve_us: curve(&[0, 100]),
         ae_decay_steps_curve: curve(&[0, 16]),
         ae_decay_ratio_curve_x1000: curve(&[1000, 2000]),
-        dfco_entry_rpm: crate::Rpm(2500),
-        dfco_exit_rpm: crate::Rpm(2000),
+        dfco_entry_rpm: crate::Rpm::new(2500),
+        dfco_exit_rpm: crate::Rpm::new(2000),
         dfco_entry_tps_x100: 200,
         dfco_exit_tps_x100: 300,
-        dfco_entry_map_kpa10: crate::Kpa10(500),
+        dfco_entry_map_kpa10: crate::Kpa10::new(500),
         dfco_delay_cycles: 2,
-        soft_rev_rpm: crate::Rpm(6000),
-        hard_rev_rpm: crate::Rpm(6500),
-        rev_hysteresis_rpm: crate::Rpm(100),
+        soft_rev_rpm: crate::Rpm::new(6000),
+        hard_rev_rpm: crate::Rpm::new(6500),
+        rev_hysteresis_rpm: crate::Rpm::new(100),
         soft_retard_max_deg10: 100,
-        launch_rpm_limit: crate::Rpm(5000),
+        launch_rpm_limit: crate::Rpm::new(5000),
         launch_cut_cycles: 4,
-        flat_shift_rpm_min: crate::Rpm(5000),
+        flat_shift_rpm_min: crate::Rpm::new(5000),
         flat_shift_cut_cycles: 4,
         knock_threshold_x100: 500,
         knock_retard_step_deg10: 20,
@@ -142,13 +142,13 @@ fn calibration() -> Calibration {
         knock_recovery_delay_cycles: 2,
         tps_adc_min_counts: 0,
         tps_adc_max_counts: 4095,
-        idle_target_rpm: crate::Rpm(900),
+        idle_target_rpm: crate::Rpm::new(900),
         idle_base_duty_x1000: 0,
         idle_kp_x1000: 0,
         idle_ki_x1000: 0,
         idle_timing_enabled: false,
         idle_timing_pid_enabled: false,
-        idle_timing_rpm_max: crate::Rpm(1200),
+        idle_timing_rpm_max: crate::Rpm::new(1200),
         idle_timing_tps_max_x100: 200,
         idle_advance_curve_deg10: signed_curve(0),
         idle_timing_kp_x1000: 0,
@@ -384,8 +384,8 @@ fn validation_priority_is_first_error_wins() {
     );
 
     let mut cal = calibration();
-    cal.dfco_entry_rpm = crate::Rpm(2000);
-    cal.dfco_exit_rpm = crate::Rpm(2000);
+    cal.dfco_entry_rpm = crate::Rpm::new(2000);
+    cal.dfco_exit_rpm = crate::Rpm::new(2000);
     assert_eq!(
         validate_calibration(cal).unwrap_err(),
         ValidationError::DfcoConfigInvalid
@@ -399,7 +399,7 @@ fn validation_priority_is_first_error_wins() {
     );
 
     let mut cal = calibration();
-    cal.launch_rpm_limit = crate::Rpm(20_001);
+    cal.launch_rpm_limit = crate::Rpm::new(20_001);
     assert_eq!(
         validate_calibration(cal).unwrap_err(),
         ValidationError::LaunchConfigInvalid

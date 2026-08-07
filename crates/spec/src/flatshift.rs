@@ -12,7 +12,7 @@ pub fn flat_shift_step(
     input: InputSnapshot,
     state: &LogicalState,
 ) -> FlatShiftResult {
-    let active = input.flat_shift_armed && input.rpm.0 >= cal.0.flat_shift_rpm_min.0;
+    let active = input.flat_shift_armed && input.rpm.get() >= cal.0.flat_shift_rpm_min.get();
     if !active {
         return FlatShiftResult {
             flat_shift_cut: false,
@@ -52,7 +52,7 @@ mod tests {
     #[test]
     fn disarmed_or_below_rpm_resets_state_and_does_not_cut() {
         let mut cal = default_reference_calibration();
-        cal.0.flat_shift_rpm_min = Rpm(5000);
+        cal.0.flat_shift_rpm_min = Rpm::new(5000);
         let state = LogicalState {
             flat_shift_active: true,
             flat_shift_cut_cycle_count: 3,
@@ -61,7 +61,7 @@ mod tests {
 
         let disarmed = InputSnapshot {
             flat_shift_armed: false,
-            rpm: Rpm(7000),
+            rpm: Rpm::new(7000),
             ..InputSnapshot::default()
         };
         let result = flat_shift_step(&cal, disarmed, &state);
@@ -71,7 +71,7 @@ mod tests {
 
         let below_rpm = InputSnapshot {
             flat_shift_armed: true,
-            rpm: Rpm(4500),
+            rpm: Rpm::new(4500),
             ..InputSnapshot::default()
         };
         let result = flat_shift_step(&cal, below_rpm, &state);
@@ -83,11 +83,11 @@ mod tests {
     #[test]
     fn active_step_uses_cycle_bounded_cut_pattern() {
         let mut cal = default_reference_calibration();
-        cal.0.flat_shift_rpm_min = Rpm(5000);
+        cal.0.flat_shift_rpm_min = Rpm::new(5000);
         cal.0.flat_shift_cut_cycles = 2;
         let input = InputSnapshot {
             flat_shift_armed: true,
-            rpm: Rpm(6000),
+            rpm: Rpm::new(6000),
             ..InputSnapshot::default()
         };
         let mut state = LogicalState::default();

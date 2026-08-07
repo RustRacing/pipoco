@@ -1,3 +1,8 @@
+//! Shared FM0016 fixture matrix (single source of truth for the conformance
+//! fixture set). Consumed by ecu-compat / ecu-scheduler / ecu-runtime
+//! conformance and reducer tests via `ecu_test_fixtures::fixture_matrix`.
+#![allow(dead_code)]
+
 use ecu_spec::{
     burn_page, committed_page_record, decode_outpc, default_reference_calibration, encode_outpc,
     encode_ts_diag_log_oldest_first, page_meta, persist_decode, persist_encode, persist_migrate,
@@ -194,15 +199,15 @@ fn runtime_maf_from_counts(adc_counts: u16) -> u16 {
 
 fn canonical_input() -> InputSnapshot {
     InputSnapshot {
-        t_us: ecu_spec::Micros(10_000),
-        rpm: Rpm(1000),
-        map_kpa10: Kpa10(1000),
-        load_kpa10: Kpa10(1000),
+        t_us: ecu_spec::Micros::new(10_000),
+        rpm: Rpm::new(1000),
+        map_kpa10: Kpa10::new(1000),
+        load_kpa10: Kpa10::new(1000),
         tps_x100: 5000,
-        clt_c10: TempC10(800),
-        iat_c10: TempC10(250),
-        baro_kpa10: Kpa10(1000),
-        vbatt_mv: Millivolts(12_000),
+        clt_c10: TempC10::new(800),
+        iat_c10: TempC10::new(250),
+        baro_kpa10: Kpa10::new(1000),
+        vbatt_mv: Millivolts::new(12_000),
         knock_intensity_x100: 0,
         launch_armed: false,
         flat_shift_armed: false,
@@ -412,11 +417,11 @@ fn ae_dfco_calibration() -> ValidatedCalibration {
     cal.0.ae_decay_ratio_curve_x1000.values[0] = 800;
     cal.0.ae_decay_ratio_curve_x1000.values[1] = 800;
 
-    cal.0.dfco_entry_rpm = Rpm(2000);
-    cal.0.dfco_exit_rpm = Rpm(1800);
+    cal.0.dfco_entry_rpm = Rpm::new(2000);
+    cal.0.dfco_exit_rpm = Rpm::new(1800);
     cal.0.dfco_entry_tps_x100 = 200;
     cal.0.dfco_exit_tps_x100 = 300;
-    cal.0.dfco_entry_map_kpa10 = Kpa10(500);
+    cal.0.dfco_entry_map_kpa10 = Kpa10::new(500);
     cal.0.dfco_delay_cycles = 1;
 
     cal
@@ -424,16 +429,16 @@ fn ae_dfco_calibration() -> ValidatedCalibration {
 
 fn rev_limit_calibration() -> ValidatedCalibration {
     let mut cal = default_reference_calibration();
-    cal.0.soft_rev_rpm = Rpm(4000);
-    cal.0.hard_rev_rpm = Rpm(5000);
-    cal.0.rev_hysteresis_rpm = Rpm(200);
+    cal.0.soft_rev_rpm = Rpm::new(4000);
+    cal.0.hard_rev_rpm = Rpm::new(5000);
+    cal.0.rev_hysteresis_rpm = Rpm::new(200);
     cal.0.soft_retard_max_deg10 = 120;
     cal
 }
 
 fn idle_pi_calibration() -> ValidatedCalibration {
     let mut cal = default_reference_calibration();
-    cal.0.idle_target_rpm = Rpm(1000);
+    cal.0.idle_target_rpm = Rpm::new(1000);
     cal.0.idle_base_duty_x1000 = 350;
     cal.0.idle_kp_x1000 = 300;
     cal.0.idle_ki_x1000 = 500;
@@ -459,33 +464,33 @@ fn knock_calibration() -> ValidatedCalibration {
 
 fn launch_flat_shift_calibration() -> ValidatedCalibration {
     let mut cal = default_reference_calibration();
-    cal.0.soft_rev_rpm = Rpm(20_000);
-    cal.0.hard_rev_rpm = Rpm(20_000);
-    cal.0.rev_hysteresis_rpm = Rpm(0);
-    cal.0.launch_rpm_limit = Rpm(5000);
+    cal.0.soft_rev_rpm = Rpm::new(20_000);
+    cal.0.hard_rev_rpm = Rpm::new(20_000);
+    cal.0.rev_hysteresis_rpm = Rpm::new(0);
+    cal.0.launch_rpm_limit = Rpm::new(5000);
     cal.0.launch_cut_cycles = 2;
-    cal.0.flat_shift_rpm_min = Rpm(5000);
+    cal.0.flat_shift_rpm_min = Rpm::new(5000);
     cal.0.flat_shift_cut_cycles = 2;
     cal
 }
 
 fn arbiter_priority_calibration() -> ValidatedCalibration {
     let mut cal = default_reference_calibration();
-    cal.0.dfco_entry_rpm = Rpm(2000);
-    cal.0.dfco_exit_rpm = Rpm(1800);
+    cal.0.dfco_entry_rpm = Rpm::new(2000);
+    cal.0.dfco_exit_rpm = Rpm::new(1800);
     cal.0.dfco_entry_tps_x100 = 200;
     cal.0.dfco_exit_tps_x100 = 300;
-    cal.0.dfco_entry_map_kpa10 = Kpa10(500);
+    cal.0.dfco_entry_map_kpa10 = Kpa10::new(500);
     cal.0.dfco_delay_cycles = 1;
 
-    cal.0.soft_rev_rpm = Rpm(4500);
-    cal.0.hard_rev_rpm = Rpm(6500);
-    cal.0.rev_hysteresis_rpm = Rpm(100);
+    cal.0.soft_rev_rpm = Rpm::new(4500);
+    cal.0.hard_rev_rpm = Rpm::new(6500);
+    cal.0.rev_hysteresis_rpm = Rpm::new(100);
     cal.0.soft_retard_max_deg10 = 120;
 
-    cal.0.launch_rpm_limit = Rpm(5000);
+    cal.0.launch_rpm_limit = Rpm::new(5000);
     cal.0.launch_cut_cycles = 0;
-    cal.0.flat_shift_rpm_min = Rpm(5000);
+    cal.0.flat_shift_rpm_min = Rpm::new(5000);
     cal.0.flat_shift_cut_cycles = 0;
 
     cal.0.knock_threshold_x100 = 500;
@@ -557,9 +562,9 @@ pub fn fixture_cases() -> [FixtureCase; 88] {
             variant: "default",
             calibration: decreasing_dwell_calibration(),
             input: InputSnapshot {
-                rpm: Rpm(750),
-                load_kpa10: Kpa10(750),
-                map_kpa10: Kpa10(750),
+                rpm: Rpm::new(750),
+                load_kpa10: Kpa10::new(750),
+                map_kpa10: Kpa10::new(750),
                 ..base
             },
         },
@@ -568,8 +573,8 @@ pub fn fixture_cases() -> [FixtureCase; 88] {
             variant: "default",
             calibration: default_reference_calibration(),
             input: InputSnapshot {
-                clt_c10: TempC10(-350),
-                iat_c10: TempC10(-120),
+                clt_c10: TempC10::new(-350),
+                iat_c10: TempC10::new(-120),
                 ..base
             },
         },
@@ -578,7 +583,7 @@ pub fn fixture_cases() -> [FixtureCase; 88] {
             variant: "low",
             calibration: default_reference_calibration(),
             input: InputSnapshot {
-                target_afr_override_x100: AfrOverride::Some(AfrX100(100)),
+                target_afr_override_x100: AfrOverride::Some(AfrX100::new(100)),
                 ..base
             },
         },
@@ -587,7 +592,7 @@ pub fn fixture_cases() -> [FixtureCase; 88] {
             variant: "high",
             calibration: default_reference_calibration(),
             input: InputSnapshot {
-                target_afr_override_x100: AfrOverride::Some(AfrX100(4000)),
+                target_afr_override_x100: AfrOverride::Some(AfrX100::new(4000)),
                 ..base
             },
         },
@@ -596,9 +601,9 @@ pub fn fixture_cases() -> [FixtureCase; 88] {
             variant: "default",
             calibration: interp_corner_calibration(),
             input: InputSnapshot {
-                rpm: Rpm(1500),
-                load_kpa10: Kpa10(1500),
-                map_kpa10: Kpa10(1500),
+                rpm: Rpm::new(1500),
+                load_kpa10: Kpa10::new(1500),
+                map_kpa10: Kpa10::new(1500),
                 ..base
             },
         },
@@ -607,9 +612,9 @@ pub fn fixture_cases() -> [FixtureCase; 88] {
             variant: "default",
             calibration: interp_corner_calibration(),
             input: InputSnapshot {
-                rpm: Rpm(1000),
-                load_kpa10: Kpa10(1000),
-                map_kpa10: Kpa10(1000),
+                rpm: Rpm::new(1000),
+                load_kpa10: Kpa10::new(1000),
+                map_kpa10: Kpa10::new(1000),
                 ..base
             },
         },
@@ -618,9 +623,9 @@ pub fn fixture_cases() -> [FixtureCase; 88] {
             variant: "default",
             calibration: decreasing_dwell_calibration(),
             input: InputSnapshot {
-                rpm: Rpm(750),
-                load_kpa10: Kpa10(750),
-                map_kpa10: Kpa10(750),
+                rpm: Rpm::new(750),
+                load_kpa10: Kpa10::new(750),
+                map_kpa10: Kpa10::new(750),
                 ..base
             },
         },
@@ -629,9 +634,9 @@ pub fn fixture_cases() -> [FixtureCase; 88] {
             variant: "default",
             calibration: interp_corner_calibration(),
             input: InputSnapshot {
-                rpm: Rpm(750),
-                load_kpa10: Kpa10(750),
-                map_kpa10: Kpa10(750),
+                rpm: Rpm::new(750),
+                load_kpa10: Kpa10::new(750),
+                map_kpa10: Kpa10::new(750),
                 ..base
             },
         },
@@ -640,9 +645,9 @@ pub fn fixture_cases() -> [FixtureCase; 88] {
             variant: "default",
             calibration: interp_corner_calibration(),
             input: InputSnapshot {
-                rpm: Rpm(750),
-                load_kpa10: Kpa10(1000),
-                map_kpa10: Kpa10(1000),
+                rpm: Rpm::new(750),
+                load_kpa10: Kpa10::new(1000),
+                map_kpa10: Kpa10::new(1000),
                 ..base
             },
         },
@@ -651,9 +656,9 @@ pub fn fixture_cases() -> [FixtureCase; 88] {
             variant: "default",
             calibration: deadtime_vbat_baro_calibration(),
             input: InputSnapshot {
-                vbatt_mv: Millivolts(12_000),
-                baro_kpa10: Kpa10(1000),
-                map_kpa10: Kpa10(1000),
+                vbatt_mv: Millivolts::new(12_000),
+                baro_kpa10: Kpa10::new(1000),
+                map_kpa10: Kpa10::new(1000),
                 ..base
             },
         },
@@ -662,9 +667,9 @@ pub fn fixture_cases() -> [FixtureCase; 88] {
             variant: "low_vbat",
             calibration: deadtime_vbat_baro_calibration(),
             input: InputSnapshot {
-                vbatt_mv: Millivolts(10_000),
-                baro_kpa10: Kpa10(1000),
-                map_kpa10: Kpa10(1000),
+                vbatt_mv: Millivolts::new(10_000),
+                baro_kpa10: Kpa10::new(1000),
+                map_kpa10: Kpa10::new(1000),
                 ..base
             },
         },
@@ -673,9 +678,9 @@ pub fn fixture_cases() -> [FixtureCase; 88] {
             variant: "high_vbat",
             calibration: deadtime_vbat_baro_calibration(),
             input: InputSnapshot {
-                vbatt_mv: Millivolts(14_000),
-                baro_kpa10: Kpa10(1000),
-                map_kpa10: Kpa10(1000),
+                vbatt_mv: Millivolts::new(14_000),
+                baro_kpa10: Kpa10::new(1000),
+                map_kpa10: Kpa10::new(1000),
                 ..base
             },
         },
@@ -684,9 +689,9 @@ pub fn fixture_cases() -> [FixtureCase; 88] {
             variant: "low_baro",
             calibration: deadtime_vbat_baro_calibration(),
             input: InputSnapshot {
-                baro_kpa10: Kpa10(800),
-                vbatt_mv: Millivolts(12_000),
-                map_kpa10: Kpa10(1000),
+                baro_kpa10: Kpa10::new(800),
+                vbatt_mv: Millivolts::new(12_000),
+                map_kpa10: Kpa10::new(1000),
                 ..base
             },
         },
@@ -695,9 +700,9 @@ pub fn fixture_cases() -> [FixtureCase; 88] {
             variant: "high_baro",
             calibration: deadtime_vbat_baro_calibration(),
             input: InputSnapshot {
-                baro_kpa10: Kpa10(1200),
-                vbatt_mv: Millivolts(12_000),
-                map_kpa10: Kpa10(1000),
+                baro_kpa10: Kpa10::new(1200),
+                vbatt_mv: Millivolts::new(12_000),
+                map_kpa10: Kpa10::new(1000),
                 ..base
             },
         },
@@ -707,7 +712,7 @@ pub fn fixture_cases() -> [FixtureCase; 88] {
             calibration: cranking_afterstart_warmup_calibration(),
             input: InputSnapshot {
                 mode: EngineMode::Cranking,
-                clt_c10: TempC10(0),
+                clt_c10: TempC10::new(0),
                 ..base
             },
         },
@@ -717,7 +722,7 @@ pub fn fixture_cases() -> [FixtureCase; 88] {
             calibration: cranking_afterstart_warmup_calibration(),
             input: InputSnapshot {
                 mode: EngineMode::Running,
-                clt_c10: TempC10(0),
+                clt_c10: TempC10::new(0),
                 ..base
             },
         },
@@ -727,7 +732,7 @@ pub fn fixture_cases() -> [FixtureCase; 88] {
             calibration: cranking_afterstart_warmup_calibration(),
             input: InputSnapshot {
                 mode: EngineMode::Running,
-                clt_c10: TempC10(0),
+                clt_c10: TempC10::new(0),
                 ..base
             },
         },
@@ -737,7 +742,7 @@ pub fn fixture_cases() -> [FixtureCase; 88] {
             calibration: cranking_afterstart_warmup_calibration(),
             input: InputSnapshot {
                 mode: EngineMode::Running,
-                clt_c10: TempC10(0),
+                clt_c10: TempC10::new(0),
                 ..base
             },
         },
@@ -747,7 +752,7 @@ pub fn fixture_cases() -> [FixtureCase; 88] {
             calibration: cranking_afterstart_warmup_calibration(),
             input: InputSnapshot {
                 mode: EngineMode::Running,
-                clt_c10: TempC10(0),
+                clt_c10: TempC10::new(0),
                 ..base
             },
         },
@@ -757,9 +762,9 @@ pub fn fixture_cases() -> [FixtureCase; 88] {
             calibration: ae_dfco_calibration(),
             input: InputSnapshot {
                 mode: EngineMode::Running,
-                rpm: Rpm(3000),
-                map_kpa10: Kpa10(1000),
-                load_kpa10: Kpa10(1000),
+                rpm: Rpm::new(3000),
+                map_kpa10: Kpa10::new(1000),
+                load_kpa10: Kpa10::new(1000),
                 ..base
             },
         },
@@ -769,9 +774,9 @@ pub fn fixture_cases() -> [FixtureCase; 88] {
             calibration: ae_dfco_calibration(),
             input: InputSnapshot {
                 mode: EngineMode::Running,
-                rpm: Rpm(3000),
-                map_kpa10: Kpa10(1000),
-                load_kpa10: Kpa10(1000),
+                rpm: Rpm::new(3000),
+                map_kpa10: Kpa10::new(1000),
+                load_kpa10: Kpa10::new(1000),
                 ..base
             },
         },
@@ -781,10 +786,10 @@ pub fn fixture_cases() -> [FixtureCase; 88] {
             calibration: ae_dfco_calibration(),
             input: InputSnapshot {
                 mode: EngineMode::Running,
-                rpm: Rpm(3000),
+                rpm: Rpm::new(3000),
                 tps_x100: 0,
-                map_kpa10: Kpa10(350),
-                load_kpa10: Kpa10(350),
+                map_kpa10: Kpa10::new(350),
+                load_kpa10: Kpa10::new(350),
                 ..base
             },
         },
@@ -794,10 +799,10 @@ pub fn fixture_cases() -> [FixtureCase; 88] {
             calibration: ae_dfco_calibration(),
             input: InputSnapshot {
                 mode: EngineMode::Running,
-                rpm: Rpm(3000),
+                rpm: Rpm::new(3000),
                 tps_x100: 600,
-                map_kpa10: Kpa10(350),
-                load_kpa10: Kpa10(350),
+                map_kpa10: Kpa10::new(350),
+                load_kpa10: Kpa10::new(350),
                 ..base
             },
         },
@@ -806,7 +811,7 @@ pub fn fixture_cases() -> [FixtureCase; 88] {
             variant: "under_limit",
             calibration: rev_limit_calibration(),
             input: InputSnapshot {
-                rpm: Rpm(3500),
+                rpm: Rpm::new(3500),
                 ..base
             },
         },
@@ -815,7 +820,7 @@ pub fn fixture_cases() -> [FixtureCase; 88] {
             variant: "soft_limit",
             calibration: rev_limit_calibration(),
             input: InputSnapshot {
-                rpm: Rpm(4500),
+                rpm: Rpm::new(4500),
                 ..base
             },
         },
@@ -824,7 +829,7 @@ pub fn fixture_cases() -> [FixtureCase; 88] {
             variant: "hard_limit",
             calibration: rev_limit_calibration(),
             input: InputSnapshot {
-                rpm: Rpm(5100),
+                rpm: Rpm::new(5100),
                 ..base
             },
         },
@@ -833,7 +838,7 @@ pub fn fixture_cases() -> [FixtureCase; 88] {
             variant: "recovery",
             calibration: rev_limit_calibration(),
             input: InputSnapshot {
-                rpm: Rpm(3600),
+                rpm: Rpm::new(3600),
                 ..base
             },
         },
@@ -842,8 +847,8 @@ pub fn fixture_cases() -> [FixtureCase; 88] {
             variant: "integrate",
             calibration: idle_pi_calibration(),
             input: InputSnapshot {
-                rpm: Rpm(700),
-                clt_c10: TempC10(800),
+                rpm: Rpm::new(700),
+                clt_c10: TempC10::new(800),
                 ..base
             },
         },
@@ -852,8 +857,8 @@ pub fn fixture_cases() -> [FixtureCase; 88] {
             variant: "freeze_cold",
             calibration: idle_pi_calibration(),
             input: InputSnapshot {
-                rpm: Rpm(700),
-                clt_c10: TempC10(650),
+                rpm: Rpm::new(700),
+                clt_c10: TempC10::new(650),
                 ..base
             },
         },
@@ -863,7 +868,7 @@ pub fn fixture_cases() -> [FixtureCase; 88] {
             calibration: lambda_cl_calibration(),
             input: InputSnapshot {
                 mode: EngineMode::Running,
-                clt_c10: TempC10(800),
+                clt_c10: TempC10::new(800),
                 fuel_cut: false,
                 spark_cut: false,
                 ..base
@@ -875,7 +880,7 @@ pub fn fixture_cases() -> [FixtureCase; 88] {
             calibration: lambda_cl_calibration(),
             input: InputSnapshot {
                 mode: EngineMode::Running,
-                clt_c10: TempC10(800),
+                clt_c10: TempC10::new(800),
                 fuel_cut: true,
                 spark_cut: false,
                 ..base
@@ -922,7 +927,7 @@ pub fn fixture_cases() -> [FixtureCase; 88] {
             variant: "disarmed",
             calibration: launch_flat_shift_calibration(),
             input: InputSnapshot {
-                rpm: Rpm(5600),
+                rpm: Rpm::new(5600),
                 launch_armed: false,
                 flat_shift_armed: false,
                 ..base
@@ -933,7 +938,7 @@ pub fn fixture_cases() -> [FixtureCase; 88] {
             variant: "armed_pattern",
             calibration: launch_flat_shift_calibration(),
             input: InputSnapshot {
-                rpm: Rpm(5600),
+                rpm: Rpm::new(5600),
                 launch_armed: true,
                 flat_shift_armed: false,
                 ..base
@@ -944,7 +949,7 @@ pub fn fixture_cases() -> [FixtureCase; 88] {
             variant: "disarmed",
             calibration: launch_flat_shift_calibration(),
             input: InputSnapshot {
-                rpm: Rpm(5600),
+                rpm: Rpm::new(5600),
                 launch_armed: false,
                 flat_shift_armed: false,
                 ..base
@@ -955,7 +960,7 @@ pub fn fixture_cases() -> [FixtureCase; 88] {
             variant: "armed_pattern",
             calibration: launch_flat_shift_calibration(),
             input: InputSnapshot {
-                rpm: Rpm(5600),
+                rpm: Rpm::new(5600),
                 launch_armed: false,
                 flat_shift_armed: true,
                 ..base
@@ -967,7 +972,7 @@ pub fn fixture_cases() -> [FixtureCase; 88] {
             calibration: arbiter_priority_calibration(),
             input: InputSnapshot {
                 mode: EngineMode::Shutdown,
-                rpm: Rpm(7000),
+                rpm: Rpm::new(7000),
                 ..base
             },
         },
@@ -977,7 +982,7 @@ pub fn fixture_cases() -> [FixtureCase; 88] {
             calibration: arbiter_priority_calibration(),
             input: InputSnapshot {
                 mode: EngineMode::Shutdown,
-                rpm: Rpm(5600),
+                rpm: Rpm::new(5600),
                 launch_armed: true,
                 ..base
             },
@@ -988,7 +993,7 @@ pub fn fixture_cases() -> [FixtureCase; 88] {
             calibration: arbiter_priority_calibration(),
             input: InputSnapshot {
                 mode: EngineMode::Shutdown,
-                rpm: Rpm(5600),
+                rpm: Rpm::new(5600),
                 flat_shift_armed: true,
                 ..base
             },
@@ -999,10 +1004,10 @@ pub fn fixture_cases() -> [FixtureCase; 88] {
             calibration: arbiter_priority_calibration(),
             input: InputSnapshot {
                 mode: EngineMode::Shutdown,
-                rpm: Rpm(3000),
+                rpm: Rpm::new(3000),
                 tps_x100: 0,
-                map_kpa10: Kpa10(350),
-                load_kpa10: Kpa10(350),
+                map_kpa10: Kpa10::new(350),
+                load_kpa10: Kpa10::new(350),
                 ..base
             },
         },
@@ -1012,7 +1017,7 @@ pub fn fixture_cases() -> [FixtureCase; 88] {
             calibration: arbiter_priority_calibration(),
             input: InputSnapshot {
                 mode: EngineMode::Shutdown,
-                rpm: Rpm(5000),
+                rpm: Rpm::new(5000),
                 ..base
             },
         },
@@ -1031,7 +1036,7 @@ pub fn fixture_cases() -> [FixtureCase; 88] {
             variant: "hard_rev_limit_over_launch_cut",
             calibration: arbiter_priority_calibration(),
             input: InputSnapshot {
-                rpm: Rpm(7000),
+                rpm: Rpm::new(7000),
                 launch_armed: true,
                 ..base
             },
@@ -1041,7 +1046,7 @@ pub fn fixture_cases() -> [FixtureCase; 88] {
             variant: "hard_rev_limit_over_flat_shift_cut",
             calibration: arbiter_priority_calibration(),
             input: InputSnapshot {
-                rpm: Rpm(7000),
+                rpm: Rpm::new(7000),
                 flat_shift_armed: true,
                 ..base
             },
@@ -1051,10 +1056,10 @@ pub fn fixture_cases() -> [FixtureCase; 88] {
             variant: "hard_rev_limit_over_dfco_cut",
             calibration: arbiter_priority_calibration(),
             input: InputSnapshot {
-                rpm: Rpm(7000),
+                rpm: Rpm::new(7000),
                 tps_x100: 0,
-                map_kpa10: Kpa10(350),
-                load_kpa10: Kpa10(350),
+                map_kpa10: Kpa10::new(350),
+                load_kpa10: Kpa10::new(350),
                 ..base
             },
         },
@@ -1063,7 +1068,7 @@ pub fn fixture_cases() -> [FixtureCase; 88] {
             variant: "hard_rev_limit_over_soft_rev_spark_cut",
             calibration: arbiter_priority_calibration(),
             input: InputSnapshot {
-                rpm: Rpm(7000),
+                rpm: Rpm::new(7000),
                 ..base
             },
         },
@@ -1072,7 +1077,7 @@ pub fn fixture_cases() -> [FixtureCase; 88] {
             variant: "hard_rev_limit_over_knock_spark_retard_only",
             calibration: arbiter_priority_calibration(),
             input: InputSnapshot {
-                rpm: Rpm(7000),
+                rpm: Rpm::new(7000),
                 knock_intensity_x100: 600,
                 ..base
             },
@@ -1082,7 +1087,7 @@ pub fn fixture_cases() -> [FixtureCase; 88] {
             variant: "launch_cut_over_flat_shift_cut",
             calibration: arbiter_priority_calibration(),
             input: InputSnapshot {
-                rpm: Rpm(5600),
+                rpm: Rpm::new(5600),
                 launch_armed: true,
                 flat_shift_armed: true,
                 ..base
@@ -1093,11 +1098,11 @@ pub fn fixture_cases() -> [FixtureCase; 88] {
             variant: "launch_cut_over_dfco_cut",
             calibration: arbiter_priority_calibration(),
             input: InputSnapshot {
-                rpm: Rpm(5600),
+                rpm: Rpm::new(5600),
                 launch_armed: true,
                 tps_x100: 0,
-                map_kpa10: Kpa10(350),
-                load_kpa10: Kpa10(350),
+                map_kpa10: Kpa10::new(350),
+                load_kpa10: Kpa10::new(350),
                 ..base
             },
         },
@@ -1106,7 +1111,7 @@ pub fn fixture_cases() -> [FixtureCase; 88] {
             variant: "launch_cut_over_soft_rev_spark_cut",
             calibration: arbiter_priority_calibration(),
             input: InputSnapshot {
-                rpm: Rpm(5600),
+                rpm: Rpm::new(5600),
                 launch_armed: true,
                 ..base
             },
@@ -1116,7 +1121,7 @@ pub fn fixture_cases() -> [FixtureCase; 88] {
             variant: "launch_cut_over_knock_spark_retard_only",
             calibration: arbiter_priority_calibration(),
             input: InputSnapshot {
-                rpm: Rpm(5600),
+                rpm: Rpm::new(5600),
                 launch_armed: true,
                 knock_intensity_x100: 600,
                 ..base
@@ -1127,11 +1132,11 @@ pub fn fixture_cases() -> [FixtureCase; 88] {
             variant: "flat_shift_cut_over_dfco_cut",
             calibration: arbiter_priority_calibration(),
             input: InputSnapshot {
-                rpm: Rpm(5600),
+                rpm: Rpm::new(5600),
                 flat_shift_armed: true,
                 tps_x100: 0,
-                map_kpa10: Kpa10(350),
-                load_kpa10: Kpa10(350),
+                map_kpa10: Kpa10::new(350),
+                load_kpa10: Kpa10::new(350),
                 ..base
             },
         },
@@ -1140,7 +1145,7 @@ pub fn fixture_cases() -> [FixtureCase; 88] {
             variant: "flat_shift_cut_over_soft_rev_spark_cut",
             calibration: arbiter_priority_calibration(),
             input: InputSnapshot {
-                rpm: Rpm(5600),
+                rpm: Rpm::new(5600),
                 flat_shift_armed: true,
                 ..base
             },
@@ -1150,7 +1155,7 @@ pub fn fixture_cases() -> [FixtureCase; 88] {
             variant: "flat_shift_cut_over_knock_spark_retard_only",
             calibration: arbiter_priority_calibration(),
             input: InputSnapshot {
-                rpm: Rpm(5600),
+                rpm: Rpm::new(5600),
                 flat_shift_armed: true,
                 knock_intensity_x100: 600,
                 ..base
@@ -1161,10 +1166,10 @@ pub fn fixture_cases() -> [FixtureCase; 88] {
             variant: "dfco_cut_over_soft_rev_spark_cut",
             calibration: arbiter_priority_calibration(),
             input: InputSnapshot {
-                rpm: Rpm(5600),
+                rpm: Rpm::new(5600),
                 tps_x100: 0,
-                map_kpa10: Kpa10(350),
-                load_kpa10: Kpa10(350),
+                map_kpa10: Kpa10::new(350),
+                load_kpa10: Kpa10::new(350),
                 ..base
             },
         },
@@ -1173,10 +1178,10 @@ pub fn fixture_cases() -> [FixtureCase; 88] {
             variant: "dfco_cut_over_knock_spark_retard_only",
             calibration: arbiter_priority_calibration(),
             input: InputSnapshot {
-                rpm: Rpm(5600),
+                rpm: Rpm::new(5600),
                 tps_x100: 0,
-                map_kpa10: Kpa10(350),
-                load_kpa10: Kpa10(350),
+                map_kpa10: Kpa10::new(350),
+                load_kpa10: Kpa10::new(350),
                 knock_intensity_x100: 600,
                 ..base
             },
@@ -1186,7 +1191,7 @@ pub fn fixture_cases() -> [FixtureCase; 88] {
             variant: "soft_rev_spark_cut_over_knock_spark_retard_only",
             calibration: arbiter_priority_calibration(),
             input: InputSnapshot {
-                rpm: Rpm(5600),
+                rpm: Rpm::new(5600),
                 knock_intensity_x100: 600,
                 ..base
             },
@@ -1443,7 +1448,7 @@ pub fn assert_fixture_semantics(case: FixtureCase, result: &StepResult) {
         }
         "fuel_cut_running_synced" => {
             assert_eq!(result.output.diagnostic, DiagnosticCode::FuelCutActive);
-            assert_eq!(result.output.pw_corr_us.0, 0);
+            assert_eq!(result.output.pw_corr_us.get(), 0);
             assert!(!has_event(result, EventKind::InjectionOpen));
             assert!(!has_event(result, EventKind::InjectionClose));
             // input.fuel_cut=true gates actuated to 0; request/allowed reflect base torque.
@@ -1473,35 +1478,42 @@ pub fn assert_fixture_semantics(case: FixtureCase, result: &StepResult) {
             assert_eq!(result.output.events.len, 0);
         }
         "decreasing_dwell_table" => {
-            assert_eq!(result.output.dwell_us.0, 2000);
+            assert_eq!(result.output.dwell_us.get(), 2000);
             let expected_dwell_duration =
-                ecu_spec::duration_us_to_deg10(result.output.dwell_us, case.input.rpm).0;
+                ecu_spec::duration_us_to_deg10(result.output.dwell_us, case.input.rpm).get();
             let live_count = case.calibration.0.cylinder_phase_deg10.count as usize;
             let mut idx = 0usize;
             while idx < live_count {
-                let spark = Degrees10(result.output.spark_deg10.values[idx]);
-                let dwell_start = Degrees10(result.output.dwell_start_deg10.values[idx]);
+                let spark = Degrees10::new(result.output.spark_deg10.values[idx] as i16);
+                let dwell_start =
+                    Degrees10::new(result.output.dwell_start_deg10.values[idx] as i16);
                 let cyclic = ecu_spec::cyc7200_distance(spark, dwell_start);
-                assert_eq!(cyclic, expected_dwell_duration);
+                assert_eq!(cyclic, expected_dwell_duration as u16);
                 idx += 1;
             }
         }
         "negative_temperature_inputs" => {
             let zero_temp = InputSnapshot {
-                clt_c10: TempC10(0),
-                iat_c10: TempC10(0),
+                clt_c10: TempC10::new(0),
+                iat_c10: TempC10::new(0),
                 ..case.input
             };
             let zero_result = spec_step(&case.calibration, zero_temp, &LogicalState::default());
-            assert_eq!(result.output.pw_corr_us.0, zero_result.output.pw_corr_us.0);
-            assert_eq!(result.output.pw_air_us.0, zero_result.output.pw_air_us.0);
+            assert_eq!(
+                result.output.pw_corr_us.get(),
+                zero_result.output.pw_corr_us.get()
+            );
+            assert_eq!(
+                result.output.pw_air_us.get(),
+                zero_result.output.pw_air_us.get()
+            );
         }
         "afr_override_low_high_clamp" => match case.variant {
             "low" => {
-                assert_eq!(result.output.target_afr_x100.0, 500);
+                assert_eq!(result.output.target_afr_x100.get(), 500);
             }
             "high" => {
-                assert_eq!(result.output.target_afr_x100.0, 3000);
+                assert_eq!(result.output.target_afr_x100.get(), 3000);
             }
             _ => unreachable!("unexpected AFR override variant"),
         },
@@ -1515,47 +1527,61 @@ pub fn assert_fixture_semantics(case: FixtureCase, result: &StepResult) {
         }
         "deadtime_addition" => {
             assert_eq!(result.output.diagnostic, DiagnosticCode::None);
-            assert!(result.output.pw_corr_us.0 > result.output.pw_air_us.0);
-            assert_eq!(result.output.pw_corr_us.0 - result.output.pw_air_us.0, 700);
+            assert!(result.output.pw_corr_us.get() > result.output.pw_air_us.get());
+            assert_eq!(
+                result.output.pw_corr_us.get() - result.output.pw_air_us.get(),
+                700
+            );
         }
         "vbat_deadtime_response" => {
             let paired_input = match case.variant {
                 "low_vbat" => InputSnapshot {
-                    vbatt_mv: Millivolts(14_000),
+                    vbatt_mv: Millivolts::new(14_000),
                     ..case.input
                 },
                 "high_vbat" => InputSnapshot {
-                    vbatt_mv: Millivolts(10_000),
+                    vbatt_mv: Millivolts::new(10_000),
                     ..case.input
                 },
                 _ => unreachable!("unexpected vbat deadtime variant"),
             };
             let paired = spec_step(&case.calibration, paired_input, &LogicalState::default());
-            assert_eq!(result.output.pw_air_us.0, paired.output.pw_air_us.0);
+            assert_eq!(result.output.pw_air_us.get(), paired.output.pw_air_us.get());
             match case.variant {
-                "low_vbat" => assert!(result.output.pw_corr_us.0 > paired.output.pw_corr_us.0),
-                "high_vbat" => assert!(result.output.pw_corr_us.0 < paired.output.pw_corr_us.0),
+                "low_vbat" => {
+                    assert!(result.output.pw_corr_us.get() > paired.output.pw_corr_us.get())
+                }
+                "high_vbat" => {
+                    assert!(result.output.pw_corr_us.get() < paired.output.pw_corr_us.get())
+                }
                 _ => unreachable!("unexpected vbat deadtime variant"),
             }
         }
         "baro_correction_response" => {
             let paired_input = match case.variant {
                 "low_baro" => InputSnapshot {
-                    baro_kpa10: Kpa10(1200),
+                    baro_kpa10: Kpa10::new(1200),
                     ..case.input
                 },
                 "high_baro" => InputSnapshot {
-                    baro_kpa10: Kpa10(800),
+                    baro_kpa10: Kpa10::new(800),
                     ..case.input
                 },
                 _ => unreachable!("unexpected baro correction variant"),
             };
             let paired = spec_step(&case.calibration, paired_input, &LogicalState::default());
-            assert_eq!(result.output.pw_base_us.0, paired.output.pw_base_us.0);
-            assert_eq!(result.output.pw_air_us.0, paired.output.pw_air_us.0);
+            assert_eq!(
+                result.output.pw_base_us.get(),
+                paired.output.pw_base_us.get()
+            );
+            assert_eq!(result.output.pw_air_us.get(), paired.output.pw_air_us.get());
             match case.variant {
-                "low_baro" => assert!(result.output.pw_corr_us.0 < paired.output.pw_corr_us.0),
-                "high_baro" => assert!(result.output.pw_corr_us.0 > paired.output.pw_corr_us.0),
+                "low_baro" => {
+                    assert!(result.output.pw_corr_us.get() < paired.output.pw_corr_us.get())
+                }
+                "high_baro" => {
+                    assert!(result.output.pw_corr_us.get() > paired.output.pw_corr_us.get())
+                }
                 _ => unreachable!("unexpected baro correction variant"),
             }
         }
@@ -1573,8 +1599,12 @@ pub fn assert_fixture_semantics(case: FixtureCase, result: &StepResult) {
             };
             let paired = spec_step(&case.calibration, paired_input, &LogicalState::default());
             match case.variant {
-                "cranking" => assert!(result.output.pw_corr_us.0 > paired.output.pw_corr_us.0),
-                "running" => assert!(result.output.pw_corr_us.0 < paired.output.pw_corr_us.0),
+                "cranking" => {
+                    assert!(result.output.pw_corr_us.get() > paired.output.pw_corr_us.get())
+                }
+                "running" => {
+                    assert!(result.output.pw_corr_us.get() < paired.output.pw_corr_us.get())
+                }
                 _ => unreachable!("unexpected cranking correction variant"),
             }
         }
@@ -1596,28 +1626,37 @@ pub fn assert_fixture_semantics(case: FixtureCase, result: &StepResult) {
             let paired = spec_step(&case.calibration, case.input, &paired_state);
             match case.variant {
                 "inside_window" => {
-                    assert!(case_result.output.pw_corr_us.0 > paired.output.pw_corr_us.0)
+                    assert!(case_result.output.pw_corr_us.get() > paired.output.pw_corr_us.get())
                 }
                 "outside_window" => {
-                    assert!(case_result.output.pw_corr_us.0 < paired.output.pw_corr_us.0)
+                    assert!(case_result.output.pw_corr_us.get() < paired.output.pw_corr_us.get())
                 }
                 _ => unreachable!("unexpected afterstart variant"),
             }
-            assert_eq!(result.output.pw_base_us.0, case_result.output.pw_base_us.0);
-            assert_eq!(result.output.pw_air_us.0, case_result.output.pw_air_us.0);
+            assert_eq!(
+                result.output.pw_base_us.get(),
+                case_result.output.pw_base_us.get()
+            );
+            assert_eq!(
+                result.output.pw_air_us.get(),
+                case_result.output.pw_air_us.get()
+            );
         }
         "warmup_correction_response" => {
             let paired_input = InputSnapshot {
-                clt_c10: TempC10(800),
+                clt_c10: TempC10::new(800),
                 ..case.input
             };
             let paired = spec_step(&case.calibration, paired_input, &LogicalState::default());
             match case.variant {
-                "cold" => assert!(result.output.pw_corr_us.0 > paired.output.pw_corr_us.0),
+                "cold" => assert!(result.output.pw_corr_us.get() > paired.output.pw_corr_us.get()),
                 _ => unreachable!("unexpected warmup variant"),
             }
-            assert_eq!(result.output.pw_base_us.0, paired.output.pw_base_us.0);
-            assert_eq!(result.output.pw_air_us.0, paired.output.pw_air_us.0);
+            assert_eq!(
+                result.output.pw_base_us.get(),
+                paired.output.pw_base_us.get()
+            );
+            assert_eq!(result.output.pw_air_us.get(), paired.output.pw_air_us.get());
         }
         "sensor_curves_input_sweep" => {
             let mut calibration = case.calibration.0;
@@ -1627,15 +1666,15 @@ pub fn assert_fixture_semantics(case: FixtureCase, result: &StepResult) {
             while counts <= 4095 {
                 assert_eq!(
                     runtime_temp_from_counts(counts, &RUNTIME_CLT_TEMP_C10),
-                    ecu_spec::clt_from_counts(counts).0
+                    ecu_spec::clt_from_counts(counts).get()
                 );
                 assert_eq!(
                     runtime_temp_from_counts(counts, &RUNTIME_IAT_TEMP_C10),
-                    ecu_spec::iat_from_counts(counts).0
+                    ecu_spec::iat_from_counts(counts).get()
                 );
 
                 let map_runtime = 100 + ((counts as u32 * (3000 - 100) as u32) / 4095) as u16;
-                assert_eq!(map_runtime, ecu_spec::map_from_counts(counts).0);
+                assert_eq!(map_runtime, ecu_spec::map_from_counts(counts).get());
 
                 let adc_min = calibration.tps_adc_min_counts.clamp(0, 4095);
                 let adc_max = calibration.tps_adc_max_counts.clamp(0, 4095);
@@ -1664,16 +1703,16 @@ pub fn assert_fixture_semantics(case: FixtureCase, result: &StepResult) {
                     o2_wide_runtime,
                     ecu_spec::o2_from_counts(&calibration, counts, false)
                         .afr_x100
-                        .0
+                        .get()
                 );
 
                 assert_eq!(counts.clamp(0, 10_000), ecu_spec::knock_from_window(counts));
 
                 let baro_runtime = 500 + ((counts as u32 * (1200 - 500) as u32) / 4095) as u16;
-                assert_eq!(baro_runtime, ecu_spec::baro_from_counts(counts).0);
+                assert_eq!(baro_runtime, ecu_spec::baro_from_counts(counts).get());
 
                 let vbat_runtime = 6000 + ((counts as u32 * (18000 - 6000) as u32) / 4095) as u16;
-                assert_eq!(vbat_runtime, ecu_spec::vbat_from_counts(counts).0);
+                assert_eq!(vbat_runtime, ecu_spec::vbat_from_counts(counts).get());
 
                 if counts == 4095 {
                     break;
@@ -1724,43 +1763,55 @@ pub fn assert_fixture_semantics(case: FixtureCase, result: &StepResult) {
             let mut state = LogicalState::default();
             match case.variant {
                 "onset" => {
-                    state.math.last_valid_load_kpa10 = Kpa10(0);
-                    state.math.last_valid_map_kpa10 = Kpa10(1000);
+                    state.math.last_valid_load_kpa10 = Kpa10::new(0);
+                    state.math.last_valid_map_kpa10 = Kpa10::new(1000);
                     let with_ae = spec_step(&case.calibration, case.input, &state);
 
                     let mut paired_state = state;
-                    paired_state.math.last_valid_load_kpa10 = Kpa10(1000);
+                    paired_state.math.last_valid_load_kpa10 = Kpa10::new(1000);
                     let without_ae = spec_step(&case.calibration, case.input, &paired_state);
-                    assert!(with_ae.output.pw_corr_us.0 > without_ae.output.pw_corr_us.0);
+                    assert!(with_ae.output.pw_corr_us.get() > without_ae.output.pw_corr_us.get());
                     assert!(with_ae.next_state.ae.active);
                     assert_eq!(with_ae.next_state.ae.decay_steps_remaining, 2);
-                    assert_eq!(result.output.pw_base_us.0, with_ae.output.pw_base_us.0);
-                    assert_eq!(result.output.pw_air_us.0, with_ae.output.pw_air_us.0);
+                    assert_eq!(
+                        result.output.pw_base_us.get(),
+                        with_ae.output.pw_base_us.get()
+                    );
+                    assert_eq!(
+                        result.output.pw_air_us.get(),
+                        with_ae.output.pw_air_us.get()
+                    );
                 }
                 "decay" => {
                     state.ae.active = true;
                     state.ae.pulse_us = 1000;
                     state.ae.decay_steps_remaining = 2;
-                    state.math.last_valid_load_kpa10 = Kpa10(1000);
-                    state.math.last_valid_map_kpa10 = Kpa10(1000);
+                    state.math.last_valid_load_kpa10 = Kpa10::new(1000);
+                    state.math.last_valid_map_kpa10 = Kpa10::new(1000);
                     let decay_step = spec_step(&case.calibration, case.input, &state);
 
                     let mut no_ae_state = LogicalState::default();
-                    no_ae_state.math.last_valid_load_kpa10 = Kpa10(1000);
-                    no_ae_state.math.last_valid_map_kpa10 = Kpa10(1000);
+                    no_ae_state.math.last_valid_load_kpa10 = Kpa10::new(1000);
+                    no_ae_state.math.last_valid_map_kpa10 = Kpa10::new(1000);
                     let no_ae = spec_step(&case.calibration, case.input, &no_ae_state);
 
                     let mut onset_state = LogicalState::default();
-                    onset_state.math.last_valid_load_kpa10 = Kpa10(0);
-                    onset_state.math.last_valid_map_kpa10 = Kpa10(1000);
+                    onset_state.math.last_valid_load_kpa10 = Kpa10::new(0);
+                    onset_state.math.last_valid_map_kpa10 = Kpa10::new(1000);
                     let onset = spec_step(&case.calibration, case.input, &onset_state);
 
-                    assert!(decay_step.output.pw_corr_us.0 > no_ae.output.pw_corr_us.0);
-                    assert!(decay_step.output.pw_corr_us.0 < onset.output.pw_corr_us.0);
+                    assert!(decay_step.output.pw_corr_us.get() > no_ae.output.pw_corr_us.get());
+                    assert!(decay_step.output.pw_corr_us.get() < onset.output.pw_corr_us.get());
                     assert_eq!(decay_step.next_state.ae.pulse_us, 800);
                     assert_eq!(decay_step.next_state.ae.decay_steps_remaining, 1);
-                    assert_eq!(result.output.pw_base_us.0, decay_step.output.pw_base_us.0);
-                    assert_eq!(result.output.pw_air_us.0, decay_step.output.pw_air_us.0);
+                    assert_eq!(
+                        result.output.pw_base_us.get(),
+                        decay_step.output.pw_base_us.get()
+                    );
+                    assert_eq!(
+                        result.output.pw_air_us.get(),
+                        decay_step.output.pw_air_us.get()
+                    );
                 }
                 _ => unreachable!("unexpected ae fixture variant"),
             }
@@ -1771,8 +1822,11 @@ pub fn assert_fixture_semantics(case: FixtureCase, result: &StepResult) {
                 assert!(entry.next_state.dfco_active);
                 assert_eq!(entry.next_state.dfco_qualify_counter, 1);
                 assert_eq!(entry.output.diagnostic, DiagnosticCode::FuelCutActive);
-                assert_eq!(entry.output.pw_corr_us.0, 0);
-                assert_eq!(result.output.pw_corr_us.0, entry.output.pw_corr_us.0);
+                assert_eq!(entry.output.pw_corr_us.get(), 0);
+                assert_eq!(
+                    result.output.pw_corr_us.get(),
+                    entry.output.pw_corr_us.get()
+                );
             }
             "exit" => {
                 let active_state = LogicalState {
@@ -1784,8 +1838,8 @@ pub fn assert_fixture_semantics(case: FixtureCase, result: &StepResult) {
                 assert!(!exit.next_state.dfco_active);
                 assert_eq!(exit.next_state.dfco_qualify_counter, 0);
                 assert_eq!(exit.output.diagnostic, DiagnosticCode::None);
-                assert!(exit.output.pw_corr_us.0 > 0);
-                assert_eq!(result.output.pw_base_us.0, exit.output.pw_base_us.0);
+                assert!(exit.output.pw_corr_us.get() > 0);
+                assert_eq!(result.output.pw_base_us.get(), exit.output.pw_base_us.get());
             }
             _ => unreachable!("unexpected dfco fixture variant"),
         },
@@ -1808,7 +1862,7 @@ pub fn assert_fixture_semantics(case: FixtureCase, result: &StepResult) {
                 assert_eq!(result.output.diagnostic, DiagnosticCode::SparkCutActive);
                 assert!(!result.output.fuel_cut);
                 assert!(result.output.spark_cut);
-                assert!(result.output.pw_corr_us.0 > 0);
+                assert!(result.output.pw_corr_us.get() > 0);
                 assert_eq!(result.output.advance_deg10_trim, -120);
                 assert!(result.next_state.rev_soft_active);
                 assert!(!result.next_state.rev_hard_active);
@@ -1822,7 +1876,7 @@ pub fn assert_fixture_semantics(case: FixtureCase, result: &StepResult) {
                 assert_eq!(result.output.diagnostic, DiagnosticCode::FuelCutActive);
                 assert!(result.output.fuel_cut);
                 assert!(result.output.spark_cut);
-                assert_eq!(result.output.pw_corr_us.0, 0);
+                assert_eq!(result.output.pw_corr_us.get(), 0);
                 assert!(result.next_state.rev_soft_active);
                 assert!(result.next_state.rev_hard_active);
                 // Both soft+hard active; fuel_cut gates actuated to 0.
@@ -1844,8 +1898,14 @@ pub fn assert_fixture_semantics(case: FixtureCase, result: &StepResult) {
                 assert_eq!(recovered.output.advance_deg10_trim, 0);
                 assert!(!recovered.next_state.rev_soft_active);
                 assert!(!recovered.next_state.rev_hard_active);
-                assert_eq!(result.output.pw_base_us.0, recovered.output.pw_base_us.0);
-                assert_eq!(result.output.pw_air_us.0, recovered.output.pw_air_us.0);
+                assert_eq!(
+                    result.output.pw_base_us.get(),
+                    recovered.output.pw_base_us.get()
+                );
+                assert_eq!(
+                    result.output.pw_air_us.get(),
+                    recovered.output.pw_air_us.get()
+                );
                 // RPM=3500 is below soft(4000) and hard(5000); no cuts, no torque limiting.
                 assert_eq!(recovered.output.torque_request_x1000, 500);
                 assert_eq!(recovered.output.torque_allowed_x1000, 500);
@@ -1875,7 +1935,7 @@ pub fn assert_fixture_semantics(case: FixtureCase, result: &StepResult) {
                 let warm = spec_step(
                     &case.calibration,
                     InputSnapshot {
-                        clt_c10: TempC10(800),
+                        clt_c10: TempC10::new(800),
                         ..case.input
                     },
                     &seeded_state,
@@ -1883,8 +1943,8 @@ pub fn assert_fixture_semantics(case: FixtureCase, result: &StepResult) {
                 assert_eq!(cold.next_state.idle_integrator_state.acc, 123);
                 assert!(cold.next_state.idle_integrator_state.frozen);
                 assert!(cold.output.idle_duty_x1000 < warm.output.idle_duty_x1000);
-                assert_eq!(result.output.pw_base_us.0, cold.output.pw_base_us.0);
-                assert_eq!(result.output.pw_air_us.0, cold.output.pw_air_us.0);
+                assert_eq!(result.output.pw_base_us.get(), cold.output.pw_base_us.get());
+                assert_eq!(result.output.pw_air_us.get(), cold.output.pw_air_us.get());
             }
             _ => unreachable!("unexpected idle fixture variant"),
         },
@@ -2090,24 +2150,24 @@ pub fn assert_fixture_semantics(case: FixtureCase, result: &StepResult) {
             match case.variant {
                 "sync_acquire" => {
                     assert_eq!(step.sync_state, TriggerSyncState::Synced);
-                    assert_eq!(step.angle_deg10.0, 0);
-                    assert!(step.rpm_estimate.0 > 0);
+                    assert_eq!(step.angle_deg10.get(), 0);
+                    assert!(step.rpm_estimate.get() > 0);
                     assert!(!step.cancel_pending_events);
                 }
                 "sync_loss" => {
                     assert_eq!(step.sync_state, TriggerSyncState::SyncLoss);
-                    assert_eq!(step.rpm_estimate.0, 0);
+                    assert_eq!(step.rpm_estimate.get(), 0);
                     assert!(step.cancel_pending_events);
                 }
                 "resync" => {
                     assert_eq!(step.sync_state, TriggerSyncState::Synced);
-                    assert_eq!(step.angle_deg10.0, 0);
-                    assert!(step.rpm_estimate.0 > 0);
+                    assert_eq!(step.angle_deg10.get(), 0);
+                    assert!(step.rpm_estimate.get() > 0);
                     assert!(!step.cancel_pending_events);
                 }
                 "stall" => {
                     assert_eq!(step.sync_state, TriggerSyncState::SyncLoss);
-                    assert_eq!(step.rpm_estimate.0, 0);
+                    assert_eq!(step.rpm_estimate.get(), 0);
                     assert_eq!(step.state.stall_counter, 1);
                     assert!(step.cancel_pending_events);
                 }

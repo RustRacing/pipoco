@@ -22,8 +22,8 @@ pub fn dfco_step(
     }
 
     if state.dfco_active {
-        let keep_active =
-            input.rpm.0 > cal.0.dfco_exit_rpm.0 && input.tps_x100 <= cal.0.dfco_exit_tps_x100;
+        let keep_active = input.rpm.get() > cal.0.dfco_exit_rpm.get()
+            && input.tps_x100 <= cal.0.dfco_exit_tps_x100;
         let active = keep_active;
         return DfcoResult {
             fuel_cut: active,
@@ -32,9 +32,9 @@ pub fn dfco_step(
         };
     }
 
-    let qualify_now = input.rpm.0 >= cal.0.dfco_entry_rpm.0
+    let qualify_now = input.rpm.get() >= cal.0.dfco_entry_rpm.get()
         && input.tps_x100 <= cal.0.dfco_entry_tps_x100
-        && input.map_kpa10.0 <= cal.0.dfco_entry_map_kpa10.0;
+        && input.map_kpa10.get() <= cal.0.dfco_entry_map_kpa10.get();
     if !qualify_now {
         return DfcoResult {
             fuel_cut: false,
@@ -56,21 +56,20 @@ pub fn dfco_step(
 mod tests {
     use super::*;
     use crate::{
-        default_reference_calibration, AfrOverride, EngineMode, Kpa10, LogicalState, Micros,
-        Millivolts, SyncState,
+        default_reference_calibration, AfrOverride, EngineMode, LogicalState, Millivolts, SyncState,
     };
 
     fn qualifying_input() -> InputSnapshot {
         InputSnapshot {
-            t_us: Micros(0),
-            rpm: crate::Rpm(3000),
-            map_kpa10: Kpa10(350),
-            load_kpa10: Kpa10(350),
+            t_us: crate::Micros::new(0),
+            rpm: crate::Rpm::new(3000),
+            map_kpa10: crate::Kpa10::new(350),
+            load_kpa10: crate::Kpa10::new(350),
             tps_x100: 0,
-            clt_c10: crate::TempC10(850),
-            iat_c10: crate::TempC10(250),
-            baro_kpa10: Kpa10(1000),
-            vbatt_mv: Millivolts(12_000),
+            clt_c10: crate::TempC10::new(850),
+            iat_c10: crate::TempC10::new(250),
+            baro_kpa10: crate::Kpa10::new(1000),
+            vbatt_mv: Millivolts::new(12_000),
             knock_intensity_x100: 0,
             launch_armed: false,
             flat_shift_armed: false,
@@ -85,11 +84,11 @@ mod tests {
     #[test]
     fn enters_after_delay_cycles() {
         let mut cal = default_reference_calibration();
-        cal.0.dfco_entry_rpm = crate::Rpm(2000);
-        cal.0.dfco_exit_rpm = crate::Rpm(1800);
+        cal.0.dfco_entry_rpm = crate::Rpm::new(2000);
+        cal.0.dfco_exit_rpm = crate::Rpm::new(1800);
         cal.0.dfco_entry_tps_x100 = 200;
         cal.0.dfco_exit_tps_x100 = 300;
-        cal.0.dfco_entry_map_kpa10 = Kpa10(500);
+        cal.0.dfco_entry_map_kpa10 = crate::Kpa10::new(500);
         cal.0.dfco_delay_cycles = 2;
 
         let input = qualifying_input();
@@ -110,11 +109,11 @@ mod tests {
     #[test]
     fn exits_when_exit_hysteresis_breaks() {
         let mut cal = default_reference_calibration();
-        cal.0.dfco_entry_rpm = crate::Rpm(2000);
-        cal.0.dfco_exit_rpm = crate::Rpm(1800);
+        cal.0.dfco_entry_rpm = crate::Rpm::new(2000);
+        cal.0.dfco_exit_rpm = crate::Rpm::new(1800);
         cal.0.dfco_entry_tps_x100 = 200;
         cal.0.dfco_exit_tps_x100 = 300;
-        cal.0.dfco_entry_map_kpa10 = Kpa10(500);
+        cal.0.dfco_entry_map_kpa10 = crate::Kpa10::new(500);
         cal.0.dfco_delay_cycles = 1;
 
         let mut state = LogicalState {

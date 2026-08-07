@@ -6,9 +6,9 @@ pub fn deadtime_lookup(
     vbat_mv: Millivolts,
     fuel_pressure_kpa10: Kpa10,
 ) -> PulseWidthUs {
-    PulseWidthUs(bilerp_u16(
+    PulseWidthUs::new(bilerp_u16(
         deadtime_table_us,
-        crate::Rpm(vbat_mv.0),
+        crate::Rpm::new(vbat_mv.get()),
         fuel_pressure_kpa10,
     ) as u32)
 }
@@ -47,21 +47,21 @@ mod tests {
     #[test]
     fn deadtime_zero_voltage_edge_clamps_to_min_axis() {
         let table = deadtime_table();
-        let deadtime = deadtime_lookup(&table, Millivolts(0), Kpa10(1000));
-        assert_eq!(deadtime, PulseWidthUs(100));
+        let deadtime = deadtime_lookup(&table, Millivolts::new(0), Kpa10::new(1000));
+        assert_eq!(deadtime, PulseWidthUs::new(100));
     }
 
     #[test]
     fn deadtime_saturated_voltage_edge_clamps_to_max_axis() {
         let table = deadtime_table();
-        let deadtime = deadtime_lookup(&table, Millivolts(20_000), Kpa10(3000));
-        assert_eq!(deadtime, PulseWidthUs(500));
+        let deadtime = deadtime_lookup(&table, Millivolts::new(20_000), Kpa10::new(3000));
+        assert_eq!(deadtime, PulseWidthUs::new(500));
     }
 
     #[test]
     fn deadtime_interpolation_midpoint_uses_bilinear_floor() {
         let table = deadtime_table();
-        let deadtime = deadtime_lookup(&table, Millivolts(7000), Kpa10(2000));
-        assert_eq!(deadtime, PulseWidthUs(275));
+        let deadtime = deadtime_lookup(&table, Millivolts::new(7000), Kpa10::new(2000));
+        assert_eq!(deadtime, PulseWidthUs::new(275));
     }
 }

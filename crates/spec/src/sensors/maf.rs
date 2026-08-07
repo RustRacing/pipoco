@@ -1,5 +1,6 @@
 use crate::{
     interp::{find_segment, lerp_u16},
+    numeric::clamp_u16,
     Axis16,
 };
 
@@ -16,16 +17,6 @@ const MAF_COUNTS_AXIS: Axis16 = Axis16 {
 const MAF_FLOW_X100: [u16; 16] = [
     0, 120, 280, 500, 780, 1120, 1520, 1980, 2520, 3150, 3880, 4720, 5680, 6760, 7960, 9300,
 ];
-
-const fn clamp_u16(value: u16, lo: u16, hi: u16) -> u16 {
-    if value < lo {
-        lo
-    } else if value > hi {
-        hi
-    } else {
-        value
-    }
-}
 
 pub fn maf_from_counts(adc_counts: u16) -> u16 {
     let counts = clamp_u16(adc_counts, ADC_MIN, ADC_MAX);

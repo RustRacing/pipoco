@@ -132,6 +132,11 @@ Kani and Verus proofs are activated by their tools' cfgs (`cfg(kani)` and
 publish empty proof features; use the tool commands in this file as the proof
 entrypoints.
 
+The CRC32C constant stub (`#[cfg(kani)] fn crc32c`) was removed (review 004):
+Kani now proves the real bit-twiddling implementation, which is also what
+shipping firmware computes. The `.github/workflows/formal-tlc.yml` `kani-proofs`
+job runs `cargo kani -p ecu-spec` on every PR/push (review 018).
+
 ---
 
 ## Verus Proof Results
