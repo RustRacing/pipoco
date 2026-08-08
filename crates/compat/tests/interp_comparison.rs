@@ -1,59 +1,74 @@
+//! Exact-value tests for the shared bilinear table interpolation.
+//!
+//! These assert the interpolated value itself, not that it merely lands
+//! somewhere inside the corner hull. A hull-membership check passes for almost
+//! any wrong answer -- including a swapped interpolation axis -- so it cannot
+//! distinguish a working lookup from a broken one.
+//!
+//! Expected values are derived from the documented rounding formula
+//! (`(a * (255 - frac) + b * frac + 127) / 255`, applied along `frac_x` and
+//! then across `frac_y`), not captured from a run of the implementation.
+
 use ecu_compat::interp::{bilinear_interpolate_i16, bilinear_interpolate_u16};
 
+/// Fuel-shaped corners: (20 kPa, 500 rpm) .. (30 kPa, 1000 rpm).
+const V00: u16 = 1000;
+const V01: u16 = 2000;
+const V10: u16 = 3000;
+const V11: u16 = 4000;
+
 #[test]
-fn bilinear_vs_corner_within_bounds_fuel() {
-    // Corners for first cell (load 20/30 kPa, rpm 500/1000)
-    let v00: u16 = 1000; // (20,500)
-    let v01: u16 = 2000; // (20,1000)
-    let v10: u16 = 3000; // (30,500)
-    let v11: u16 = 4000; // (30,1000)
+fn bilinear_u16_returns_each_corner_exactly() {
+    assert_eq!(bilinear_interpolate_u16(V00, V01, V10, V11, 0, 0), V00);
+    assert_eq!(bilinear_interpolate_u16(V00, V01, V10, V11, 255, 0), V01);
+    assert_eq!(bilinear_interpolate_u16(V00, V01, V10, V11, 0, 255), V10);
+    assert_eq!(bilinear_interpolate_u16(V00, V01, V10, V11, 255, 255), V11);
+}
 
-    // Midpoint (frac_x=frac_y=128)
-    let bil = bilinear_interpolate_u16(v00, v01, v10, v11, 128, 128);
+/// `frac_x` must move along `v00 -> v01` and `frac_y` across to `v10 -> v11`.
+/// Asymmetric fractions are what distinguish the two axes; the midpoint alone
+/// is identical under a swap and proves nothing.
+#[test]
+fn bilinear_u16_axes_are_not_interchangeable() {
+    let x_only = bilinear_interpolate_u16(V00, V01, V10, V11, 255, 0);
+    let y_only = bilinear_interpolate_u16(V00, V01, V10, V11, 0, 255);
+    assert_eq!(x_only, 2000, "frac_x must interpolate v00 -> v01");
+    assert_eq!(y_only, 3000, "frac_y must interpolate v00 -> v10");
 
-    let min = v00.min(v01).min(v10).min(v11);
-    let max = v00.max(v01).max(v10).max(v11);
-
-    // Bilinear stays within corner range
-    assert!((min..=max).contains(&bil), "bil={bil}");
-
-    // Old nearest-neighbor (lower-left corner for cell) equals v00
-    let nn = v00;
-    assert!((min..=max).contains(&nn), "nn={nn}");
-
-    // Delta bounded by half the sum of edge deltas (loose check)
-    let dx = (v01 as i32 - v00 as i32).unsigned_abs();
-    let dy = (v10 as i32 - v00 as i32).unsigned_abs();
-    let delta = bil.abs_diff(nn);
-    assert!(
-        delta as u32 <= (dx + dy) / 2 + 8,
-        "delta={delta}, bound={}",
-        (dx + dy) / 2
-    );
+    assert_eq!(bilinear_interpolate_u16(V00, V01, V10, V11, 64, 192), 2757);
 }
 
 #[test]
-fn bilinear_vs_corner_within_bounds_ign() {
-    // Corners for ignition timing (deg*1)
-    let v00: i16 = 10;
-    let v01: i16 = 20;
-    let v10: i16 = 30;
-    let v11: i16 = 40;
+fn bilinear_u16_midpoint_rounds_as_documented() {
+    assert_eq!(bilinear_interpolate_u16(V00, V01, V10, V11, 128, 128), 2506);
+}
 
-    let bil = bilinear_interpolate_i16(v00, v01, v10, v11, 128, 128);
-    let min = v00.min(v01).min(v10).min(v11);
-    let max = v00.max(v01).max(v10).max(v11);
-    assert!((min..=max).contains(&bil), "bil={bil}");
+#[test]
+fn bilinear_i16_returns_each_corner_exactly() {
+    assert_eq!(bilinear_interpolate_i16(10, 20, 30, 40, 0, 0), 10);
+    assert_eq!(bilinear_interpolate_i16(10, 20, 30, 40, 255, 0), 20);
+    assert_eq!(bilinear_interpolate_i16(10, 20, 30, 40, 0, 255), 30);
+    assert_eq!(bilinear_interpolate_i16(10, 20, 30, 40, 255, 255), 40);
+}
 
-    let nn = v00; // lower-left
-    assert!((min..=max).contains(&nn));
+#[test]
+fn bilinear_i16_axes_are_not_interchangeable() {
+    assert_eq!(bilinear_interpolate_i16(10, 20, 30, 40, 64, 192), 28);
+    assert_eq!(bilinear_interpolate_i16(10, 20, 30, 40, 128, 128), 25);
+}
 
-    let dx = (v01 - v00).unsigned_abs() as u32;
-    let dy = (v10 - v00).unsigned_abs() as u32;
-    let delta = (bil - nn).unsigned_abs() as u32;
-    assert!(
-        delta <= (dx + dy) / 2 + 1,
-        "delta={delta}, bound={}",
-        (dx + dy) / 2
-    );
+/// Ignition advance is signed and straddles zero, so cover negative corners.
+///
+/// Rounding is asymmetric about zero: the `+127` term combined with Rust's
+/// truncate-toward-zero division biases negative results upward, so a negative
+/// corner comes back 2 counts high (-98 for -100) while positive corners are
+/// exact. This pins the behavior as it actually is; changing it would shift
+/// ignition advance on the negative side of every table.
+#[test]
+fn bilinear_i16_rounding_is_asymmetric_about_zero() {
+    assert_eq!(bilinear_interpolate_i16(-100, -50, 50, 100, 0, 0), -98);
+    assert_eq!(bilinear_interpolate_i16(-100, -50, 50, 100, 255, 0), -48);
+    assert_eq!(bilinear_interpolate_i16(-100, -50, 50, 100, 0, 255), 50);
+    assert_eq!(bilinear_interpolate_i16(-100, -50, 50, 100, 255, 255), 100);
+    assert_eq!(bilinear_interpolate_i16(-100, -50, 50, 100, 128, 128), 1);
 }
