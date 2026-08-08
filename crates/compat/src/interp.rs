@@ -42,12 +42,17 @@ pub fn bilinear_interpolate_u16(
     interpolate_u16(v0, v1, frac_y)
 }
 
+/// Rounds half away from zero. Integer division truncates toward zero, so a
+/// fixed `+127` would round negative results the wrong way and a table corner
+/// on the retard side would not come back exactly (-100 returned -99). The
+/// bias therefore follows the sign; positive results are unaffected.
 pub fn interpolate_i16(a: i16, b: i16, frac: u8) -> i16 {
     let a32 = a as i32;
     let b32 = b as i32;
     let frac32 = frac as i32;
-    let num = a32 * (255 - frac32) + b32 * frac32 + 127;
-    (num / 255) as i16
+    let scaled = a32 * (255 - frac32) + b32 * frac32;
+    let half = if scaled >= 0 { 127 } else { -127 };
+    ((scaled + half) / 255) as i16
 }
 
 pub fn bilinear_interpolate_i16(

@@ -58,17 +58,28 @@ fn bilinear_i16_axes_are_not_interchangeable() {
 }
 
 /// Ignition advance is signed and straddles zero, so cover negative corners.
-///
-/// Rounding is asymmetric about zero: the `+127` term combined with Rust's
-/// truncate-toward-zero division biases negative results upward, so a negative
-/// corner comes back 2 counts high (-98 for -100) while positive corners are
-/// exact. This pins the behavior as it actually is; changing it would shift
-/// ignition advance on the negative side of every table.
+/// Rounding is half-away-from-zero, which makes retard-side corners exact in
+/// the same way advance-side ones are.
 #[test]
-fn bilinear_i16_rounding_is_asymmetric_about_zero() {
-    assert_eq!(bilinear_interpolate_i16(-100, -50, 50, 100, 0, 0), -98);
-    assert_eq!(bilinear_interpolate_i16(-100, -50, 50, 100, 255, 0), -48);
+fn bilinear_i16_returns_negative_corners_exactly() {
+    assert_eq!(bilinear_interpolate_i16(-100, -50, 50, 100, 0, 0), -100);
+    assert_eq!(bilinear_interpolate_i16(-100, -50, 50, 100, 255, 0), -50);
     assert_eq!(bilinear_interpolate_i16(-100, -50, 50, 100, 0, 255), 50);
     assert_eq!(bilinear_interpolate_i16(-100, -50, 50, 100, 255, 255), 100);
-    assert_eq!(bilinear_interpolate_i16(-100, -50, 50, 100, 128, 128), 1);
+    assert_eq!(bilinear_interpolate_i16(-100, -50, 50, 100, 128, 128), 0);
+}
+
+/// A table entirely on the retard side must round like one entirely on the
+/// advance side -- the sign of the value must not change the magnitude of the
+/// rounding error.
+#[test]
+fn bilinear_i16_rounding_is_symmetric_about_zero() {
+    for (fx, fy) in [(0u8, 0u8), (255, 0), (0, 255), (255, 255), (128, 128)] {
+        let positive = bilinear_interpolate_i16(200, 150, 100, 50, fx, fy);
+        let negative = bilinear_interpolate_i16(-200, -150, -100, -50, fx, fy);
+        assert_eq!(
+            positive, -negative,
+            "mirrored tables must round to mirrored values at ({fx}, {fy})"
+        );
+    }
 }
