@@ -617,6 +617,7 @@ name = "ecu-scheduler"
 version = "0.1.0"
 dependencies = [
  "ecu-board-api",
+ "ecu-calibration",
  "ecu-domain",
  "ecu-io",
  "ecu-runtime",

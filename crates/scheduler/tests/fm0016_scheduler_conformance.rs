@@ -1,86 +1,260 @@
 //! Real-execution FM0016 conformance tests for ecu-scheduler.
 //!
 //! Drives `SchedulerState` through its public API for every FM0016 fixture
-//! and verifies that the scheduler is driven with the correct product runtime
-//! fuel and schedule observations.
+//! using the product runtime semantic evaluators, and checks the resulting
+//! scheduler surface against the INDEPENDENT spec oracle
+//! (`ecu_test_fixtures::fixture_matrix::oracle_result`).
 //!
-//! Key insight: the scheduler owns the deadline/channel/event-order logic.
-//! It does NOT own the angle computation - that comes from runtime's fuel/ignition
-//! planning. The product runtime semantic evaluators (runtime_semantic_evaluate_fuel
-//! and runtime_semantic_evaluate_schedule) provide the authoritative product observations.
-//!
-//! This test:
-//!   1. Builds product fuel observations via runtime_semantic_evaluate_fuel
-//!   2. Builds product schedule observations via runtime_semantic_evaluate_schedule
-//!   3. Drives SchedulerState with the product events
-//!   4. Verifies scheduler counts and active groups match product event presence
-//!   5. Keeps cancellation/suspend assertions
+//! The scheduler owns the deadline/channel/event-order logic; it does not own
+//! the angle computation. So the drive path is the product runtime, but every
+//! expectation - counts, window durations, advance, and the angle/event data
+//! the scheduler is fed - is derived from the spec oracle. A semantic
+//! regression in the runtime evaluators therefore fails here instead of being
+//! silently mirrored into the expectations.
 
 #![cfg(test)]
 
-use ecu_domain::{Degrees10, DwellUs, Micros, PulseWidthUs};
+use ecu_calibration::{
+    ExpertIgnitionMode, ExpertInjectionLayout, ExpertTriggerCalibration, ExpertUnlock,
+    SecondaryTriggerMode, TriggerAuthority,
+};
+use ecu_domain::{
+    AbsoluteTimeAuthority, CrankSyncState, Degrees10, DwellUs, EngineTimeAuthority, Micros,
+    PhaseSyncState, PulseWidthUs, SyncState as DomainSyncState,
+};
 use ecu_runtime::semantic::{
-    conformance::runtime_semantic_evaluate_schedule, runtime_semantic_evaluate_fuel,
-    RuntimeSemanticFuelObservations, RuntimeSemanticScheduleEventKind,
+    conformance::runtime_semantic_evaluate_schedule_with_authority, runtime_semantic_evaluate_fuel,
+    RuntimeSemanticFuelObservations, RuntimeSemanticInputSnapshot,
+    RuntimeSemanticScheduleEventKind, RuntimeSemanticScheduleObservations,
 };
 use ecu_scheduler::test_support::{observe_scheduler, SchedulerObservedSurface};
 use ecu_scheduler::{
     ChannelId, ExclusiveChannel, IgnitionPlan, InjectionPlan, OutputGroup, SchedulerMode,
     SchedulerState,
 };
+use ecu_spec::EventKind;
+use ecu_test_fixtures::fixture_matrix::EPS_ANGLE_DEG10;
 use ecu_test_fixtures::semantic::{
     build_semantic_calibration, build_semantic_schedule_calibration, semantic_state_for_fixture,
     to_semantic_input,
 };
 
 // --------------------------------------------------------------------------
-// Product observation helpers
+// Oracle expectations (independent of the runtime evaluators)
 // --------------------------------------------------------------------------
+
+/// What the spec oracle says the scheduler must end up holding for a fixture.
+struct OracleExpectation {
+    /// Number of injector channels the oracle expects to be reserved.
+    injection_channels: usize,
+    /// Number of ignition channels the oracle expects to be reserved.
+    ignition_channels: usize,
+    /// Injector pulse width in microseconds.
+    pw_corr_us: u32,
+    /// Coil dwell in microseconds.
+    dwell_us: u32,
+    /// Spark advance in deg10.
+    spark_advance_deg10: i16,
+}
+
+fn oracle_expectation(spec: &ecu_spec::StepResult) -> OracleExpectation {
+    let mut injector_cylinders: u64 = 0;
+    let mut ignition_cylinders: u64 = 0;
+    for idx in 0..spec.output.events.len as usize {
+        let evt = spec.output.events.events[idx];
+        let bit = 1u64 << (evt.cylinder.get() as u32 % 64);
+        match evt.kind {
+            EventKind::InjectionOpen => injector_cylinders |= bit,
+            EventKind::CoilFire => ignition_cylinders |= bit,
+            _ => {}
+        }
+    }
+    OracleExpectation {
+        injection_channels: injector_cylinders.count_ones() as usize,
+        ignition_channels: ignition_cylinders.count_ones() as usize,
+        pw_corr_us: spec.output.pw_corr_us.get(),
+        dwell_us: spec.output.dwell_us.get(),
+        spark_advance_deg10: spec.output.spark_advance_deg10.get(),
+    }
+}
+
+/// Assert that the runtime observations used to drive the scheduler agree with
+/// the oracle. Without this, the scheduler test is blind to any semantic drift
+/// in its own drive path.
+fn assert_drive_matches_oracle(
+    case: &ecu_test_fixtures::fixture_matrix::FixtureCase,
+    spec: &ecu_spec::StepResult,
+    fuel_obs: &RuntimeSemanticFuelObservations,
+    sched_obs: &RuntimeSemanticScheduleObservations,
+) {
+    let label = |what: &str| format!("{} [{}/{}]", what, case.fixture, case.variant);
+
+    assert_eq!(
+        fuel_obs.pw_corr_us,
+        spec.output.pw_corr_us.get(),
+        "{}",
+        label("pw_corr_us driving the scheduler must match the oracle")
+    );
+    assert_eq!(
+        sched_obs.dwell_us,
+        spec.output.dwell_us.get(),
+        "{}",
+        label("dwell_us driving the scheduler must match the oracle")
+    );
+    assert_eq!(
+        sched_obs.spark_advance_deg10,
+        spec.output.spark_advance_deg10.get(),
+        "{}",
+        label("spark_advance_deg10 driving the scheduler must match the oracle")
+    );
+    // The oracle fills per-cylinder value arrays but leaves `count` at its
+    // default, so the live cylinder count comes from the calibration-derived
+    // runtime observation.
+    for cyl in 0..sched_obs.soi_deg10.count as usize {
+        for (what, observed, expected) in [
+            (
+                "soi_deg10",
+                sched_obs.soi_deg10.values[cyl],
+                spec.output.soi_deg10.values[cyl],
+            ),
+            (
+                "eoi_deg10",
+                sched_obs.eoi_deg10.values[cyl],
+                spec.output.eoi_deg10.values[cyl],
+            ),
+            (
+                "spark_deg10",
+                sched_obs.spark_deg10.values[cyl],
+                spec.output.spark_deg10.values[cyl],
+            ),
+            (
+                "dwell_start_deg10",
+                sched_obs.dwell_start_deg10.values[cyl],
+                spec.output.dwell_start_deg10.values[cyl],
+            ),
+        ] {
+            assert!(
+                observed.abs_diff(expected) <= EPS_ANGLE_DEG10,
+                "{}: cyl={cyl} observed={observed} expected={expected}",
+                label(what)
+            );
+        }
+    }
+
+    for (kind, spec_kind) in [
+        (
+            RuntimeSemanticScheduleEventKind::InjectionOpen,
+            EventKind::InjectionOpen,
+        ),
+        (
+            RuntimeSemanticScheduleEventKind::InjectionClose,
+            EventKind::InjectionClose,
+        ),
+        (
+            RuntimeSemanticScheduleEventKind::CoilChargeStart,
+            EventKind::CoilChargeStart,
+        ),
+        (
+            RuntimeSemanticScheduleEventKind::CoilFire,
+            EventKind::CoilFire,
+        ),
+    ] {
+        let observed = (0..sched_obs.events.len as usize)
+            .filter(|idx| sched_obs.events.events[*idx].kind == kind)
+            .count();
+        let expected = (0..spec.output.events.len as usize)
+            .filter(|idx| spec.output.events.events[*idx].kind == spec_kind)
+            .count();
+        assert_eq!(
+            observed,
+            expected,
+            "{}: {:?}",
+            label("event count must match the oracle"),
+            kind
+        );
+    }
+}
+
+// --------------------------------------------------------------------------
+// Product drive path
+// --------------------------------------------------------------------------
+
+/// Result of driving the scheduler with the product runtime observations.
+struct DrivenScheduler {
+    surface: SchedulerObservedSurface,
+    fuel_obs: RuntimeSemanticFuelObservations,
+    sched_obs: RuntimeSemanticScheduleObservations,
+    /// Advance carried by the last accepted ignition plan, as the scheduler
+    /// returned it.
+    accepted_ignition_advance: Option<i16>,
+}
+
+/// Sequential-authority stand-in matching the ecu-runtime FM0016 harness, so
+/// the scheduler is driven with the same event set the runtime conformance
+/// suite validates.
+fn semantic_schedule_authority(input: RuntimeSemanticInputSnapshot) -> EngineTimeAuthority {
+    if matches!(input.sync, DomainSyncState::Locked { .. }) {
+        let calibration = ExpertTriggerCalibration {
+            expert_unlock: ExpertUnlock::Unlocked,
+            authority: TriggerAuthority::ExpertManual,
+            profile_identity: 0x4D35_3054,
+            profile_hash: 0xA5A5_1234,
+            secondary_trigger_mode: SecondaryTriggerMode::SingleToothCam,
+            ignition_mode: ExpertIgnitionMode::SequentialCop,
+            injection_layout: ExpertInjectionLayout::Sequential,
+            ..ExpertTriggerCalibration::default()
+        };
+        let startup_authority = EngineTimeAuthority::new(
+            CrankSyncState::PrimaryLocked,
+            PhaseSyncState::CamValidated720,
+            AbsoluteTimeAuthority::GeometryOnly,
+            EngineTimeAuthority::MAX_CONFIDENCE_X1000,
+            0,
+        );
+
+        calibration
+            .to_runtime_engine_time_authority(startup_authority)
+            .expect("validated manual runtime authority")
+    } else {
+        EngineTimeAuthority::none()
+    }
+}
 
 /// Count injection events for a given cylinder in the schedule observations.
 fn count_injection_events_for_cylinder(
-    sched_obs: &ecu_runtime::semantic::RuntimeSemanticScheduleObservations,
+    sched_obs: &RuntimeSemanticScheduleObservations,
     cylinder: u8,
 ) -> usize {
-    let mut count = 0;
-    for i in 0..sched_obs.events.len as usize {
-        let evt = &sched_obs.events.events[i];
-        if evt.cylinder == cylinder
-            && matches!(evt.kind, RuntimeSemanticScheduleEventKind::InjectionOpen)
-        {
-            count += 1;
-        }
-    }
-    count
+    (0..sched_obs.events.len as usize)
+        .filter(|idx| {
+            let evt = &sched_obs.events.events[*idx];
+            evt.cylinder == cylinder
+                && matches!(evt.kind, RuntimeSemanticScheduleEventKind::InjectionOpen)
+        })
+        .count()
 }
 
 /// Count ignition events for a given cylinder in the schedule observations.
 fn count_ignition_events_for_cylinder(
-    sched_obs: &ecu_runtime::semantic::RuntimeSemanticScheduleObservations,
+    sched_obs: &RuntimeSemanticScheduleObservations,
     cylinder: u8,
 ) -> usize {
-    let mut count = 0;
-    for i in 0..sched_obs.events.len as usize {
-        let evt = &sched_obs.events.events[i];
-        if evt.cylinder == cylinder
-            && matches!(evt.kind, RuntimeSemanticScheduleEventKind::CoilFire)
-        {
-            count += 1;
-        }
-    }
-    count
+    (0..sched_obs.events.len as usize)
+        .filter(|idx| {
+            let evt = &sched_obs.events.events[*idx];
+            evt.cylinder == cylinder
+                && matches!(evt.kind, RuntimeSemanticScheduleEventKind::CoilFire)
+        })
+        .count()
 }
 
-/// Run scheduler for a fixture case using product APIs only.
-/// Fuel and schedule observations come from the runtime semantic evaluators,
-/// not from the spec oracle.
+/// Run the scheduler for a fixture case using product APIs only.
 fn run_scheduler_for_case(
     case: &ecu_test_fixtures::fixture_matrix::FixtureCase,
-) -> SchedulerObservedSurface {
+) -> DrivenScheduler {
     let mut state = SchedulerState::new();
     let input = case.input;
 
-    // Build product fuel observations via runtime_semantic_evaluate_fuel
     let semantic_cal = build_semantic_calibration(&case.calibration);
     let semantic_input = to_semantic_input(&case.input);
     let fuel_obs: RuntimeSemanticFuelObservations = runtime_semantic_evaluate_fuel(
@@ -90,24 +264,22 @@ fn run_scheduler_for_case(
     )
     .expect("fuel evaluation should succeed");
 
-    // Build product schedule observations via runtime_semantic_evaluate_schedule
     let schedule_cal = build_semantic_schedule_calibration(&case.calibration);
-    let sched_obs = runtime_semantic_evaluate_schedule(&schedule_cal, semantic_input, fuel_obs)
-        .expect("schedule evaluation should succeed");
+    let sched_obs = runtime_semantic_evaluate_schedule_with_authority(
+        &schedule_cal,
+        semantic_input,
+        fuel_obs,
+        semantic_schedule_authority(semantic_input),
+    )
+    .expect("schedule evaluation should succeed");
 
-    // Drive scheduler using product events
-    // Use timestamps from input
     let now = Micros::new(input.t_us.get());
     let start = Micros::new(input.t_us.get().saturating_add(100));
+    let mut accepted_ignition_advance = None;
 
-    // For each cylinder with injection events, schedule an injection
-    // For each cylinder with ignition events, schedule an ignition
     let cyl_count = sched_obs.soi_deg10.count as usize;
     for cyl in 0..cyl_count {
-        // Check if we have injection events for this cylinder
-        let inj_count = count_injection_events_for_cylinder(&sched_obs, cyl as u8);
-        if inj_count > 0 {
-            // schedule injection using pw_corr_us
+        if count_injection_events_for_cylinder(&sched_obs, cyl as u8) > 0 {
             let duration = fuel_obs.pw_corr_us.max(1);
             let end = Micros::new(start.get().saturating_add(duration));
             let inj_plan = InjectionPlan {
@@ -117,21 +289,26 @@ fn run_scheduler_for_case(
             let _ = state.schedule_injection(now, start, end, inj_plan);
         }
 
-        // Check if we have ignition events for this cylinder
-        let ign_count = count_ignition_events_for_cylinder(&sched_obs, cyl as u8);
-        if ign_count > 0 {
+        if count_ignition_events_for_cylinder(&sched_obs, cyl as u8) > 0 {
             let duration = sched_obs.dwell_us.max(1) as u16;
             let end = Micros::new(start.get().saturating_add(duration as u32));
             let ign_plan = IgnitionPlan {
                 output: ExclusiveChannel::new(OutputGroup::Ignition, ChannelId::new(cyl as u8 + 1)),
                 dwell: DwellUs::new(duration),
-                advance: Degrees10::new(sched_obs.spark_advance_deg10 as i16),
+                advance: Degrees10::new(sched_obs.spark_advance_deg10),
             };
-            let _ = state.schedule_ignition(now, start, end, ign_plan);
+            if let Ok(timed) = state.schedule_ignition(now, start, end, ign_plan) {
+                accepted_ignition_advance = Some(timed.plan.advance.get());
+            }
         }
     }
 
-    observe_scheduler(&state)
+    DrivenScheduler {
+        surface: observe_scheduler(&state),
+        fuel_obs,
+        sched_obs,
+        accepted_ignition_advance,
+    }
 }
 
 // --------------------------------------------------------------------------
@@ -139,65 +316,30 @@ fn run_scheduler_for_case(
 // --------------------------------------------------------------------------
 
 fn conformance_test(case: &ecu_test_fixtures::fixture_matrix::FixtureCase) {
-    // Verify fixture semantics via spec oracle (ONE call for semantic verification only)
     let spec = ecu_test_fixtures::fixture_matrix::oracle_result(*case);
     ecu_test_fixtures::fixture_matrix::assert_fixture_semantics(*case, &spec);
 
-    // Run product scheduler to get observed data
-    let obs = run_scheduler_for_case(case);
+    let driven = run_scheduler_for_case(case);
+    let obs = driven.surface;
 
-    // Build product observations for comparison
-    let semantic_cal = build_semantic_calibration(&case.calibration);
-    let semantic_input = to_semantic_input(&case.input);
-    let fuel_obs = runtime_semantic_evaluate_fuel(
-        &semantic_cal,
-        semantic_input,
-        semantic_state_for_fixture(case),
-    )
-    .expect("fuel evaluation should succeed");
+    assert_drive_matches_oracle(case, &spec, &driven.fuel_obs, &driven.sched_obs);
 
-    let schedule_cal = build_semantic_schedule_calibration(&case.calibration);
-    let sched_obs = runtime_semantic_evaluate_schedule(&schedule_cal, semantic_input, fuel_obs)
-        .expect("schedule evaluation should succeed");
+    let expected = oracle_expectation(&spec);
+    let has_fuel = expected.pw_corr_us > 0 && expected.injection_channels > 0;
+    let has_ignition = expected.ignition_channels > 0;
 
-    // Determine expected counts from product observations
-    let cyl_count = sched_obs.soi_deg10.count as usize;
-    let mut expected_injection_count = 0usize;
-    let mut expected_ignition_count = 0usize;
-
-    for cyl in 0..cyl_count {
-        expected_injection_count += count_injection_events_for_cylinder(&sched_obs, cyl as u8);
-        expected_ignition_count += count_ignition_events_for_cylinder(&sched_obs, cyl as u8);
-    }
-
-    let has_fuel = fuel_obs.pw_corr_us > 0 && expected_injection_count > 0;
-    let has_ignition = expected_ignition_count > 0;
-    let has_any_event = has_fuel || has_ignition;
-
-    // Scheduler mode should be Armed after scheduling (only if any event to schedule)
-    if has_any_event {
+    if has_fuel || has_ignition {
         assert_eq!(
             obs.mode,
             SchedulerMode::Armed,
-            "scheduler should be armed when any event is scheduled"
+            "scheduler should be armed when the oracle expects any event"
         );
 
-        // Active groups should include Injector and Ignition (if present)
-        if expected_injection_count > 0 {
+        if expected.injection_channels > 0 {
             assert!(
                 obs.active_groups & OutputGroup::Injector.mask() != 0,
-                "Injector group should be active when injection events present"
+                "Injector group should be active when the oracle expects injection events"
             );
-        }
-        if has_ignition {
-            assert!(
-                obs.active_groups & OutputGroup::Ignition.mask() != 0,
-                "Ignition group should be active when ignition events present"
-            );
-        }
-
-        // Reserved channels should be set for active outputs
-        if expected_injection_count > 0 {
             assert!(
                 obs.reserved_channels[0] != 0,
                 "Injector channel should be reserved"
@@ -205,31 +347,67 @@ fn conformance_test(case: &ecu_test_fixtures::fixture_matrix::FixtureCase) {
         }
         if has_ignition {
             assert!(
+                obs.active_groups & OutputGroup::Ignition.mask() != 0,
+                "Ignition group should be active when the oracle expects ignition events"
+            );
+            assert!(
                 obs.reserved_channels[1] != 0,
                 "Ignition channel should be reserved"
             );
         }
 
-        // Injection and ignition counts should match product events
         assert_eq!(
-            obs.injection_count as u32, expected_injection_count as u32,
-            "injection_count should match product injection events"
+            obs.injection_count as usize, expected.injection_channels,
+            "injection_count should match the oracle injection channel count"
         );
         assert_eq!(
-            obs.ignition_count as u32, expected_ignition_count as u32,
-            "ignition_count should match product ignition events"
+            obs.ignition_count as usize, expected.ignition_channels,
+            "ignition_count should match the oracle ignition channel count"
         );
+
+        // Reserved windows must carry the oracle's durations.
+        if expected.injection_channels > 0 {
+            let start = obs
+                .last_injection_start
+                .expect("injection start should be recorded");
+            let end = obs
+                .last_injection_end
+                .expect("injection end should be recorded");
+            assert_eq!(
+                end.get() - start.get(),
+                expected.pw_corr_us.max(1),
+                "injection window duration should equal the oracle pulse width"
+            );
+        }
+        if has_ignition {
+            let start = obs
+                .last_ignition_start
+                .expect("ignition start should be recorded");
+            let end = obs
+                .last_ignition_end
+                .expect("ignition end should be recorded");
+            assert_eq!(
+                end.get() - start.get(),
+                expected.dwell_us.max(1),
+                "ignition window duration should equal the oracle dwell"
+            );
+            assert_eq!(
+                driven.accepted_ignition_advance,
+                Some(expected.spark_advance_deg10),
+                "accepted ignition plan should carry the oracle spark advance"
+            );
+        }
     } else {
-        // No events scheduled - scheduler should be Idle
         assert_eq!(
             obs.mode,
             SchedulerMode::Idle,
-            "scheduler should be idle when no events are scheduled"
+            "scheduler should be idle when the oracle expects no events"
         );
+        assert_eq!(obs.injection_count, 0);
+        assert_eq!(obs.ignition_count, 0);
     }
 
     // --- Cancellation/suspend observability ---
-    // Verify cancel_group, cancel_all, suspend, on_sync_loss are observable
     let mut cancel_state = SchedulerState::new();
     let test_inj = InjectionPlan {
         output: ExclusiveChannel::new(OutputGroup::Injector, ChannelId::new(1)),
@@ -248,28 +426,23 @@ fn conformance_test(case: &ecu_test_fixtures::fixture_matrix::FixtureCase) {
     let _ = cancel_state.schedule_ignition(now, start, end, test_ign);
     assert_eq!(cancel_state.mode(), SchedulerMode::Armed);
 
-    // cancel_group should clear the group
     cancel_state.cancel_group(OutputGroup::Injector);
     assert_eq!(
         cancel_state.active_groups() & OutputGroup::Injector.mask(),
         0
     );
 
-    // cancel_all should clear everything
     cancel_state.cancel_all();
     assert_eq!(cancel_state.mode(), SchedulerMode::Idle);
     assert_eq!(cancel_state.active_groups(), 0);
 
-    // suspend should transition to Suspended mode
     let _ = cancel_state.schedule_injection(now, start, end, test_inj);
     cancel_state.suspend();
     assert_eq!(cancel_state.mode(), SchedulerMode::Suspended);
 
-    // on_sync_loss should suspend
     cancel_state.on_sync_loss();
     assert_eq!(cancel_state.mode(), SchedulerMode::Suspended);
 
-    // on_hard_safety_shutdown should suspend
     cancel_state.on_hard_safety_shutdown();
     assert_eq!(cancel_state.mode(), SchedulerMode::Suspended);
 }

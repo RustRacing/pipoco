@@ -13,6 +13,7 @@ ecu-domain = { path = "../domain" }
 ecu-io = { path = "../io" }
 
 [dev-dependencies]
+ecu-calibration = { path = "../calibration" }
 ecu-runtime = { path = "../runtime" }
 ecu-spec = { path = "../spec" }
 ecu-test-fixtures = { path = "../test-fixtures" }

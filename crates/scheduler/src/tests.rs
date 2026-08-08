@@ -1271,3 +1271,183 @@ fn enqueue_export_overflow_is_explicit_and_atomic() {
     );
     assert_eq!(queue.active_count(), 1);
 }
+
+#[test]
+fn reserved_counts_track_every_reserved_cylinder_channel() {
+    let mut state = SchedulerState::new();
+    let now = Micros::new(0);
+    const CYLINDERS: u8 = 4;
+
+    for cyl in 1..=CYLINDERS {
+        let start = Micros::new(1_000 + cyl as u32 * 10_000);
+        let end = Micros::new(start.get() + 2_000);
+        state
+            .schedule_injection(
+                now,
+                start,
+                end,
+                InjectionPlan {
+                    output: ExclusiveChannel::new(OutputGroup::Injector, ChannelId::new(cyl)),
+                    pulse_width: PulseWidthUs::new(2_000),
+                },
+            )
+            .expect("injection window should be reserved");
+        state
+            .schedule_ignition(
+                now,
+                start,
+                end,
+                IgnitionPlan {
+                    output: ExclusiveChannel::new(OutputGroup::Ignition, ChannelId::new(cyl)),
+                    dwell: DwellUs::new(2_000),
+                    advance: Degrees10::new(100),
+                },
+            )
+            .expect("ignition window should be reserved");
+
+        assert_eq!(state.injection_count(), cyl);
+        assert_eq!(state.ignition_count(), cyl);
+    }
+
+    assert_eq!(state.injection_count(), CYLINDERS);
+    assert_eq!(state.ignition_count(), CYLINDERS);
+    assert_eq!(state.pending_output_count(), CYLINDERS as usize * 2);
+
+    let observed = observe_scheduler(&state);
+    assert_eq!(observed.injection_count, CYLINDERS);
+    assert_eq!(observed.ignition_count, CYLINDERS);
+
+    state.cancel_group(OutputGroup::Injector);
+    assert_eq!(state.injection_count(), 0);
+    assert_eq!(
+        state.ignition_count(),
+        CYLINDERS,
+        "cancelling injectors must not disturb ignition channel accounting"
+    );
+}
+
+#[test]
+fn commit_horizon_boundary_accepts_max_and_rejects_one_microsecond_more() {
+    let permit_mask = ecu_board_api::frontier::TimingIslandPermitMask::ALL;
+    let max_horizon_us = ecu_board_api::frontier::MAX_HORIZON_US.get();
+    let start = Micros::new(1_000);
+
+    let mut at_limit = SchedulerState::new();
+    assert!(
+        at_limit.commit_horizon(
+            1,
+            start,
+            Micros::new(start.get() + max_horizon_us),
+            Micros::new(start.get() + 100),
+            permit_mask,
+        ),
+        "a horizon of exactly MAX_HORIZON_US must be accepted"
+    );
+    assert_eq!(at_limit.active_horizon_id(), Some(1));
+
+    let mut over_limit = SchedulerState::new();
+    assert!(
+        !over_limit.commit_horizon(
+            1,
+            start,
+            Micros::new(start.get() + max_horizon_us + 1),
+            Micros::new(start.get() + 100),
+            permit_mask,
+        ),
+        "a horizon longer than MAX_HORIZON_US must be rejected"
+    );
+    assert_eq!(over_limit.active_horizon_id(), None);
+    assert_eq!(over_limit.last_accepted_horizon_id(), None);
+    assert_eq!(over_limit.horizon_end_us(), None);
+    assert_eq!(
+        over_limit.active_permit_mask(),
+        ecu_board_api::frontier::TimingIslandPermitMask::NONE
+    );
+}
+
+#[test]
+fn transition_due_window_is_half_the_timer_range() {
+    fn drained(now: u32, at_us: u32) -> usize {
+        let mut queue = ScheduledTransitionQueue::<MODEL_MAX_PENDING>::new();
+        queue
+            .enqueue_transition(ScheduledTransition {
+                at_us: Micros::new(at_us),
+                kind: ScheduledTransitionKind::Injector,
+                channel: ChannelId::new(1),
+                level: ScheduledLevel::High,
+            })
+            .expect("transition should enqueue");
+        let mut buffer = TransitionDrainBuffer::<MODEL_MAX_PENDING>::new();
+        queue.drain_due(Micros::new(now), &mut buffer)
+    }
+
+    let half_window = u32::MAX / 2;
+
+    assert_eq!(drained(0, 0), 1, "a deadline equal to now is due");
+    assert_eq!(drained(0, 1), 0, "a deadline one tick ahead is not due");
+    assert_eq!(
+        drained(0, u32::MAX),
+        1,
+        "a deadline one tick before a rolled-over now is due"
+    );
+    assert_eq!(
+        drained(0, 0u32.wrapping_sub(half_window - 1)),
+        1,
+        "a deadline just inside the half window is due"
+    );
+    assert_eq!(
+        drained(0, 0u32.wrapping_sub(half_window)),
+        0,
+        "a deadline at exactly the half window is not due"
+    );
+    assert_eq!(
+        drained(0, 0u32.wrapping_sub(half_window / 2)),
+        1,
+        "a deadline a quarter of the range back is still due"
+    );
+    assert_eq!(
+        drained(u32::MAX, u32::MAX - 100),
+        1,
+        "a past deadline near the top of the range is due"
+    );
+    assert_eq!(
+        drained(u32::MAX, u32::MAX.wrapping_add(100)),
+        0,
+        "a deadline just past a rollover of the deadline is not due"
+    );
+}
+
+#[test]
+fn transitions_at_the_same_timestamp_order_injector_before_ignition() {
+    let ignition = ScheduledTransition {
+        at_us: Micros::new(100),
+        kind: ScheduledTransitionKind::Ignition,
+        channel: ChannelId::new(1),
+        level: ScheduledLevel::High,
+    };
+    let injector = ScheduledTransition {
+        at_us: Micros::new(100),
+        kind: ScheduledTransitionKind::Injector,
+        // Higher channel on purpose: kind must win the tiebreak before channel.
+        channel: ChannelId::new(2),
+        level: ScheduledLevel::High,
+    };
+
+    assert!(
+        injector < ignition,
+        "kind must break ties before channel for identical timestamps"
+    );
+
+    let mut queue = ScheduledTransitionQueue::<MODEL_MAX_PENDING>::new();
+    queue
+        .enqueue_transition(ignition)
+        .expect("ignition transition should enqueue");
+    queue
+        .enqueue_transition(injector)
+        .expect("injector transition should enqueue");
+
+    let mut buffer = TransitionDrainBuffer::<MODEL_MAX_PENDING>::new();
+    assert_eq!(queue.drain_due(Micros::new(100), &mut buffer), 2);
+    assert_eq!(buffer.transitions[0], Some(injector));
+    assert_eq!(buffer.transitions[1], Some(ignition));
+}
