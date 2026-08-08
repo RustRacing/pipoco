@@ -653,6 +653,37 @@ fn decel_fuel_cut_engage_and_resume_parity() {
     ));
 }
 
+/// The hysteresis test below expresses its inputs in terms of the constants,
+/// so it stays true whatever they are. Pin the calibrated values themselves,
+/// with literals, or a mis-set threshold ships silently.
+#[test]
+fn cranking_thresholds_are_the_calibrated_values() {
+    use crate::{CRANKING_EXIT_RPM, CRANKING_RPM_THRESHOLD};
+
+    // Pinning both literals also pins their ordering: exit must sit above
+    // entry or the gate has no hysteresis band at all.
+    assert_eq!(CRANKING_RPM_THRESHOLD, 500);
+    assert_eq!(CRANKING_EXIT_RPM, 600);
+}
+
+/// Literal-valued walk through the gate, independent of the constants above.
+#[test]
+fn cranking_gate_hysteresis_at_literal_rpm() {
+    use crate::CrankingGate;
+
+    let mut gate = CrankingGate::new();
+    assert!(!gate.is_cranking());
+
+    assert!(gate.update(499), "below entry: cranking");
+    assert!(
+        gate.update(599),
+        "inside the hysteresis band: still cranking"
+    );
+    assert!(!gate.update(600), "at exit rpm: running");
+    assert!(!gate.update(500), "back inside the band: stays running");
+    assert!(gate.update(499), "below entry again: cranking");
+}
+
 #[test]
 fn cranking_gate_hysteresis_parity() {
     use crate::{CrankingGate, CRANKING_EXIT_RPM, CRANKING_RPM_THRESHOLD};

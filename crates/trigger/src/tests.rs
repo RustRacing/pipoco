@@ -958,3 +958,58 @@ proptest! {
         }
     }
 }
+
+#[test]
+fn default_missing_tooth_gap_ratio_threshold_is_pinned() {
+    assert_eq!(DEFAULT_MISSING_TOOTH_GAP_RATIO_X1000, 1500);
+    assert_eq!(
+        MissingToothDecoderConfig::new(60, 2, TriggerAngleAuthority::Unknown)
+            .gap_ratio_threshold_x1000,
+        1500
+    );
+}
+
+#[test]
+fn interval_ratio_below_default_threshold_is_not_a_gap() {
+    let mut decoder = new_decoder(decoder_config(Degrees10::new(120)));
+    assert_eq!(
+        decoder.ingest_primary_edge(Ticks::new(0)),
+        Ok(MissingToothDecoderEvent::FirstEdge)
+    );
+    assert_eq!(
+        decoder.ingest_primary_edge(Ticks::new(1000)),
+        Ok(MissingToothDecoderEvent::Searching)
+    );
+    // interval 1400 over previous 1000 => ratio 1.400, below the 1.500 threshold.
+    assert_eq!(
+        decoder.ingest_primary_edge(Ticks::new(2400)),
+        Ok(MissingToothDecoderEvent::Searching)
+    );
+    assert_eq!(
+        decoder.diagnostics().observation.detected_gap_ratio_x1000,
+        1400
+    );
+    assert!(!decoder.is_primary_locked());
+}
+
+#[test]
+fn interval_ratio_at_default_threshold_is_a_gap() {
+    let mut decoder = new_decoder(decoder_config(Degrees10::new(120)));
+    assert_eq!(
+        decoder.ingest_primary_edge(Ticks::new(0)),
+        Ok(MissingToothDecoderEvent::FirstEdge)
+    );
+    assert_eq!(
+        decoder.ingest_primary_edge(Ticks::new(1000)),
+        Ok(MissingToothDecoderEvent::Searching)
+    );
+    // interval 1500 over previous 1000 => ratio exactly 1.500, at the threshold.
+    assert_eq!(
+        decoder.ingest_primary_edge(Ticks::new(2500)),
+        Ok(MissingToothDecoderEvent::Gap { current_tooth: 1 })
+    );
+    assert_eq!(
+        decoder.diagnostics().observation.detected_gap_ratio_x1000,
+        1500
+    );
+}
