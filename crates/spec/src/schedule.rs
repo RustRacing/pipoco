@@ -355,6 +355,13 @@ fn schedule_all_cylinders_with_seeded_events(
         out.eoi_deg10.values[cyl] = schedule.eoi_deg10.get() as u16;
         out.spark_deg10.values[cyl] = schedule.spark_deg10.get() as u16;
         out.dwell_start_deg10.values[cyl] = schedule.dwell_start_deg10.get() as u16;
+        // Report how many entries are valid; consumers bound their loops by
+        // `count`, so leaving it at zero silently hides every angle.
+        let filled = cyl as u8 + 1;
+        out.soi_deg10.count = filled;
+        out.eoi_deg10.count = filled;
+        out.spark_deg10.count = filled;
+        out.dwell_start_deg10.count = filled;
 
         let cylinder = crate::CylinderId::new(cyl as u8);
         if fuel_events_enabled {
