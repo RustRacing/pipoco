@@ -411,3 +411,55 @@ pub fn runtime_semantic_evaluate_schedule_with_authority(
         diagnostic,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::norm7200_i32;
+
+    /// Injection and spark angles are computed by subtraction, so they go
+    /// negative routinely (the documented case is phase 0 with a 360 deg10
+    /// injection target). No FM0016 fixture drives that path, so cover the
+    /// normalization directly.
+    #[test]
+    fn norm7200_wraps_negative_angles_into_the_cycle() {
+        assert_eq!(norm7200_i32(0), 0);
+        assert_eq!(norm7200_i32(-1), 7199);
+        assert_eq!(norm7200_i32(-360), 6840, "phase 0 minus a 360 deg10 target");
+        assert_eq!(norm7200_i32(-7199), 1);
+        assert_eq!(norm7200_i32(-7200), 0, "a whole cycle back is the origin");
+        assert_eq!(norm7200_i32(-7201), 7199);
+        assert_eq!(norm7200_i32(-14_400), 0);
+        assert_eq!(norm7200_i32(-14_401), 7199);
+    }
+
+    #[test]
+    fn norm7200_wraps_angles_at_or_beyond_a_full_cycle() {
+        assert_eq!(norm7200_i32(7199), 7199);
+        assert_eq!(norm7200_i32(7200), 0);
+        assert_eq!(norm7200_i32(7201), 1);
+        assert_eq!(norm7200_i32(14_400), 0);
+        assert_eq!(norm7200_i32(14_401), 1);
+    }
+
+    /// Whatever the input, the result must be a valid crank-cycle angle.
+    #[test]
+    fn norm7200_output_is_always_within_the_cycle() {
+        for x in [
+            i32::MIN + 1,
+            -1_000_000,
+            -7201,
+            -1,
+            0,
+            1,
+            7199,
+            7200,
+            1_000_000,
+            i32::MAX,
+        ] {
+            assert!(
+                norm7200_i32(x) < 7200,
+                "norm7200_i32({x}) escaped the cycle"
+            );
+        }
+    }
+}
