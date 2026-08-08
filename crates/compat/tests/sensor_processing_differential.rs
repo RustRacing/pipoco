@@ -1,8 +1,8 @@
 //! Differential tests (review 011): feed the spec oracle wrapper and the
 //! compat sensor-processing path identical streams and assert identical
-//! verdicts. Both sides now delegate to the canonical
-//! `ecu_control::sensors::{plausibility, slew}` implementations, so this
-//! pins behavioral equivalence by construction.
+//! verdicts. The spec side derives the slew window independently of
+//! `ecu-control` (see `crates/spec/src/sensors/slew.rs`), so agreement here is
+//! evidence rather than a tautology.
 
 use ecu_compat::sensors::plausibility::PlausibilityFault;
 use ecu_compat::sensors::plausibility::{PlausibilityState, RateConfig, RateValidationState};
@@ -105,6 +105,39 @@ fn slew_differential_identical_streams_produce_identical_verdicts() {
             "map clamp flag drift at t={now_us}"
         );
     }
+}
+
+/// A long gap between samples pushes the rate window past `u16::MAX`
+/// (2000 kPa10/s x 33 s = 66_000). Both sides must still admit the full
+/// reading; an implementation that narrows the window to the channel width
+/// before clamping wraps it to 464 and freezes the channel instead.
+#[test]
+fn slew_differential_survives_a_window_wider_than_the_channel() {
+    let mut compat = RateValidationState::new();
+    let mut spec_state = SensorSlewState::default();
+
+    for (now_us, map_kpa10) in [(0u32, 700u16), (33_000_000, 4_000)] {
+        let spec_input = spec_slew_input(now_us, 5_000, map_kpa10, &spec_state);
+        let spec = sensor_slew_step(spec_input, spec_state);
+        spec_state = spec.next_state;
+
+        let (_, map_out, _, map_rej) = compat.validate(50, map_kpa10, &MATCHED_RATE_CONFIG, now_us);
+
+        assert_eq!(
+            spec.limited.map_kpa10, map_out,
+            "map verdict drift at t={now_us}"
+        );
+        assert_eq!(
+            spec.limited.map_kpa10 != spec_input.map_kpa10,
+            map_rej,
+            "map clamp flag drift at t={now_us}"
+        );
+    }
+
+    assert_eq!(
+        spec_state.map_kpa10, 4_000,
+        "the wide window must admit the full reading"
+    );
 }
 
 // ---------------------------------------------------------------------------
