@@ -88,7 +88,8 @@ impl RuntimeSnapshotAdapter {
             rpm: snapshot.engine.rpm.get(),
             load_kpa10: snapshot.engine.load_kpa10.get(),
             angle_x10: snapshot.engine.angle_x10.get(),
-            fuel_pulse_width_us: snapshot.control.fuel_pulse_width.get() as u16,
+            fuel_pulse_width_us: snapshot.control.fuel_pulse_width.get().min(u16::MAX as u32)
+                as u16,
             ignition_advance_deg10: snapshot.control.ignition_advance.get(),
             dwell_us: snapshot.control.dwell.get(),
             lambda_target_x100: snapshot.control.lambda_target.get(),
