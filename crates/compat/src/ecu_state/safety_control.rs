@@ -1,6 +1,6 @@
 use super::EcuState;
 use crate::units::Micros;
-use crate::{diag, safety, sensors};
+use crate::{diag, safety};
 
 impl EcuState {
     pub fn update_flood_clear(&mut self) -> bool {
@@ -180,79 +180,5 @@ impl EcuState {
         }
 
         in_limp
-    }
-
-    /// Check TPS vs MAP sensor plausibility
-    ///
-    /// Detects implausible sensor combinations that indicate sensor failure.
-    /// Should be called after process_sensor_update.
-    ///
-    /// # Arguments
-    /// * `now_us` - Current timestamp in microseconds
-    ///
-    /// # Returns
-    /// The confirmed plausibility fault (if any)
-    pub fn check_plausibility(&mut self, now_us: u32) -> sensors::plausibility::PlausibilityFault {
-        let old_has_fault = self.plausibility_state.has_fault();
-        let plausibility_config = *self.plausibility_config();
-
-        let fault = self.plausibility_state.check(
-            self.tps_percent(),
-            self.map_kpa_x10(),
-            self.trigger_inputs().rpm,
-            &plausibility_config,
-            now_us,
-        );
-
-        // Log event when fault is first confirmed
-        if self.plausibility_state.has_fault() && !old_has_fault {
-            let tps_percent = self.tps_percent() as u32;
-            self.diag_log_mut().push(diag::DiagEvent {
-                code: diag::DiagCode::TpsMapPlausibility,
-                timestamp: Micros::new(now_us),
-                source: diag::DiagSource::Safety,
-                context: Some(tps_percent),
-                start_us: now_us,
-                end_us: 0,
-            });
-        }
-
-        fault
-    }
-
-    /// Check if there's a plausibility fault active
-    pub fn has_plausibility_fault(&self) -> bool {
-        self.plausibility_state.has_fault()
-    }
-
-    /// Validate sensor rate-of-change
-    ///
-    /// Filters out impossible sensor spikes that indicate noise or failure.
-    /// Should be called before process_sensor_update for best filtering.
-    ///
-    /// # Arguments
-    /// * `tps_percent` - Raw TPS reading
-    /// * `map_kpa_x10` - Raw MAP reading
-    /// * `now_us` - Current timestamp in microseconds
-    ///
-    /// # Returns
-    /// (validated_tps, validated_map) - Filtered values
-    pub fn validate_sensor_rates(
-        &mut self,
-        tps_percent: u8,
-        map_kpa_x10: u16,
-        now_us: u32,
-    ) -> (u8, u16) {
-        let rate_config = *self.rate_config();
-        let (validated_tps, validated_map, _, _) =
-            self.rate_state
-                .validate(tps_percent, map_kpa_x10, &rate_config, now_us);
-
-        (validated_tps, validated_map)
-    }
-
-    /// Check if any sensor rate was rejected in the last update
-    pub fn any_rate_rejected(&self) -> bool {
-        self.rate_state.any_rejected()
     }
 }

@@ -448,8 +448,6 @@ fn ecu_state_public_fields_exist() {
         let _ = &s.diag_cam;
         let _ = &s.voltage_monitor;
         let _ = &s.load_failure_tracker;
-        let _ = &s.plausibility_state;
-        let _ = &s.rate_state;
         let _ = &s.lambda_state;
         let _ = &s.ltft_manager;
         let _ = &s.knock_controller;
