@@ -64,15 +64,17 @@ pub fn max_delta(rate_per_s: u32, dt_us: u32) -> u32 {
 
 /// Clamp `candidate` to within `delta` of `last`.
 pub fn limit_u16(last: u16, candidate: u16, delta: u32) -> u16 {
-    let min = last.saturating_sub(delta as u16);
-    let max = last.saturating_add(delta as u16);
+    let delta = delta.min(u16::MAX as u32) as u16;
+    let min = last.saturating_sub(delta);
+    let max = last.saturating_add(delta);
     candidate.clamp(min, max)
 }
 
 /// Clamp `candidate` to within `delta` of `last` (signed).
 pub fn limit_i16(last: i16, candidate: i16, delta: u32) -> i16 {
-    let lo = (last as i32 - delta as i32).clamp(i16::MIN as i32, i16::MAX as i32);
-    let hi = (last as i32 + delta as i32).clamp(i16::MIN as i32, i16::MAX as i32);
+    let delta = delta.min(u16::MAX as u32) as i32;
+    let lo = (last as i32 - delta).clamp(i16::MIN as i32, i16::MAX as i32);
+    let hi = (last as i32 + delta).clamp(i16::MIN as i32, i16::MAX as i32);
     (candidate as i32).clamp(lo, hi) as i16
 }
 
@@ -271,5 +273,22 @@ mod tests {
         assert_eq!(step1.limited.map_kpa10, 3000);
         assert!(step1.exceeded);
         assert_eq!(step1.next_state.reject_count, 1);
+    }
+
+    #[test]
+    fn wide_delta_does_not_truncate_into_a_narrower_window() {
+        // max_delta exceeds u16::MAX once rate_per_s * dt_us / 1e6 > 65535;
+        // narrowing must saturate, since wrapping to 0 would freeze the channel.
+        let delta = max_delta(MAF_MAX_RATE_PER_S, 655_360);
+        assert_eq!(delta, 65_536);
+        assert_eq!(limit_u16(1000, 9000, delta), 9000);
+        assert_eq!(limit_i16(-1000, 9000, delta), 9000);
+    }
+
+    #[test]
+    fn wide_delta_admits_the_full_u16_range() {
+        assert_eq!(limit_u16(0, u16::MAX, u32::MAX), u16::MAX);
+        assert_eq!(limit_u16(u16::MAX, 0, u32::MAX), 0);
+        assert_eq!(limit_i16(i16::MIN, i16::MAX, u32::MAX), i16::MAX);
     }
 }
